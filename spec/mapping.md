@@ -19,4 +19,5 @@ Compute:
 
 - Use `PDU_RATE_REQUEST` with 0 guard blocks and 1+ resource blocks.
 - If configured, include a `metrics_label` TLV with the rendered label string.
+- Set `steering_feedback = 0` in request tenant header (server ignores request value).
 - Use tenant/auth headers per configured tenant and auth.

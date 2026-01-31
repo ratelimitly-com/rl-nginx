@@ -4,6 +4,7 @@
 
 - `design-overview.md` (placeholder)
 - `decisions.md` (placeholder)
+- `c-client.md` (C r-client integration notes)
 
 ## Notes
 
