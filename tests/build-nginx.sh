@@ -15,9 +15,8 @@ for arg in "${@:2}"; do
     --clean) CLEAN="--clean" ;;
   esac
 done
-ROOT="/home/wojtek/glar"
-RN_DIR="$ROOT/rn"
-C_CLIENT="$ROOT/rl/clients/c"
+RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+C_CLIENT="$RN_DIR/upstream-rl/clients/c"
 
 if [[ ! -d "$NGX_SRC" ]]; then
   echo "nginx source not found: $NGX_SRC"

@@ -18,14 +18,17 @@ This directory tracks the nginx plugin effort for Ratelimitly.
 
 - Spec index: `spec/index.md`
 - Docs index: `docs/index.md`
-- Test harness: `rn/tests/README.md`
+- Test harness: `tests/README.md`
 
 ## Build (dev)
 
-- Build the C r-client: `make -C rl/clients/c`
+- Requires the rl submodule (`git@conflictbits.org:glar/rl.git`) checked out at
+  `./upstream-rl`. The C r-client lives at `./upstream-rl/clients/c`.
+- Build the C r-client: `make -C ./upstream-rl/clients/c`
 - Configure nginx with the module (example):
-  - `./configure --add-module=/home/wojtek/glar/rn`
-  - Add include/lib flags for the C r-client as needed (see `rl/clients/c/README.md`).
+  - `./configure --add-module=.` (run from `rn/`)
+  - Add include/lib flags for the C r-client as needed
+    (see `./upstream-rl/clients/c/README.md`).
 
 ## Minimal config example
 
@@ -57,5 +60,5 @@ http {
 
 ## Test assets
 
-- `rn/tests/nginx.conf` — ready-to-edit test config
-- `rn/tests/build-nginx.sh` — nginx build helper with rn module + C r-client
+- `tests/nginx.conf` — ready-to-edit test config
+- `tests/build-nginx.sh` — nginx build helper with rn module + C r-client
