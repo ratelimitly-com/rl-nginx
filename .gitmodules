@@ -1,6 +1,7 @@
 [submodule "upstream-nginx"]
 	path = upstream-nginx
 	url = https://github.com/nginx/nginx.git
-[submodule "upstream-rl"]
-	path = upstream-rl
-	url = git@conflictbits.org:glar/rl.git
+[submodule "rl-c-client"]
+	path = rl-c-client
+	url = git@conflictbits.org:glar/rl-c-client.git
+	branch = main

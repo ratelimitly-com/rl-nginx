@@ -1,18 +1,19 @@
 # rn test harness
 
 This guide shows how to build nginx with the rn module, run it with a test
-config, and validate traffic against a running Ratelimitly server (preferably
-`./upstream-rl/implementations/rust`).
+config, and validate traffic against a running Ratelimitly server.
 
-This requires local access to the rl repo (`git@conflictbits.org:glar/rl.git`).
-The rl repo is a submodule at `./upstream-rl`, and the C r-client lives at
-`./upstream-rl/clients/c`, so nginx can link against the compiled r-client
-library.
+This requires local access to the C r-client repo, preferably at
+`./rl-c-client` (legacy fallback: `./upstream-rl/clients/c`), so nginx can
+link against the compiled r-client library.
 
 ## 1) Build the C r-client
 
 ```sh
-make -C ./upstream-rl/clients/c
+export RCLIENT_DIR=./rl-c-client
+# legacy fallback:
+# export RCLIENT_DIR=./upstream-rl/clients/c
+make -C "$RCLIENT_DIR"
 ```
 
 ## 2) Build nginx with the rn module
@@ -22,8 +23,8 @@ make -C ./upstream-rl/clients/c
 ```sh
 /path/to/nginx-src/auto/configure \
   --add-module=. \
-  --with-cc-opt="-I./upstream-rl/clients/c/include" \
-  --with-ld-opt="-L./upstream-rl/clients/c -lrclient -lcrypto -lssl -Wl,-rpath,./upstream-rl/clients/c"
+  --with-cc-opt="-I${RCLIENT_DIR}/include" \
+  --with-ld-opt="-L${RCLIENT_DIR} -lrclient -lcrypto -lssl -Wl,-rpath,${RCLIENT_DIR}"
 
 make -C /path/to/nginx-src -j
 sudo make -C /path/to/nginx-src install
@@ -34,8 +35,8 @@ sudo make -C /path/to/nginx-src install
 ```sh
 /path/to/nginx-src/auto/configure \
   --add-dynamic-module=. \
-  --with-cc-opt="-I./upstream-rl/clients/c/include" \
-  --with-ld-opt="-L./upstream-rl/clients/c -lrclient -lcrypto -lssl -Wl,-rpath,./upstream-rl/clients/c"
+  --with-cc-opt="-I${RCLIENT_DIR}/include" \
+  --with-ld-opt="-L${RCLIENT_DIR} -lrclient -lcrypto -lssl -Wl,-rpath,${RCLIENT_DIR}"
 
 make -C /path/to/nginx-src modules
 ```

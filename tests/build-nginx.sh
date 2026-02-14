@@ -18,7 +18,19 @@ for arg in "${@:2}"; do
   esac
 done
 RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-C_CLIENT="$RN_DIR/upstream-rl/clients/c"
+if [[ -n "${RCLIENT_DIR:-}" ]]; then
+  C_CLIENT="$RCLIENT_DIR"
+elif [[ -d "$RN_DIR/rl-c-client" ]]; then
+  C_CLIENT="$RN_DIR/rl-c-client"
+elif [[ -d "$RN_DIR/upstream-rl/clients/c" ]]; then
+  C_CLIENT="$RN_DIR/upstream-rl/clients/c"
+else
+  echo "C r-client not found." >&2
+  echo "Set RCLIENT_DIR or provide one of:" >&2
+  echo "  - $RN_DIR/rl-c-client" >&2
+  echo "  - $RN_DIR/upstream-rl/clients/c" >&2
+  exit 1
+fi
 
 if [[ ! -d "$NGX_SRC" ]]; then
   echo "nginx source not found: $NGX_SRC"

@@ -22,13 +22,13 @@ This directory tracks the nginx plugin effort for Ratelimitly.
 
 ## Build (dev)
 
-- Requires the rl submodule (`git@conflictbits.org:glar/rl.git`) checked out at
-  `./upstream-rl`. The C r-client lives at `./upstream-rl/clients/c`.
-- Build the C r-client: `make -C ./upstream-rl/clients/c`
+- Requires a local C r-client checkout, preferably at `./rl-c-client`.
+  - Legacy layout is still supported at `./upstream-rl/clients/c`.
+- Build the C r-client: `make -C ./rl-c-client`
 - Configure nginx with the module (example):
   - `./configure --add-module=.` (run from `rn/`)
   - Add include/lib flags for the C r-client as needed
-    (see `./upstream-rl/clients/c/README.md`).
+    (see `./rl-c-client/README.md`).
 
 ## Minimal config example
 

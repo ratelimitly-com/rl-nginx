@@ -83,10 +83,9 @@ Optional: latency histogram for RL round-trip.
 
 ## J) C r-client integration assumptions
 
-- Use the C r-client library from the rl repo
-  (`git@conflictbits.org:glar/rl.git`) as the protocol engine. The rl repo is a
-  submodule at `./upstream-rl`, and the client lives at
-  `./upstream-rl/clients/c`.
+- Use the standalone C r-client repo as the protocol engine.
+  - Preferred local path: `./rl-c-client`.
+  - Legacy fallback path: `./upstream-rl/clients/c`.
 - Use `r_client_check_rate_limit_async_borrowed` to avoid per-request copies.
 - nginx must override the r-client default policy:
   - `attempt_timeout_ms` from `ratelimitly_timeout` (default 20ms).

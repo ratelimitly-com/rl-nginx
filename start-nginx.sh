@@ -19,6 +19,22 @@ NGX_SRC="${NGX_SRC:-$RN_DIR/upstream-nginx}"
 CONF="${CONF:-$RN_DIR/tests/nginx.conf}"
 PREFIX="${NGINX_PREFIX:-$RN_DIR/.nginx}"
 
+detect_rclient_dir() {
+  if [[ -n "${RCLIENT_DIR:-}" ]]; then
+    echo "$RCLIENT_DIR"
+    return 0
+  fi
+  if [[ -d "$RN_DIR/rl-c-client" ]]; then
+    echo "$RN_DIR/rl-c-client"
+    return 0
+  fi
+  if [[ -d "$RN_DIR/upstream-rl/clients/c" ]]; then
+    echo "$RN_DIR/upstream-rl/clients/c"
+    return 0
+  fi
+  return 1
+}
+
 BUILD_ARGS=()
 
 for arg in "$@"; do
@@ -57,7 +73,16 @@ if [[ ! -f "$CONF" ]]; then
   exit 1
 fi
 
-make -C "$RN_DIR/upstream-rl/clients/c"
+RCLIENT_DIR="$(detect_rclient_dir || true)"
+if [[ -z "$RCLIENT_DIR" ]]; then
+  echo "C r-client not found."
+  echo "Set RCLIENT_DIR or provide one of:"
+  echo "  - $RN_DIR/rl-c-client"
+  echo "  - $RN_DIR/upstream-rl/clients/c"
+  exit 1
+fi
+
+make -C "$RCLIENT_DIR"
 "$RN_DIR/tests/build-nginx.sh" "$NGX_SRC" "${BUILD_ARGS[@]}"
 
 NGINX_BIN="$NGX_SRC/objs/nginx"
@@ -68,7 +93,7 @@ fi
 
 mkdir -p "$PREFIX/logs"
 
-export LD_LIBRARY_PATH="$RN_DIR/upstream-rl/clients/c${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$RCLIENT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 exec "$NGINX_BIN" \
   -p "$PREFIX" \

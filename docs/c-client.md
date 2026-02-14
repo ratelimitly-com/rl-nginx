@@ -1,9 +1,8 @@
 # C r-client integration
 
-This module uses the C r-client from the rl repo
-(`git@conflictbits.org:glar/rl.git`) as the protocol engine. The rl repo is a
-submodule at `./upstream-rl`, and the client lives at
-`./upstream-rl/clients/c`.
+This module uses the standalone C r-client repo as the protocol engine.
+Preferred local path is `./rl-c-client` (legacy fallback:
+`./upstream-rl/clients/c`).
 
 ## Key assumptions
 
@@ -17,4 +16,4 @@ submodule at `./upstream-rl`, and the client lives at
 ## Notes
 
 The nginx module must provide I/O and DNS adapters via `r_client_io.h`
-(see `./upstream-rl/clients/c/IO_ABSTRACTION.md`).
+(see `./rl-c-client/IO_ABSTRACTION.md`).
