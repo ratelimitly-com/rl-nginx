@@ -2,17 +2,19 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--clean]"
+  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--clean] [--debug]"
   exit 1
 fi
 
 NGX_SRC="$1"
 DYNAMIC=""
 CLEAN=""
+DEBUG=""
 for arg in "${@:2}"; do
   case "$arg" in
     --dynamic) DYNAMIC="--dynamic" ;;
     --clean) CLEAN="--clean" ;;
+    --debug) DEBUG="--debug" ;;
   esac
 done
 RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,6 +40,9 @@ FLAGS=(
   "--with-cc-opt=-I${C_CLIENT}/include"
   "--with-ld-opt=-L${C_CLIENT} -lrclient -lcrypto -lssl -Wl,-rpath,${C_CLIENT}"
 )
+if [[ "$DEBUG" == "--debug" ]]; then
+  FLAGS+=("--with-debug")
+fi
 
 cd "$NGX_ROOT"
 CONFIG="./configure"

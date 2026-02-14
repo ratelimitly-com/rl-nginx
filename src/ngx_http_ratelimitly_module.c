@@ -95,6 +95,10 @@ typedef struct {
     rn_worker_ctx_t *worker;
     r_client_req_t *req;
     ngx_event_t timer;
+    ngx_int_t decision;
+    ngx_flag_t waiting;
+    ngx_flag_t done;
+    ngx_flag_t counted;
 } rn_req_ctx_t;
 
 static ngx_int_t ngx_http_rn_init(ngx_conf_t *cf);
@@ -277,6 +281,16 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
     }
 
+    ctx = ngx_http_get_module_ctx(r, ngx_http_rn_module);
+    if (ctx != NULL) {
+        if (ctx->done) {
+            return ctx->decision;
+        }
+        if (ctx->waiting) {
+            return NGX_AGAIN;
+        }
+    }
+
     if (lcf->rules == NULL || lcf->rules->nelts == 0) {
         return NGX_DECLINED;
     }
@@ -388,6 +402,10 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     ctx->timer.handler = rn_request_timeout_handler;
     ctx->timer.data = ctx;
     ctx->timer.log = r->connection->log;
+    ctx->waiting = 0;
+    ctx->done = 0;
+    ctx->decision = NGX_DECLINED;
+    ctx->counted = 0;
     ngx_http_set_ctx(r, ctx, ngx_http_rn_module);
 
     cln = ngx_http_cleanup_add(r, 0);
@@ -425,8 +443,10 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         ngx_add_timer(&ctx->timer, delay);
     }
 
+    ctx->waiting = 1;
     r->main->count++;
-    return NGX_DONE;
+    ctx->counted = 1;
+    return NGX_AGAIN;
 }
 
 static ngx_int_t
@@ -975,11 +995,37 @@ rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name) {
     return NULL;
 }
 
+static const char *
+rn_auth_type_name(rn_auth_type_t t) {
+    switch (t) {
+    case RN_AUTH_NONE:
+        return "none";
+    case RN_AUTH_COOKIE:
+        return "cookie";
+    case RN_AUTH_AESGCM:
+        return "aesgcm";
+    default:
+        return "unknown";
+    }
+}
+
 static int
 rn_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
     rn_worker_ctx_t *worker = ctx;
     if (worker == NULL || worker->udp_fd == (ngx_socket_t) -1 || to == NULL || buf == NULL) {
         return -1;
+    }
+    if (worker->debug) {
+        u_char text[NGX_SOCKADDR_STRLEN];
+        size_t n = ngx_sock_ntop((struct sockaddr *)&to->sa, to->len, text, sizeof(text), 1);
+        if (n >= sizeof(text)) {
+            n = sizeof(text) - 1;
+        }
+        text[n] = '\0';
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: udp_send to=%s len=%uz", text, len);
+
+        (void) buf;
     }
     ssize_t n = sendto(worker->udp_fd, buf, len, 0, (struct sockaddr *)&to->sa, to->len);
     if (n < 0 || (size_t) n != len) {
@@ -1258,6 +1304,10 @@ rn_open_socket(rn_worker_ctx_t *worker) {
         return NGX_ERROR;
     }
     worker->udp_conn->data = worker;
+    worker->udp_conn->read->log = worker->log;
+    worker->udp_conn->write->log = worker->log;
+    worker->udp_conn->read->data = worker->udp_conn;
+    worker->udp_conn->write->data = worker->udp_conn;
     worker->udp_conn->read->handler = rn_udp_read_handler;
     if (ngx_add_event(worker->udp_conn->read, NGX_READ_EVENT, 0) != NGX_OK) {
         if (worker->debug) {
@@ -1362,7 +1412,11 @@ rn_resolve_addr_handler(ngx_resolver_ctx_t *ctx) {
                 addrs[i].len = addr->socklen;
                 if (req->worker->debug) {
                     u_char text[NGX_SOCKADDR_STRLEN];
-                    ngx_sock_ntop(addr->sockaddr, addr->socklen, text, sizeof(text), 0);
+                    size_t n = ngx_sock_ntop(addr->sockaddr, addr->socklen, text, sizeof(text), 0);
+                    if (n >= sizeof(text)) {
+                        n = sizeof(text) - 1;
+                    }
+                    text[n] = '\0';
                     ngx_log_error(NGX_LOG_DEBUG, req->worker->log, 0,
                         "rn: addr=%s", text);
                 }
@@ -1462,6 +1516,13 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
     worker->policy.attempt_timeout_ms = mcf->timeout_ms;
     worker->policy.retry.retry_attempts = 0;
     worker->client_cfg.request_policy = &worker->policy;
+
+    if (worker->debug) {
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: client cfg key_id=%uL auth=%s tenant=%V",
+            (unsigned long) mcf->key_id, rn_auth_type_name(mcf->auth_type),
+            &mcf->tenant_dns);
+    }
 
     if (r_client_create(&worker->client_cfg, &worker->io_ops, &worker->resolver_ops, &worker->client) != RCLIENT_OK) {
         return NGX_ERROR;
@@ -1607,7 +1668,17 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
         }
     }
 
-    ngx_http_finalize_request(r, rc);
+    ctx->decision = rc;
+    ctx->done = 1;
+    ctx->waiting = 0;
+
+    if (ctx->counted && r->main && r->main->count > 0) {
+        r->main->count--;
+        ctx->counted = 0;
+    }
+
+    /* Resume access phase; handler will return ctx->decision. */
+    ngx_http_finalize_request(r, NGX_DECLINED);
 }
 
 static void
