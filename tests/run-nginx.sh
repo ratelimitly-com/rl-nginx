@@ -7,7 +7,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 NGINX_BIN="$1"
-CONF="${2:-/home/wojtek/glar/rn/tests/nginx.conf}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONF="${2:-$SCRIPT_DIR/nginx.conf}"
 
 if [[ ! -x "$NGINX_BIN" ]]; then
   echo "nginx binary not executable: $NGINX_BIN"

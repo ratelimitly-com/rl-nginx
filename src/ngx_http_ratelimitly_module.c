@@ -1009,6 +1009,43 @@ rn_auth_type_name(rn_auth_type_t t) {
     }
 }
 
+static uint16_t
+rn_read_le16(const uint8_t *p) {
+    if (p == NULL) {
+        return 0;
+    }
+    return (uint16_t) (p[0] | ((uint16_t) p[1] << 8));
+}
+
+static uint64_t
+rn_read_le64(const uint8_t *p) {
+    if (p == NULL) {
+        return 0;
+    }
+    return ((uint64_t) p[0])
+        | ((uint64_t) p[1] << 8)
+        | ((uint64_t) p[2] << 16)
+        | ((uint64_t) p[3] << 24)
+        | ((uint64_t) p[4] << 32)
+        | ((uint64_t) p[5] << 40)
+        | ((uint64_t) p[6] << 48)
+        | ((uint64_t) p[7] << 56);
+}
+
+static const char *
+rn_auth_tlv_name(uint16_t tlv_type) {
+    switch (tlv_type) {
+    case 0x414E:
+        return "none";
+    case 0x4143:
+        return "cookie";
+    case 0x4541:
+        return "aes";
+    default:
+        return "unknown";
+    }
+}
+
 static int
 rn_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
     rn_worker_ctx_t *worker = ctx;
@@ -1022,10 +1059,28 @@ rn_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
             n = sizeof(text) - 1;
         }
         text[n] = '\0';
-        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
-            "rn: udp_send to=%s len=%uz", text, len);
-
-        (void) buf;
+        if (len >= 44) {
+            uint16_t tlv_type = rn_read_le16(buf);
+            uint16_t tlv_size = rn_read_le16(buf + 2);
+            if (tlv_type == 0x4C52 && tlv_size >= 40 && tlv_size <= len) {
+                uint64_t key_id = rn_read_le64(buf + 4);
+                uint16_t auth_tlv_type = rn_read_le16(buf + 40);
+                uint16_t auth_tlv_size = rn_read_le16(buf + 42);
+                u_char hex[33];
+                rn_hex16((const uint8_t *) (buf + 12), hex);
+                ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+                    "rn: udp_send to=%s len=%uz key_id=%uL req_id=%s auth_tlv=%s(%ui) auth_size=%ui",
+                    text, len, (unsigned long) key_id, hex,
+                    rn_auth_tlv_name(auth_tlv_type), (unsigned) auth_tlv_type,
+                    (unsigned) auth_tlv_size);
+            } else {
+                ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+                    "rn: udp_send to=%s len=%uz", text, len);
+            }
+        } else {
+            ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+                "rn: udp_send to=%s len=%uz", text, len);
+        }
     }
     ssize_t n = sendto(worker->udp_fd, buf, len, 0, (struct sockaddr *)&to->sa, to->len);
     if (n < 0 || (size_t) n != len) {
@@ -1041,7 +1096,11 @@ rn_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
 static uint64_t
 rn_now_ms(void *ctx) {
     (void) ctx;
-    return (uint64_t) ngx_current_msec;
+    ngx_time_t *tp = ngx_timeofday();
+    if (tp == NULL) {
+        return 0;
+    }
+    return (uint64_t) tp->sec * 1000u + (uint64_t) tp->msec;
 }
 
 static void
