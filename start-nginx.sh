@@ -17,7 +17,7 @@ EOF
 RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NGX_SRC="${NGX_SRC:-$RN_DIR/upstream-nginx}"
 CONF="${CONF:-$RN_DIR/tests/nginx.conf}"
-PREFIX="${NGINX_PREFIX:-$RN_DIR/.nginx}"
+PREFIX="${NGINX_PREFIX:-$RN_DIR}"
 
 detect_rclient_dir() {
   if [[ -n "${RCLIENT_DIR:-}" ]]; then
