@@ -19,8 +19,8 @@ typedef struct {
     ngx_str_t name;
     ngx_str_t bucket_template;
     ngx_http_complex_value_t bucket_cv;
-    ngx_uint_t rate_limit;
-    ngx_msec_t window_ms;
+    ngx_str_t rate_template;
+    ngx_http_complex_value_t rate_cv;
 } rn_zone_t;
 
 typedef struct {
@@ -131,6 +131,18 @@ static void rn_request_cleanup(void *data);
 static void rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_result_t *result);
 static void rn_hex16(const uint8_t in[16], u_char out[33]);
 static void rn_hex_id(const uint8_t in[16], u_char out[33]);
+static ngx_int_t rn_build_zone_resource(
+    ngx_http_request_t *r,
+    rn_worker_ctx_t *worker,
+    rn_zone_t *zone,
+    r_resource_request_t *out
+);
+static ngx_int_t rn_zone_rate_for_request(
+    ngx_http_request_t *r,
+    rn_zone_t *zone,
+    ngx_uint_t *out_rate,
+    ngx_msec_t *out_window_ms
+);
 
 static ngx_command_t ngx_http_rn_commands[] = {
     { ngx_string("ratelimitly_tenant"),
@@ -318,31 +330,17 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     for (i = 0; i < lcf->rules->nelts; i++) {
         if (rules[i].kind == RN_RULE_ZONE) {
             rn_zone_t *zone = rn_find_zone(mcf, &rules[i].name);
-            ngx_str_t bucket;
-            u_char *bucket_cstr;
+            ngx_int_t build_rc;
             if (zone == NULL) {
                 return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
             }
-            if (ngx_http_complex_value(r, &zone->bucket_cv, &bucket) != NGX_OK) {
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
-            }
-            bucket_cstr = ngx_pnalloc(r->pool, bucket.len + 1);
-            if (bucket_cstr == NULL) {
+            build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
+            if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }
-            ngx_memcpy(bucket_cstr, bucket.data, bucket.len);
-            bucket_cstr[bucket.len] = '\0';
-
-            r_client_hash_id((const char *)bucket_cstr, resources[idx].bucket_id);
-            if (worker->debug) {
-                u_char hex[33];
-                rn_hex_id(resources[idx].bucket_id, hex);
-                ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
-                    "rn: bucket zone=%V id=%s", &zone->name, hex);
+            if (build_rc != NGX_OK) {
+                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
             }
-            resources[idx].window_size_ms = (uint32_t) zone->window_ms;
-            resources[idx].rate_limit = (uint32_t) zone->rate_limit;
-            resources[idx].tokens_requested = 1;
             idx++;
         } else {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
@@ -353,31 +351,17 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             zones = group->zones.elts;
             for (j = 0; j < group->zones.nelts; j++) {
                 rn_zone_t *zone = rn_find_zone(mcf, &zones[j]);
-                ngx_str_t bucket;
-                u_char *bucket_cstr;
+                ngx_int_t build_rc;
                 if (zone == NULL) {
                     return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
                 }
-                if (ngx_http_complex_value(r, &zone->bucket_cv, &bucket) != NGX_OK) {
-                    return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
-                }
-                bucket_cstr = ngx_pnalloc(r->pool, bucket.len + 1);
-                if (bucket_cstr == NULL) {
+                build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
+                if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
                     return NGX_HTTP_INTERNAL_SERVER_ERROR;
                 }
-                ngx_memcpy(bucket_cstr, bucket.data, bucket.len);
-                bucket_cstr[bucket.len] = '\0';
-
-                r_client_hash_id((const char *)bucket_cstr, resources[idx].bucket_id);
-                if (worker->debug) {
-                    u_char hex[33];
-                    rn_hex_id(resources[idx].bucket_id, hex);
-                    ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
-                        "rn: bucket zone=%V id=%s", &zone->name, hex);
+                if (build_rc != NGX_OK) {
+                    return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
                 }
-                resources[idx].window_size_ms = (uint32_t) zone->window_ms;
-                resources[idx].rate_limit = (uint32_t) zone->rate_limit;
-                resources[idx].tokens_requested = 1;
                 idx++;
             }
         }
@@ -783,6 +767,67 @@ rn_parse_rate(ngx_str_t *value, ngx_uint_t *out_rate, ngx_msec_t *out_window_ms)
     return NGX_OK;
 }
 
+static ngx_int_t
+rn_build_zone_resource(
+    ngx_http_request_t *r,
+    rn_worker_ctx_t *worker,
+    rn_zone_t *zone,
+    r_resource_request_t *out
+) {
+    ngx_str_t bucket = ngx_null_string;
+    u_char *bucket_cstr;
+    ngx_uint_t zone_rate_limit = 0;
+    ngx_msec_t zone_window_ms = 0;
+
+    if (r == NULL || worker == NULL || zone == NULL || out == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (ngx_http_complex_value(r, &zone->bucket_cv, &bucket) != NGX_OK) {
+        return NGX_ERROR;
+    }
+    bucket_cstr = ngx_pnalloc(r->pool, bucket.len + 1);
+    if (bucket_cstr == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_memcpy(bucket_cstr, bucket.data, bucket.len);
+    bucket_cstr[bucket.len] = '\0';
+
+    r_client_hash_id((const char *) bucket_cstr, out->bucket_id);
+    if (worker->debug) {
+        u_char hex[33];
+        rn_hex_id(out->bucket_id, hex);
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: bucket zone=%V id=%s", &zone->name, hex);
+    }
+
+    if (rn_zone_rate_for_request(r, zone, &zone_rate_limit, &zone_window_ms) != NGX_OK) {
+        return NGX_ERROR;
+    }
+    out->window_size_ms = (uint32_t) zone_window_ms;
+    out->rate_limit = (uint32_t) zone_rate_limit;
+    out->tokens_requested = 1;
+    return NGX_OK;
+}
+
+static ngx_int_t
+rn_zone_rate_for_request(
+    ngx_http_request_t *r,
+    rn_zone_t *zone,
+    ngx_uint_t *out_rate,
+    ngx_msec_t *out_window_ms
+) {
+    if (r == NULL || zone == NULL || out_rate == NULL || out_window_ms == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_str_t rate = ngx_null_string;
+    if (ngx_http_complex_value(r, &zone->rate_cv, &rate) != NGX_OK) {
+        return NGX_ERROR;
+    }
+    return rn_parse_rate(&rate, out_rate, out_window_ms);
+}
+
 static char *
 ngx_http_rn_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
@@ -828,16 +873,21 @@ ngx_http_rn_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_memzero(zone, sizeof(*zone));
     zone->name = zone_name;
     zone->bucket_template = bucket;
-
-    if (rn_parse_rate(&rate, &zone->rate_limit, &zone->window_ms) != NGX_OK) {
-        return "invalid rate format";
-    }
+    zone->rate_template = rate;
 
     ngx_http_compile_complex_value_t ccv;
     ngx_memzero(&ccv, sizeof(ccv));
     ccv.cf = cf;
     ccv.value = &zone->bucket_template;
     ccv.complex_value = &zone->bucket_cv;
+    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+        return NGX_CONF_ERROR;
+    }
+
+    ngx_memzero(&ccv, sizeof(ccv));
+    ccv.cf = cf;
+    ccv.value = &zone->rate_template;
+    ccv.complex_value = &zone->rate_cv;
     if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
