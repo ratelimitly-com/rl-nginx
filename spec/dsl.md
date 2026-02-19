@@ -64,12 +64,16 @@ Notes:
 ### ratelimitly_zone
 
 ```
-ratelimitly_zone zone=<name> bucket="<template>" rate=<N>r/<period>;
+ratelimitly_zone zone=<name> bucket="<template>" rate=<rate_expr>;
 ```
 
 Notes:
 - `bucket` is a string template evaluated per request using nginx variables (e.g. `"low-throughput:$uri:$cookie"`).
-- `<period>` supports `s`, `m`, `h` (seconds, minutes, hours).
+- `rate` is evaluated per request using nginx complex values.
+  - Static example: `rate=600r/m`
+  - Dynamic example: `rate=$rl_dynamic_rate`
+- Rendered `rate` must match `N r / period` without spaces (e.g. `10r/s`, `100r/2s`, `500r/1h`).
+- `<period>` unit supports `s`, `m`, `h` (seconds, minutes, hours).
 
 ### ratelimitly_group
 

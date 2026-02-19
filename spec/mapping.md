@@ -6,13 +6,13 @@ Given:
 
 - `zone`: config name (each zone becomes a ResourceBlock)
 - `bucket`: rendered template string (nginx variables expanded)
-- `rate`: `N r / period`
+- `rate`: rendered rate expression in `N r / period` form
 
 Compute:
 
 - `bucket_id`: BLAKE2s-128 hash of `bucket`
-- `window_size_ms`: period in milliseconds
-- `rate_limit`: N
+- `window_size_ms`: parsed period in milliseconds
+- `rate_limit`: parsed `N`
 - `tokens_requested`: 1
 
 ## PDU

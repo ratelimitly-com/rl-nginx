@@ -3,10 +3,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./start-nginx.sh [--dynamic] [--clean] [--debug] [--nginx-src=PATH] [--conf=PATH] [--prefix=PATH]
+Usage: ./start-nginx.sh [--dynamic] [--clean] [--no-debug] [--nginx-src=PATH] [--conf=PATH] [--prefix=PATH]
 
 Builds rclient, builds nginx with the rn module, then runs nginx in the foreground
-with error_log set to stderr.
+with error_log sent to both stderr and logs/error.log.
+
+By default nginx is built with debug support (`--with-debug`).
+Use `--no-debug` to disable it.
 
 Notes:
 - For dynamic module builds, ensure your config loads the module with an absolute path
@@ -36,11 +39,18 @@ detect_rclient_dir() {
 }
 
 BUILD_ARGS=()
+DEBUG_BUILD=1
 
 for arg in "$@"; do
   case "$arg" in
-  --dynamic|--clean|--debug)
+  --dynamic|--clean)
       BUILD_ARGS+=("$arg")
+      ;;
+    --debug)
+      DEBUG_BUILD=1
+      ;;
+    --no-debug)
+      DEBUG_BUILD=0
       ;;
     --nginx-src=*)
       NGX_SRC="${arg#*=}"
@@ -62,6 +72,10 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if (( DEBUG_BUILD )); then
+  BUILD_ARGS+=("--debug")
+fi
 
 if [[ ! -d "$NGX_SRC" ]]; then
   echo "nginx source not found: $NGX_SRC"
@@ -98,4 +112,5 @@ export LD_LIBRARY_PATH="$RCLIENT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$NGINX_BIN" \
   -p "$PREFIX" \
   -c "$CONF" \
-  -g "daemon off; error_log /dev/stderr debug;"
+  -e /dev/stderr \
+  -g "daemon off; error_log stderr debug; error_log logs/error.log debug;"

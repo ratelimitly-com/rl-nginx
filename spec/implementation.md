@@ -23,8 +23,9 @@ This document defines the required implementation work for the nginx plugin (rat
 For each `ratelimitly_zone`:
 
 - Render `bucket` template (e.g. `"const:$uri:$cookie"`) via nginx variable expansion.
+- Render `rate` expression via nginx variable expansion.
 - `bucket_id` = BLAKE2s-128(bucket string).
-- `window_size_ms`, `rate_limit` from `rate=<N>r/<period>`.
+- Parse `window_size_ms`, `rate_limit` from rendered `rate` (`<N>r/<period_or_duration>`).
 - `tokens_requested` = 1.
 
 ## D) Networking & discovery
