@@ -5,20 +5,26 @@ This document defines the required implementation work for the nginx plugin (rat
 ## A) Core behavior
 
 - Parse DSL directives: `ratelimitly_tenant`, `ratelimitly_key_id`, `ratelimitly_auth`,
-  `ratelimitly_timeout`, `ratelimitly_fail`, `ratelimitly_zone`, `ratelimitly_group`,
-  `ratelimitly`, `ratelimitly_label`.
-- For each nginx request, build one Ratelimitly `rate_request` PDU with **one ResourceBlock
-  per resolved zone**.
-- Deny the request if **any** ResourceBlock returns `deficit > 0`.
+  `ratelimitly_timeout`, `ratelimitly_fail`, `ratelimitly_zone`, `ratelimitly_guard`,
+  `ratelimitly_group`, `ratelimitly`, `ratelimitly_label`.
+- For each nginx request, build one Ratelimitly `rate_request` PDU with:
+  - one ResourceBlock per resolved zone
+  - one GuardBlock per resolved guard
+- Parse full response guard/resource arrays and decide only after all entries are evaluated.
+- Deny the request if any GuardBlock fails or any ResourceBlock returns `deficit > 0`.
 - On timeout/network error: obey `ratelimitly_fail` (`open` or `close`).
 - If `ratelimitly_label` is set, emit a `metrics_label` TLV.
+- After request completion, if guards were applied, send one fire-and-forget
+  `latency_report` PDU with one ServiceLatencyBlock per applied guard.
 
 ## B) Request selection
 
 - Only locations/servers that include `ratelimitly ...;` participate.
 - Multiple `ratelimitly` directives in a location are combined into a single rate_request.
+- `ratelimitly` may reference zones/groups and optional guards.
+- Guards referenced by `ratelimitly` are resolved and attached to the same request.
 
-## C) Bucket construction
+## C) Resource and guard construction
 
 For each `ratelimitly_zone`:
 
@@ -28,7 +34,29 @@ For each `ratelimitly_zone`:
 - Parse `window_size_ms`, `rate_limit` from rendered `rate` (`<N>r/<period_or_duration>`).
 - `tokens_requested` = 1.
 
-## D) Networking & discovery
+For each `ratelimitly_guard`:
+
+- Render `service` template via nginx variable expansion.
+- Render `threshold` expression and parse as duration in milliseconds.
+- `service_id` = BLAKE2s-128(service string).
+- Copy `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold`.
+- Set request `current_latency` field to `0`.
+
+## D) Latency measurement and reporting
+
+- Measure request end-to-end latency in milliseconds:
+  - start: nginx request start timestamp
+  - end: request completion timestamp (response finished).
+- Clamp measured latency to minimum `1ms` before writing `observed_latency`.
+- Reporting trigger: only when at least one guard was applied in the request.
+- Build one `latency_report` PDU with one ServiceLatencyBlock per applied guard:
+  - `service_id` from the guard mapping
+  - `observed_latency` from measured end-to-end latency
+  - `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold` copied from guard config
+- Send report as fire-and-forget using `r_client_report_latency`.
+- Latency report send failures must not alter the HTTP response outcome.
+
+## E) Networking & discovery
 
 - Use nginx resolver for SRV `_ratelimitly._udp.<tenant>`.
 - If SRV is missing, fallback to A/AAAA for `<tenant>` with port `8080`.
@@ -36,18 +64,18 @@ For each `ratelimitly_zone`:
   minimum DNS TTL (SRV records).
 - **Broadcast** each rate request to all discovered SRV targets (HA requirement).
 
-## E) Async request flow (non-blocking)
+## F) Async request flow (non-blocking)
 
 Blocking waits are not allowed. The module must use nginx's event loop and timers.
 
 - Allocate per-request context in nginx pool:
   state, deadline, socket, server list, PDU buffer, attempts, timer.
 - Steps:
-  1) Build PDU.
-  2) Send UDP datagram (non-blocking).
-  3) Register read event + timer.
-  4) On read: parse response; decide allow/deny; finalize request.
-  5) On timeout: fail open/close; finalize.
+  1) Build and send `rate_request` PDU (non-blocking UDP).
+  2) Register read event + timer.
+  3) On read: parse full response (all guards/resources), then decide allow/deny; finalize request.
+  4) On timeout: fail open/close; finalize request.
+  5) On request completion/log phase: emit optional fire-and-forget `latency_report`.
 
 Steering feedback:
 - The request always sets `steering_feedback = 0`.
@@ -55,39 +83,46 @@ Steering feedback:
   - `steering_feedback = 0` => mark for rebind; perform rebind after the request completes (do not close the socket mid-flight).
   - `steering_feedback = 1` => keep the current socket.
 
-## F) Auth
+## G) Auth
 
 - Support: `cookie` and `aesgcm`.
 - `none` is development-only.
 - Precompute derived keys at config load when possible.
 
-## G) Observability
+## H) Observability
 
 Expose Prometheus counters:
 
 - `rn_requests_allowed_total`
 - `rn_requests_denied_total`
 - `rn_requests_timeout_total`
+- `rn_latency_reports_sent_total`
+- `rn_latency_reports_failed_total`
 
-Optional: latency histogram for RL round-trip.
+Optional:
+- latency histogram for RL round-trip
+- histogram for end-to-end observed request latency sent in reports
 
-## H) Error handling
+## I) Error handling
 
-- Invalid config (unknown zone, invalid rate, bad auth settings) -> nginx config error.
+- Invalid config (unknown zone/guard, invalid rate/threshold, bad auth settings) -> nginx config error.
 - Runtime errors (DNS failure, network errors) -> use fail-open/fail-close behavior.
+- Runtime latency-report send errors are logged/debugged but do not affect request decision.
 
-## I) Performance constraints
+## J) Performance constraints
 
 - Avoid blocking calls; use non-blocking UDP + nginx timers.
 - Minimize allocations; prefer caller-owned buffers (borrowed API) where possible.
-- Avoid string building except for bucket template rendering and label.
+- Avoid string building except for bucket/service template rendering and label.
+- Keep latency reporting off the critical path (fire-and-forget).
 
-## J) C r-client integration assumptions
+## K) C r-client integration assumptions
 
 - Use the standalone C r-client repo as the protocol engine.
   - Preferred local path: `./rl-c-client`.
   - Legacy fallback path: `./upstream-rl/clients/c`.
-- Use `r_client_check_rate_limit_async_borrowed` to avoid per-request copies.
+- Use `r_client_check_rate_limit_async_borrowed` for rate requests to avoid per-request copies.
+- Use `r_client_report_latency` for post-response latency telemetry.
 - nginx must override the r-client default policy:
   - `attempt_timeout_ms` from `ratelimitly_timeout` (default 20ms).
   - `retry_attempts = 0` unless explicitly configured later.

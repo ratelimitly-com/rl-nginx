@@ -31,6 +31,9 @@ Scenarios:
   4) /api/dynamic/test?user=wojtek with cookie session=s1
   5) /api/dynamic/test?user=wojtek with cookie session=s2
   6) /api/group/test?user=wojtek with cookie session=s1
+  7) /api/guard/test?user=wojtek
+  8) /api/guard-isolated/test?user=wojtek (high-rate zone, permissive threshold)
+  9) /api/guard-isolated/test?user=wojtek&guard_mode=strict (high-rate zone, strict threshold)
 EOF
 }
 
@@ -59,7 +62,10 @@ run_burst() {
   local ok
   local non_ok
   local code_429=0
+  local code_404=0
+  local code_5xx=0
   local code_000=0
+  local code_other_non200=0
   local err_before=0
   local err_after=0
   local timeout_status=0
@@ -77,17 +83,25 @@ run_burst() {
   seq "$BURST_SIZE" | xargs -P "$PARALLELISM" -I{} bash -c '
     url="$1"
     cookie="$2"
+    code=""
     if [[ -n "$cookie" ]]; then
-      curl -s -o /dev/null -w "%{http_code}\n" --cookie "$cookie" "$url" || echo "000"
+      code="$(curl -s -o /dev/null -w "%{http_code}" --cookie "$cookie" "$url" || true)"
     else
-      curl -s -o /dev/null -w "%{http_code}\n" "$url" || echo "000"
+      code="$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)"
     fi
+    printf "%s\n" "${code:-000}"
   ' _ "$url" "$cookie" > "$tmp"
 
   ok="$(grep -c "^200$" "$tmp" || true)"
   non_ok="$((BURST_SIZE - ok))"
   code_429="$(grep -c "^429$" "$tmp" || true)"
+  code_404="$(grep -c "^404$" "$tmp" || true)"
+  code_5xx="$(grep -Ec "^5[0-9][0-9]$" "$tmp" || true)"
   code_000="$(grep -c "^000$" "$tmp" || true)"
+  code_other_non200="$((non_ok - code_429 - code_404 - code_5xx - code_000))"
+  if (( code_other_non200 < 0 )); then
+    code_other_non200=0
+  fi
 
   if [[ -f "$NGINX_ERR_LOG" ]]; then
     err_after="$(wc -l < "$NGINX_ERR_LOG")"
@@ -99,11 +113,11 @@ run_burst() {
       rn_deny="$(grep -c "rn: result success=0" "$err_tmp" || true)"
     fi
 
-    printf "%-26s 200=%4d  non-200=%4d  429=%4d  000=%4d  rn_allow=%4d  rn_deny=%4d  timeout_status=%4d  error_status=%4d\n" \
-      "$name" "$ok" "$non_ok" "$code_429" "$code_000" "$rn_allow" "$rn_deny" "$timeout_status" "$any_error_status"
+    printf "%-26s 200=%4d  non-200=%4d  429=%4d  404=%4d  5xx=%4d  other=%4d  000=%4d  rn_allow=%4d  rn_deny=%4d  timeout_status=%4d  error_status=%4d\n" \
+      "$name" "$ok" "$non_ok" "$code_429" "$code_404" "$code_5xx" "$code_other_non200" "$code_000" "$rn_allow" "$rn_deny" "$timeout_status" "$any_error_status"
   else
-    printf "%-26s 200=%4d  non-200=%4d  429=%4d  000=%4d\n" \
-      "$name" "$ok" "$non_ok" "$code_429" "$code_000"
+    printf "%-26s 200=%4d  non-200=%4d  429=%4d  404=%4d  5xx=%4d  other=%4d  000=%4d\n" \
+      "$name" "$ok" "$non_ok" "$code_429" "$code_404" "$code_5xx" "$code_other_non200" "$code_000"
   fi
 
   rm -f "$tmp"
@@ -111,7 +125,7 @@ run_burst() {
 }
 
 echo "BASE_URL=$BASE_URL BURST_SIZE=$BURST_SIZE PARALLELISM=$PARALLELISM"
-echo "HTTP summary includes explicit 429 and 000 counts."
+echo "HTTP summary includes explicit 429/404/5xx/other/000 counts."
 if [[ -f "$NGINX_ERR_LOG" ]]; then
   echo "Using NGINX_ERR_LOG=$NGINX_ERR_LOG"
   echo "timeout_status counts 'rn: result error status=-2' in each burst window."
@@ -127,3 +141,6 @@ run_burst "dynamic user=wojtek" "$BASE_URL/api/dynamic/test?user=wojtek"
 run_burst "dynamic wojtek sess=s1" "$BASE_URL/api/dynamic/test?user=wojtek" "session=s1"
 run_burst "dynamic wojtek sess=s2" "$BASE_URL/api/dynamic/test?user=wojtek" "session=s2"
 run_burst "group wojtek sess=s1" "$BASE_URL/api/group/test?user=wojtek" "session=s1"
+run_burst "guard user=wojtek" "$BASE_URL/api/guard/test?user=wojtek"
+run_burst "guard-isolated permissive" "$BASE_URL/api/guard-isolated/test?user=wojtek"
+run_burst "guard-isolated strict" "$BASE_URL/api/guard-isolated/test?user=wojtek&guard_mode=strict"

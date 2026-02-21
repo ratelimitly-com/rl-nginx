@@ -65,8 +65,8 @@ http {
   ratelimitly_debug    on;
 
   # rate can be static (e.g. 120r/m) or a variable that resolves to that format.
-  ratelimitly_zone zone=api_read  bucket="low:$uri:user=$arg_user" rate=$rl_dynamic_rate;
-  ratelimitly_zone zone=api_write bucket="high:$uri:sess=$cookie_session" rate=120r/m;
+  ratelimitly_zone api_read  bucket="low:$uri:user=$arg_user" rate=$rl_dynamic_rate;
+  ratelimitly_zone api_write bucket="high:$uri:sess=$cookie_session" rate=120r/m;
 
   ratelimitly_group api_all zone=api_read zone=api_write;
 

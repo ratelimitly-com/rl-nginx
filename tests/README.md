@@ -90,10 +90,19 @@ curl -v 'http://127.0.0.1:8088/api/static/test'
 curl -v 'http://127.0.0.1:8088/api/dynamic/test?user=alice'
 curl -v 'http://127.0.0.1:8088/api/dynamic/test?user=wojtek'
 curl -v --cookie 'session=s1' 'http://127.0.0.1:8088/api/dynamic/test?user=wojtek'
+curl -v 'http://127.0.0.1:8088/api/guard/test?user=wojtek'
+curl -v 'http://127.0.0.1:8088/api/guard-isolated/test?user=wojtek'
+curl -v 'http://127.0.0.1:8088/api/guard-isolated/test?user=wojtek&guard_mode=strict'
 ```
 
 If `ratelimitly_debug on` is set, you will see detailed `rn:` logs in the nginx
 error log (SRV targets, A/AAAA addresses, bucket IDs, UDP recv/decisions).
+
+Guard test path note:
+- `/api/guard/test` and `/api/guard-isolated/test` now `proxy_pass` to a local backend on `127.0.0.1:18089` defined in `./tests/nginx.conf`.
+- This makes guard tests measure end-to-end proxy latency instead of local static-file serving only.
+- The backend endpoint `/backend/ok.txt` returns explicit HTTP `200` for clean burst-test accounting.
+- Latency reports sent by the nginx module clamp observed latency to minimum `1ms` (avoids `0ms` artifacts).
 
 ## 6) Smoke test helper
 
@@ -118,6 +127,9 @@ error log (SRV targets, A/AAAA addresses, bucket IDs, UDP recv/decisions).
 Reported counters:
 - `200`: successful HTTP responses.
 - `429`: rate-limited responses.
+- `404`: not found responses.
+- `5xx`: upstream/server-side HTTP errors.
+- `other`: any other non-200/non-429/non-404/non-5xx/non-000 codes.
 - `000`: curl transport failures (no HTTP response code).
 - `rn_allow`: count of `rn: result success=1` in log lines captured for the burst window.
 - `rn_deny`: count of `rn: result success=0` in log lines captured for the burst window.
@@ -128,9 +140,16 @@ Interpretation note:
 - With `ratelimitly_fail open` and `ratelimitly_debug on`, `timeout_status` approximates fail-open timeout allowances.
 - If `429` is high and `000` is zero, requests reached nginx and were denied by policy (not network failures).
 
-Current default scenario in script:
-- Only the group scenario is enabled by default in `./tests/burst-test.sh`.
-- Uncomment other `run_burst ...` lines in the script to run all listed scenarios.
+Current default scenarios in script:
+- `static`
+- `dynamic user=alice`
+- `dynamic user=wojtek`
+- `dynamic wojtek sess=s1`
+- `dynamic wojtek sess=s2`
+- `group wojtek sess=s1`
+- `guard user=wojtek`
+- `guard-isolated permissive` (high-rate zone to reduce rate-limit noise)
+- `guard-isolated strict` (same high-rate zone with strict guard threshold)
 
 Show script help:
 
@@ -177,6 +196,8 @@ tail -n 200 ./logs/error.log | rg 'rn: result success=|rn: result error status='
 Counter interpretation quick check:
 - `429` high + `000=0` means nginx is reachable and actively denying.
 - `000` non-zero means transport/connectivity failures (no HTTP code).
+- `rn_allow` reflects ratelimitly decision only (access phase), not final upstream/content status.
+- `404` high with `rn_allow` high means rate check passed but final location content/proxy handling returned not found.
 - `rn_*` counters at `0` with non-zero HTTP counters usually means wrong log file path or missing debug-level rn lines.
 
 ## Notes
