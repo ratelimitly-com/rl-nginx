@@ -4,16 +4,11 @@
 #include <ngx_resolver.h>
 
 #include "r_client.h"
+#include "../rl-c-client/src/r_crypto.h"
 
 #include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-
-typedef enum {
-    RN_AUTH_NONE = 0,
-    RN_AUTH_COOKIE = 1,
-    RN_AUTH_AESGCM = 2,
-} rn_auth_type_t;
 
 typedef struct {
     ngx_str_t name;
@@ -47,8 +42,8 @@ typedef struct {
 
     ngx_str_t tenant_dns;
     uint64_t key_id;
-    rn_auth_type_t auth_type;
-    ngx_str_t auth_secret;
+    r_auth_type_t auth_type;
+    ngx_str_t auth_key;
 
     ngx_msec_t timeout_ms;
     ngx_flag_t fail_open;
@@ -129,8 +124,7 @@ static char *ngx_http_rn_merge_srv_conf(ngx_conf_t *cf, void *parent, void *chil
 static char *ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
 static char *ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static char *ngx_http_rn_set_key_id(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static char *ngx_http_rn_set_auth(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_timeout(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_fail(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_bind(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -183,16 +177,9 @@ static ngx_command_t ngx_http_rn_commands[] = {
       0,
       NULL },
 
-    { ngx_string("ratelimitly_key_id"),
+    { ngx_string("ratelimitly_auth_key"),
       NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
-      ngx_http_rn_set_key_id,
-      NGX_HTTP_MAIN_CONF_OFFSET,
-      0,
-      NULL },
-
-    { ngx_string("ratelimitly_auth"),
-      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE12,
-      ngx_http_rn_set_auth,
+      ngx_http_rn_set_auth_key,
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
       NULL },
@@ -551,12 +538,8 @@ ngx_http_rn_init(ngx_conf_t *cf) {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_tenant is required");
             return NGX_ERROR;
         }
-        if (mcf->key_id == 0) {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_key_id is required");
-            return NGX_ERROR;
-        }
-        if (mcf->auth_type != RN_AUTH_NONE && mcf->auth_secret.len == 0) {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_auth secret is required");
+        if (mcf->auth_key.len == 0) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_auth_key is required");
             return NGX_ERROR;
         }
     }
@@ -579,9 +562,9 @@ ngx_http_rn_create_main_conf(ngx_conf_t *cf) {
     mcf->tenant_dns.len = 0;
     mcf->tenant_dns.data = NULL;
     mcf->key_id = 0;
-    mcf->auth_type = RN_AUTH_NONE;
-    mcf->auth_secret.len = 0;
-    mcf->auth_secret.data = NULL;
+    mcf->auth_type = R_AUTH_NONE;
+    mcf->auth_key.len = 0;
+    mcf->auth_key.data = NULL;
     mcf->timeout_ms = 20;
     mcf->fail_open = 1;
     mcf->enabled = 0;
@@ -697,51 +680,49 @@ rn_parse_u64(ngx_str_t *value, uint64_t *out) {
 }
 
 static char *
-ngx_http_rn_set_key_id(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
-    uint64_t n = 0;
-
-    if (rn_parse_u64(&value[1], &n) != NGX_OK) {
-        return "invalid key_id";
-    }
-    mcf->key_id = n;
-    return NGX_CONF_OK;
-}
-
-static char *
-ngx_http_rn_set_auth(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
-    rn_main_conf_t *mcf = conf;
-    ngx_str_t *value = cf->args->elts;
-
-    if (mcf->auth_secret.data != NULL || mcf->auth_type != RN_AUTH_NONE) {
+    if (mcf->auth_key.data != NULL) {
         return "is duplicate";
     }
 
-    if (value[1].len == 4 && ngx_strncmp(value[1].data, "none", 4) == 0) {
-        mcf->auth_type = RN_AUTH_NONE;
-        return NGX_CONF_OK;
+    if (value[1].len == 0) {
+        return "ratelimitly_auth_key requires a bech32 key";
     }
 
-    if (value[1].len == 6 && ngx_strncmp(value[1].data, "cookie", 6) == 0) {
-        if (cf->args->nelts < 3) {
-            return "cookie auth requires secret";
-        }
-        mcf->auth_type = RN_AUTH_COOKIE;
-        mcf->auth_secret = value[2];
-        return NGX_CONF_OK;
+    char *key = (char *)ngx_pnalloc(cf->pool, value[1].len + 1);
+    if (key == NULL) {
+        return NGX_CONF_ERROR;
+    }
+    ngx_memcpy(key, value[1].data, value[1].len);
+    key[value[1].len] = '\0';
+
+    r_auth_type_t decoded_type = R_AUTH_NONE;
+    uint64_t decoded_key_id = 0;
+    uint8_t secret[64];
+    size_t secret_len = 0;
+    if (r_decode_api_key_bech32(
+            key,
+            &decoded_type,
+            &decoded_key_id,
+            secret,
+            sizeof(secret),
+            &secret_len) != 0) {
+        return "invalid ratelimitly_auth_key bech32 value";
     }
 
-    if (value[1].len == 6 && ngx_strncmp(value[1].data, "aesgcm", 6) == 0) {
-        if (cf->args->nelts < 3) {
-            return "aesgcm auth requires secret";
-        }
-        mcf->auth_type = RN_AUTH_AESGCM;
-        mcf->auth_secret = value[2];
-        return NGX_CONF_OK;
+    if ((decoded_type == R_AUTH_COOKIE || decoded_type == R_AUTH_AES_GCM) && secret_len != 32u) {
+        return "ratelimitly_auth_key must embed a 32-byte cookie/aes payload";
+    }
+    if (decoded_type == R_AUTH_NONE && secret_len != 0u) {
+        return "ratelimitly_auth_key rl-none payload must be empty";
     }
 
-    return "invalid auth type";
+    mcf->auth_key = value[1];
+    mcf->auth_type = decoded_type;
+    mcf->key_id = decoded_key_id;
+    return NGX_CONF_OK;
 }
 
 static char *
@@ -1409,14 +1390,14 @@ rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name) {
 }
 
 static const char *
-rn_auth_type_name(rn_auth_type_t t) {
+rn_auth_type_name(r_auth_type_t t) {
     switch (t) {
-    case RN_AUTH_NONE:
+    case R_AUTH_NONE:
         return "none";
-    case RN_AUTH_COOKIE:
+    case R_AUTH_COOKIE:
         return "cookie";
-    case RN_AUTH_AESGCM:
-        return "aesgcm";
+    case R_AUTH_AES_GCM:
+        return "aes";
     default:
         return "unknown";
     }
@@ -1969,16 +1950,16 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
     worker->client_cfg.tenant.dns_name = dns;
     worker->client_cfg.tenant.key_id = mcf->key_id;
 
-    worker->client_cfg.tenant.auth.type = (r_auth_type_t) mcf->auth_type;
-    if (mcf->auth_secret.len > 0) {
-        char *secret = (char *)ngx_pnalloc(ngx_cycle->pool, mcf->auth_secret.len + 1);
+    worker->client_cfg.tenant.auth.type = mcf->auth_type;
+    if (mcf->auth_key.len > 0) {
+        char *secret = (char *)ngx_pnalloc(ngx_cycle->pool, mcf->auth_key.len + 1);
         if (secret == NULL) {
             return NGX_ERROR;
         }
-        ngx_memcpy(secret, mcf->auth_secret.data, mcf->auth_secret.len);
-        secret[mcf->auth_secret.len] = '\0';
+        ngx_memcpy(secret, mcf->auth_key.data, mcf->auth_key.len);
+        secret[mcf->auth_key.len] = '\0';
         worker->client_cfg.tenant.auth.secret = secret;
-        worker->client_cfg.tenant.auth.secret_len = mcf->auth_secret.len;
+        worker->client_cfg.tenant.auth.secret_len = mcf->auth_key.len;
     } else {
         worker->client_cfg.tenant.auth.secret = NULL;
         worker->client_cfg.tenant.auth.secret_len = 0;

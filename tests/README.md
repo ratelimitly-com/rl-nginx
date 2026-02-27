@@ -203,8 +203,8 @@ Counter interpretation quick check:
 ## Notes
 
 - This guide expects a running Ratelimitly server (Rust) and valid DNS entries.
-- `tests/nginx.conf` currently uses `aesgcm` auth with a local test secret.
-  You can switch to `none` for local dev or to `cookie`/`aesgcm` for real setups.
+- `tests/nginx.conf` currently uses `ratelimitly_auth_key` with an `rl-aes...` key.
+  Use `rl-none...` for local dev or `rl-cookie...`/`rl-aes...` for real setups.
 
 ## Scripts in this folder
 

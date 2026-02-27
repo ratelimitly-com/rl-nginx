@@ -55,8 +55,7 @@ http {
   }
 
   ratelimitly_tenant   ratelimitly.example.com;
-  ratelimitly_key_id   12345;
-  ratelimitly_auth     cookie <hex_cookie_32bytes>;
+  ratelimitly_auth_key rl-cookie1...; # embeds auth type + key_id + 32-byte cookie hash
   ratelimitly_timeout  20ms;
   ratelimitly_fail     open;
   # Optional local bind address for UDP client socket

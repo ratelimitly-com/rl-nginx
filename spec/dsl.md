@@ -14,19 +14,19 @@
 ratelimitly_tenant <tenant_dns_name>;
 ```
 
-### ratelimitly_key_id
+### ratelimitly_auth_key
 
 ```
-ratelimitly_key_id <uint64>;
+ratelimitly_auth_key <bech32_api_key>;
 ```
 
-### ratelimitly_auth
-
-```
-ratelimitly_auth none;            # development-only (not supported in production)
-ratelimitly_auth cookie <hex_cookie_32bytes>;
-ratelimitly_auth aesgcm <secret>;
-```
+Notes:
+- Required.
+- Must be one of:
+  - `rl-none...`
+  - `rl-cookie...` (payload is 32-byte cookie hash)
+  - `rl-aes...` (payload is 32-byte AES key)
+- The embedded `key_id` is used as tenant id automatically.
 
 ### ratelimitly_timeout
 

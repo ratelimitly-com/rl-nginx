@@ -4,7 +4,7 @@ This document defines the required implementation work for the nginx plugin (rat
 
 ## A) Core behavior
 
-- Parse DSL directives: `ratelimitly_tenant`, `ratelimitly_key_id`, `ratelimitly_auth`,
+- Parse DSL directives: `ratelimitly_tenant`, `ratelimitly_auth_key`,
   `ratelimitly_timeout`, `ratelimitly_fail`, `ratelimitly_zone`, `ratelimitly_guard`,
   `ratelimitly_group`, `ratelimitly`, `ratelimitly_label`.
 - For each nginx request, build one Ratelimitly `rate_request` PDU with:
@@ -85,9 +85,13 @@ Steering feedback:
 
 ## G) Auth
 
-- Support: `cookie` and `aesgcm`.
-- `none` is development-only.
-- Precompute derived keys at config load when possible.
+- Accept one Bech32 auth key via `ratelimitly_auth_key`.
+- Supported HRPs: `rl-none`, `rl-cookie`, `rl-aes`.
+- Derive tenant id from embedded Bech32 `key_id`.
+- Validate embedded payload length at config load:
+  - `rl-none`: 0 bytes
+  - `rl-cookie`: 32 bytes
+  - `rl-aes`: 32 bytes
 
 ## H) Observability
 
