@@ -54,19 +54,22 @@ For each `ratelimitly_guard`:
   - `observed_latency` from measured end-to-end latency
   - `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold` copied from guard config
 - Send report as fire-and-forget using `r_client_report_latency`.
-- Latency report send failures must not alter the HTTP response outcome.
+- Latency report send failures MUST NOT alter the HTTP response outcome.
 
 ## E) Networking & discovery
 
 - Use nginx resolver for SRV `_ratelimitly._udp.<tenant>`.
 - If SRV is missing, fallback to A/AAAA for `<tenant>` with port `8080`.
-- Maintain a per-worker cached server list; refresh interval must not exceed the
+- Maintain a per-worker cached server list; refresh interval MUST NOT exceed the
   minimum DNS TTL (SRV records).
-- **Broadcast** each rate request to all discovered SRV targets (HA requirement).
+- Multi-target send is allowed only when HA commit safety is preserved:
+  - strongly consistent shared token state, or
+  - exactly one effective commit authority for the request.
+- If neither condition is guaranteed, route mutating requests to a single deterministic commit target.
 
 ## F) Async request flow (non-blocking)
 
-Blocking waits are not allowed. The module must use nginx's event loop and timers.
+Blocking waits are not allowed. The module MUST use nginx's event loop and timers.
 
 - Allocate per-request context in nginx pool:
   state, deadline, socket, server list, PDU buffer, attempts, timer.
@@ -127,6 +130,6 @@ Optional:
   - Legacy fallback path: `./upstream-rl/clients/c`.
 - Use `r_client_check_rate_limit_async_borrowed` for rate requests to avoid per-request copies.
 - Use `r_client_report_latency` for post-response latency telemetry.
-- nginx must override the r-client default policy:
+- nginx MUST override the r-client default policy:
   - `attempt_timeout_ms` from `ratelimitly_timeout` (default 20ms).
   - `retry_attempts = 0` unless explicitly configured later.
