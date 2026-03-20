@@ -2210,8 +2210,13 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
         ctx->counted = 0;
     }
 
-    /* Resume access phase; handler will return ctx->decision. */
-    ngx_http_finalize_request(r, NGX_DECLINED);
+    /*
+     * Resume phase processing directly. Finalizing with NGX_DECLINED clears
+     * r->content_handler, which breaks content handlers installed by other
+     * directives such as proxy_pass.
+     */
+    r->write_event_handler = ngx_http_core_run_phases;
+    ngx_http_core_run_phases(r);
 }
 
 static void
