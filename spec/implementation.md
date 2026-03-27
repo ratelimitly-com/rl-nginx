@@ -59,7 +59,7 @@ For each `ratelimitly_guard`:
 ## E) Networking & discovery
 
 - Use nginx resolver for SRV `_ratelimitly._udp.<tenant>`.
-- If SRV is missing, fallback to A/AAAA for `<tenant>` with port `8080`.
+- Resolve A/AAAA only for the SRV target hostnames returned by that lookup.
 - Maintain a per-worker cached server list; refresh interval MUST NOT exceed the
   minimum DNS TTL (SRV records).
 - Multi-target send is allowed only when HA commit safety is preserved:

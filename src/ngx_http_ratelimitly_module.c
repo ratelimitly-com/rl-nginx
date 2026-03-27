@@ -90,6 +90,7 @@ typedef struct rn_worker_ctx {
     r_resolver_ops_t resolver_ops;
     ngx_resolver_t *resolver;
     ngx_socket_t udp_fd;
+    int udp_family;
     ngx_connection_t *udp_conn;
     ngx_event_t udp_read;
     ngx_log_t *log;
@@ -147,6 +148,7 @@ static void rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate
 static ngx_int_t ngx_http_rn_log_handler(ngx_http_request_t *r);
 static void rn_hex16(const uint8_t in[16], u_char out[33]);
 static void rn_hex_id(const uint8_t in[16], u_char out[33]);
+static const char *rn_rclient_status_name(int status);
 static ngx_int_t rn_build_zone_resource(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
@@ -302,24 +304,47 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     ngx_http_cleanup_t *cln;
 
     lcf = ngx_http_get_module_loc_conf(r, ngx_http_rn_module);
+    mcf = ngx_http_get_module_main_conf(r, ngx_http_rn_module);
     if (lcf == NULL || !lcf->enabled) {
+        if (mcf && mcf->debug) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "rn: bypass uri=%V reason=loc_disabled", &r->uri);
+        }
         return NGX_DECLINED;
     }
-    mcf = ngx_http_get_module_main_conf(r, ngx_http_rn_module);
     if (mcf == NULL || !mcf->enabled) {
+        if (mcf && mcf->debug) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "rn: bypass uri=%V reason=main_disabled", &r->uri);
+        }
         return NGX_DECLINED;
     }
     if (mcf->worker == NULL) {
         ngx_http_core_loc_conf_t *clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
         if (clcf == NULL || clcf->resolver == NULL) {
+            if (mcf->debug) {
+                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                    "rn: bypass uri=%V reason=no_resolver fail_open=%d",
+                    &r->uri, (int) mcf->fail_open);
+            }
             return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
         }
         if (rn_worker_init(mcf, r->connection->log, clcf->resolver) != NGX_OK) {
+            if (mcf->debug) {
+                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                    "rn: bypass uri=%V reason=worker_init_failed fail_open=%d",
+                    &r->uri, (int) mcf->fail_open);
+            }
             return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
         }
     }
     worker = mcf->worker;
     if (worker == NULL || worker->client == NULL) {
+        if (mcf->debug) {
+            ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                "rn: bypass uri=%V reason=no_client fail_open=%d",
+                &r->uri, (int) mcf->fail_open);
+        }
         return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
     }
 
@@ -334,6 +359,10 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     }
 
     if (lcf->rules == NULL || lcf->rules->nelts == 0) {
+        if (mcf->debug) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "rn: bypass uri=%V reason=no_rules", &r->uri);
+        }
         return NGX_DECLINED;
     }
     rules = lcf->rules->elts;
@@ -350,6 +379,10 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         }
     }
     if (total == 0) {
+        if (mcf->debug) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                "rn: bypass uri=%V reason=empty_rule_expansion", &r->uri);
+        }
         return NGX_DECLINED;
     }
 
@@ -390,9 +423,19 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             ngx_int_t guard_rc = rn_build_guard_entries(
                 r, worker, guard, &guards[guard_idx], &lat_reports[guard_idx]);
             if (guard_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
+                if (mcf->debug) {
+                    ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                        "rn: guard_build_failed guard=%V rc=internal_error",
+                        &guard->name);
+                }
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }
             if (guard_rc != NGX_OK) {
+                if (mcf->debug) {
+                    ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                        "rn: guard_build_failed guard=%V rc=%i fail_open=%d",
+                        &guard->name, guard_rc, mcf->fail_open);
+                }
                 return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             guard_defs[guard_idx] = guard;
@@ -407,9 +450,19 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             }
             build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
             if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
+                if (mcf->debug) {
+                    ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                        "rn: zone_build_failed zone=%V rc=internal_error",
+                        &zone->name);
+                }
                 return NGX_HTTP_INTERNAL_SERVER_ERROR;
             }
             if (build_rc != NGX_OK) {
+                if (mcf->debug) {
+                    ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                        "rn: zone_build_failed zone=%V rc=%i fail_open=%d",
+                        &zone->name, build_rc, mcf->fail_open);
+                }
                 return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             idx++;
@@ -428,9 +481,19 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 }
                 build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
                 if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
+                    if (mcf->debug) {
+                        ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                            "rn: zone_build_failed group=%V zone=%V rc=internal_error",
+                            &group->name, &zone->name);
+                    }
                     return NGX_HTTP_INTERNAL_SERVER_ERROR;
                 }
                 if (build_rc != NGX_OK) {
+                    if (mcf->debug) {
+                        ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                            "rn: zone_build_failed group=%V zone=%V rc=%i fail_open=%d",
+                            &group->name, &zone->name, build_rc, mcf->fail_open);
+                    }
                     return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
                 }
                 idx++;
@@ -440,6 +503,10 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
 
     if (lcf->label_set) {
         if (ngx_http_complex_value(r, &lcf->label_cv, &label) != NGX_OK) {
+            if (mcf->debug) {
+                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                    "rn: label_build_failed uri=%V fail_open=%d", &r->uri, mcf->fail_open);
+            }
             return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
         }
         if (label.len > 0) {
@@ -475,7 +542,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     cln->handler = rn_request_cleanup;
     cln->data = ctx;
 
-    if (r_client_check_rate_limit_async_borrowed(
+    int async_rc = r_client_check_rate_limit_async_borrowed(
         worker->client,
         resources,
         idx,
@@ -486,7 +553,14 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         rn_rate_cb,
         r,
         &req
-    ) != RCLIENT_OK) {
+    );
+    if (async_rc != RCLIENT_OK) {
+        if (mcf->debug) {
+            ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                "rn: async_start_failed uri=%V rc=%d(%s) resources=%uz guards=%uz label_len=%uz fail_open=%d",
+                &r->uri, async_rc, rn_rclient_status_name(async_rc),
+                idx, guard_idx, label_len, mcf->fail_open);
+        }
         return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
     }
 
@@ -1440,6 +1514,30 @@ rn_auth_tlv_name(uint16_t tlv_type) {
     }
 }
 
+static const char *
+rn_rclient_status_name(int status) {
+    switch (status) {
+    case RCLIENT_OK:
+        return "ok";
+    case RCLIENT_ERR_IO:
+        return "io";
+    case RCLIENT_ERR_TIMEOUT:
+        return "timeout";
+    case RCLIENT_ERR_PROTOCOL:
+        return "protocol";
+    case RCLIENT_ERR_AUTH:
+        return "auth";
+    case RCLIENT_ERR_DNS:
+        return "dns";
+    case RCLIENT_ERR_CONFIG:
+        return "config";
+    case RCLIENT_ERR_NOMEM:
+        return "nomem";
+    default:
+        return "unknown";
+    }
+}
+
 static int
 rn_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
     rn_worker_ctx_t *worker = ctx;
@@ -1476,7 +1574,23 @@ rn_udp_send(void *ctx, const r_addr_t *to, const uint8_t *buf, size_t len) {
                 "rn: udp_send to=%s len=%uz", text, len);
         }
     }
-    ssize_t n = sendto(worker->udp_fd, buf, len, 0, (struct sockaddr *)&to->sa, to->len);
+    struct sockaddr_storage dest = to->sa;
+    socklen_t dest_len = (socklen_t) to->len;
+
+    if (worker->udp_family == AF_INET6 && dest.ss_family == AF_INET) {
+        struct sockaddr_in *sin = (struct sockaddr_in *) &dest;
+        struct sockaddr_in6 mapped;
+        ngx_memzero(&mapped, sizeof(mapped));
+        mapped.sin6_family = AF_INET6;
+        mapped.sin6_port = sin->sin_port;
+        mapped.sin6_addr.s6_addr[10] = 0xff;
+        mapped.sin6_addr.s6_addr[11] = 0xff;
+        ngx_memcpy(&mapped.sin6_addr.s6_addr[12], &sin->sin_addr, 4);
+        ngx_memcpy(&dest, &mapped, sizeof(mapped));
+        dest_len = sizeof(mapped);
+    }
+
+    ssize_t n = sendto(worker->udp_fd, buf, len, 0, (struct sockaddr *) &dest, dest_len);
     if (n < 0 || (size_t) n != len) {
         if (worker->debug) {
             ngx_log_error(NGX_LOG_WARN, worker->log, ngx_socket_errno,
@@ -1554,6 +1668,10 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
 
     ngx_resolver_ctx_t *rctx = ngx_resolve_start(worker->resolver, NULL);
     if (rctx == NULL || rctx == (ngx_resolver_ctx_t *) NGX_NO_RESOLVER) {
+        if (worker->debug) {
+            ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+                "rn: resolve_srv start_failed name=%s no_resolver_ctx=1", name);
+        }
         return -1;
     }
 
@@ -1618,7 +1736,7 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
     rctx->data = req;
     req->resolver_ctx = rctx;
 
-    ngx_resolve_name(rctx);
+    (void) ngx_resolve_name(rctx);
     if (out_req_id) {
         *out_req_id = (r_dns_req_id_t)(uintptr_t) rctx;
     }
@@ -1634,6 +1752,10 @@ rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_
 
     ngx_resolver_ctx_t *rctx = ngx_resolve_start(worker->resolver, NULL);
     if (rctx == NULL || rctx == (ngx_resolver_ctx_t *) NGX_NO_RESOLVER) {
+        if (worker->debug) {
+            ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+                "rn: resolve_addrs start_failed name=%s no_resolver_ctx=1", name);
+        }
         return -1;
     }
 
@@ -1660,7 +1782,7 @@ rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_
     rctx->data = req;
     req->resolver_ctx = rctx;
 
-    ngx_resolve_name(rctx);
+    (void) ngx_resolve_name(rctx);
     if (out_req_id) {
         *out_req_id = (r_dns_req_id_t)(uintptr_t) rctx;
     }
@@ -1693,9 +1815,39 @@ rn_open_socket(rn_worker_ctx_t *worker) {
     if (worker == NULL) {
         return NGX_ERROR;
     }
-    ngx_socket_t s = ngx_socket(AF_INET6, SOCK_DGRAM, 0);
-    if (s == (ngx_socket_t) -1) {
+
+    struct sockaddr_storage ss;
+    socklen_t slen = 0;
+    int preferred_family = AF_UNSPEC;
+    ngx_addr_t addr;
+    ngx_memzero(&ss, sizeof(ss));
+    ngx_memzero(&addr, sizeof(addr));
+
+    if (worker->bind_addr.len != 0) {
+        if (ngx_parse_addr(ngx_cycle->pool, &addr, worker->bind_addr.data, worker->bind_addr.len) != NGX_OK) {
+            return NGX_ERROR;
+        }
+        ngx_memcpy(&ss, addr.sockaddr, addr.socklen);
+        slen = addr.socklen;
+        preferred_family = addr.sockaddr->sa_family;
+    }
+
+    ngx_socket_t s;
+    int family;
+    if (preferred_family == AF_INET) {
+        family = AF_INET;
         s = ngx_socket(AF_INET, SOCK_DGRAM, 0);
+    } else {
+        family = AF_INET6;
+        s = ngx_socket(AF_INET6, SOCK_DGRAM, 0);
+        if (s != (ngx_socket_t) -1) {
+            int v6only = 0;
+            (void) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+        }
+        if (s == (ngx_socket_t) -1) {
+            family = AF_INET;
+            s = ngx_socket(AF_INET, SOCK_DGRAM, 0);
+        }
     }
     if (s == (ngx_socket_t) -1) {
         return NGX_ERROR;
@@ -1705,31 +1857,27 @@ rn_open_socket(rn_worker_ctx_t *worker) {
         return NGX_ERROR;
     }
 
-    struct sockaddr_storage ss;
-    socklen_t slen = 0;
-    ngx_memzero(&ss, sizeof(ss));
     if (worker->bind_addr.len == 0) {
         if (worker->udp_conn && worker->udp_conn->sockaddr) {
             ngx_memcpy(&ss, worker->udp_conn->sockaddr, worker->udp_conn->socklen);
             slen = worker->udp_conn->socklen;
         }
-    } else {
-        ngx_addr_t addr;
-        ngx_memzero(&addr, sizeof(addr));
-        if (ngx_parse_addr(ngx_cycle->pool, &addr, worker->bind_addr.data, worker->bind_addr.len) != NGX_OK) {
-            ngx_close_socket(s);
-            return NGX_ERROR;
-        }
-        ngx_memcpy(&ss, addr.sockaddr, addr.socklen);
-        slen = addr.socklen;
     }
 
     if (slen == 0) {
-        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ss;
-        sin6->sin6_family = AF_INET6;
-        sin6->sin6_port = htons(0);
-        sin6->sin6_addr = in6addr_any;
-        slen = sizeof(*sin6);
+        if (family == AF_INET) {
+            struct sockaddr_in *sin = (struct sockaddr_in *) &ss;
+            sin->sin_family = AF_INET;
+            sin->sin_port = htons(0);
+            sin->sin_addr.s_addr = htonl(INADDR_ANY);
+            slen = sizeof(*sin);
+        } else {
+            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) &ss;
+            sin6->sin6_family = AF_INET6;
+            sin6->sin6_port = htons(0);
+            sin6->sin6_addr = in6addr_any;
+            slen = sizeof(*sin6);
+        }
     }
 
     if (ss.ss_family == AF_INET) {
@@ -1746,6 +1894,7 @@ rn_open_socket(rn_worker_ctx_t *worker) {
         return NGX_ERROR;
     }
     worker->udp_fd = s;
+    worker->udp_family = family;
 
     worker->udp_conn = ngx_get_connection(s, worker->log);
     if (worker->udp_conn == NULL) {
@@ -1920,6 +2069,7 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
         return NGX_ERROR;
     }
     worker->udp_fd = (ngx_socket_t) -1;
+    worker->udp_family = AF_UNSPEC;
     worker->log = log;
     worker->resolver = resolver;
     worker->bind_addr = mcf->bind_addr;
@@ -1977,7 +2127,12 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
             &mcf->tenant_dns);
     }
 
-    if (r_client_create(&worker->client_cfg, &worker->io_ops, &worker->resolver_ops, &worker->client) != RCLIENT_OK) {
+    int rc = r_client_create(&worker->client_cfg, &worker->io_ops, &worker->resolver_ops, &worker->client);
+    if (rc != RCLIENT_OK) {
+        ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+            "rn: r_client_create failed rc=%d tenant=%V key_id=%uL auth=%s",
+            rc, &mcf->tenant_dns, (unsigned long) mcf->key_id,
+            rn_auth_type_name(mcf->auth_type));
         return NGX_ERROR;
     }
 

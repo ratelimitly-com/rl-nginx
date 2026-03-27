@@ -80,8 +80,8 @@ config.
 
 ## 4) DNS SRV/A setup
 
-The r-client uses SRV first (`_ratelimitly._udp.<tenant>`), then A/AAAA.
-Use your existing dnsmasq setup for local SRV entries.
+The r-client requires SRV discovery via `_ratelimitly._udp.<tenant>`.
+Use A/AAAA records only for the SRV target hostnames returned by that lookup, and use your existing dnsmasq setup to serve those local SRV entries.
 
 ## 5) Verify
 
