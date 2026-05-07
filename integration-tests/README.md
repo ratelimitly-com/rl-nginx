@@ -1,0 +1,323 @@
+# rl-nginx integration test
+
+This directory contains an end-to-end local integration test for the nginx
+Ratelimitly module. The test replaces the older manual flow of starting nginx,
+running `tests/burst-test.sh`, and inspecting rates by hand.
+
+The test builds and runs the real local components:
+
+- `rl-c-client`, used by the nginx module.
+- `rlnet`, from `../rl/xdp`, when the static library is not already built.
+- `ratelimitly-server`, from `../rl/implementations/rust` by default.
+- nginx, from the `upstream-nginx` submodule, with this repo's module added.
+- a small local DNS server that serves SRV and localhost A/AAAA records.
+- a generated nginx config with one permissive route and one rate-limited route.
+
+## Quick run
+
+Run from the `rl-nginx` repo root:
+
+```sh
+./integration-tests/test.sh
+```
+
+If the default ports are already in use, override them:
+
+```sh
+DNS_PORT=53536 RL_SERVER_PORT=39080 NGINX_PORT=18088 ./integration-tests/test.sh
+```
+
+Show script help:
+
+```sh
+./integration-tests/test.sh --help
+```
+
+## Expected repository layout
+
+The default layout assumes `rl-nginx` and `rl` are siblings in the umbrella
+workspace:
+
+```text
+glar/
+  rl-nginx/
+  rl/
+    implementations/rust/
+    tenant_management/elixir/
+    xdp/
+```
+
+Relative to `rl-nginx`, the Rust server source is expected at:
+
+```text
+../rl/implementations/rust
+```
+
+Override paths with environment variables when needed:
+
+```sh
+RL_ROOT=/path/to/rl ./integration-tests/test.sh
+RL_RUST_ROOT=/path/to/rl/implementations/rust ./integration-tests/test.sh
+```
+
+## Prerequisites
+
+The script checks for these commands before running:
+
+- `cargo`
+- `cmake`
+- `curl`
+- `dig`
+- `elixir`
+- `make`
+- `python3`
+
+The repo submodules must be present and up to date:
+
+- `./rl-c-client`
+- `./upstream-nginx`
+
+The test also expects the tenant-management Elixir CLI source under
+`../rl/tenant_management/elixir`.
+
+## What the script does
+
+The script is intentionally self-contained. It does not require an already
+running Ratelimitly server, nginx instance, or local DNS setup.
+
+1. Cleans previous integration-test artifact files.
+2. Builds `rl-c-client` with `make clean` and `make`.
+3. Ensures the local static `rlnet` library exists:
+   `../rl/xdp/build-static/src/librlnet.a`.
+4. Builds the Rust server:
+
+   ```sh
+   cargo build --release --features full --bin ratelimitly-server \
+     --manifest-path ../rl/implementations/rust/Cargo.toml
+   ```
+
+5. Builds nginx with the `rl-nginx` module by calling:
+
+   ```sh
+   ./tests/build-nginx.sh ./upstream-nginx --clean --debug
+   ```
+
+6. Starts `ratelimitly-server` on localhost with `RLNET_DISABLE_XDP=1`.
+7. Waits until the server prints its `server_id` and readiness marker.
+8. Registers a temporary tenant through the Elixir tenant-management CLI.
+9. Starts `local_dns_server.py` on localhost.
+10. Verifies DNS with a SRV lookup for `_ratelimitly._udp.<domain>`.
+11. Writes a generated nginx config under `integration-tests/artifacts/`.
+12. Runs `nginx -t` against the generated config.
+13. Starts nginx in the foreground, managed by the script.
+14. Sends burst traffic to `/allow` and `/deny`.
+15. Asserts HTTP status counts and nginx `rn:` decision logs.
+16. Stops nginx, the DNS server, and the Ratelimitly server on exit.
+
+## Generated DNS
+
+The test domain defaults to:
+
+```text
+rn-itest.local
+```
+
+The script starts a local UDP DNS server and serves:
+
+- SRV records for `_ratelimitly._udp.rn-itest.local`.
+- A records for `localhost` and `*.localhost` pointing to `127.0.0.1`.
+- AAAA records for `localhost` and `*.localhost` pointing to `::1`.
+
+The SRV target format is:
+
+```text
+s-<server_id>.localhost
+```
+
+The generated nginx config points nginx's resolver at this DNS server:
+
+```nginx
+resolver 127.0.0.1:<DNS_PORT> valid=1s;
+```
+
+## Generated nginx test config
+
+The generated config defines:
+
+```nginx
+ratelimitly_tenant   rn-itest.local;
+ratelimitly_auth_key <temporary tenant key>;
+ratelimitly_timeout  100ms;
+ratelimitly_fail     close;
+ratelimitly_debug    on;
+
+ratelimitly_zone allow_zone bucket="allow:$uri" rate=10000r/s;
+ratelimitly_zone deny_zone  bucket="deny:$uri"  rate=1r/s;
+```
+
+It exposes two local endpoints:
+
+- `/allow`: high quota, expected to return only successful HTTP responses.
+- `/deny`: low quota, expected to return at least some `429` responses.
+
+Both locations serve `tests/ok.txt` through `try_files`. This is intentional:
+using a direct `return 200` content handler can bypass the module's access-phase
+decision path.
+
+## Success criteria
+
+The test passes when:
+
+- `/allow` has at least one `200`.
+- `/allow` has zero `429`, zero `000`, and zero `5xx`.
+- `/deny` has at least one `429`.
+- `/deny` has zero `000` and zero `5xx`.
+- nginx debug log contains at least one `rn: result success=1`.
+- nginx debug log contains at least one `rn: result success=0`.
+
+With defaults, a successful run commonly looks like:
+
+```text
+allow  requests=50   200=50  429=0    5xx=0  000=0  other=0
+deny   requests=200  200=1   429=199  5xx=0  000=0  other=0
+```
+
+The exact split for `/deny` may vary slightly. The important assertion is that
+the route is actively rate-limited and no transport or server errors occurred.
+
+## Environment overrides
+
+Common overrides:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RL_ROOT` | `../rl` | Root of the `rl` repo. |
+| `RL_RUST_ROOT` | `$RL_ROOT/implementations/rust` | Rust server crate root. |
+| `RL_SERVER_BIN` | `$RL_RUST_ROOT/target/release/ratelimitly-server` | Server binary to run after build. |
+| `RCLIENT_DIR` | `./rl-c-client` | C client submodule path. |
+| `NGINX_SRC` | `./upstream-nginx` | nginx source submodule path. |
+| `NGINX_BIN` | `$NGINX_SRC/objs/nginx` | Built nginx binary. |
+| `DOMAIN` | `rn-itest.local` | Tenant DNS name used by nginx and local DNS. |
+| `DNS_SERVER` | `127.0.0.1` | Local DNS bind address. |
+| `DNS_PORT` | `53535` | Local DNS UDP port. |
+| `RL_HOST` | `127.0.0.1` | Ratelimitly server bind address. |
+| `RL_SERVER_PORT` | `39080` | Ratelimitly server UDP port. |
+| `RL_NODE_ID` | `11` | Server node id passed to `ratelimitly-server`. |
+| `NGINX_HOST` | `127.0.0.1` | nginx listen address. |
+| `NGINX_PORT` | `18088` | nginx HTTP listen port. |
+| `TENANT_AUTH` | `aes` | Auth mode used by tenant registration. |
+| `TENANT_ID` | timestamp-derived | Temporary tenant id. |
+| `TENANT_SEED` | `tenant-seed-$TENANT_ID` | Temporary tenant credential seed. |
+| `ALLOW_REQUESTS` | `50` | Requests sent to `/allow`. |
+| `DENY_REQUESTS` | `200` | Requests sent to `/deny`. |
+| `PARALLELISM` | `20` | `xargs -P` curl concurrency. |
+| `CLIENT_TIMEOUT_SEC` | `30` | curl max-time for readiness and burst requests. |
+
+The optional first positional argument overrides the shared Ratelimitly server
+secret:
+
+```sh
+./integration-tests/test.sh rl-secret...
+```
+
+The same value can also be supplied with `SECRET`.
+
+## Artifacts
+
+Runtime files are written under:
+
+```text
+integration-tests/artifacts/
+```
+
+This directory is ignored by git. Important files:
+
+| File | Purpose |
+| --- | --- |
+| `test.log` | Combined script output. |
+| `rl-server.log` | Ratelimitly server output. |
+| `tenant-register.log` | Tenant CLI output and generated API key. |
+| `dns.log` | Local DNS server output. |
+| `dns-check.log` | SRV lookup output from `dig`. |
+| `nginx.conf` | Generated nginx config. |
+| `nginx-error.log` | nginx debug/error log, including `rn:` decision lines. |
+| `allow.codes` | HTTP status codes from the `/allow` burst. |
+| `deny.codes` | HTTP status codes from the `/deny` burst. |
+| `results.tsv` | Per-scenario status summary. |
+
+Artifacts are cleaned at the start of each run.
+
+## Troubleshooting
+
+### Port already in use
+
+Use different local ports:
+
+```sh
+DNS_PORT=53536 RL_SERVER_PORT=39081 NGINX_PORT=18089 ./integration-tests/test.sh
+```
+
+### Missing `dig`
+
+Install the package that provides `dig` for your OS. On many Linux
+distributions this is part of `bind-utils` or `dnsutils`.
+
+### nginx config test fails
+
+Inspect:
+
+```sh
+less integration-tests/artifacts/nginx.conf
+less integration-tests/artifacts/nginx-error.log
+```
+
+The generated config should use `ratelimitly_fail close`; valid module values
+are `open` and `close`.
+
+### No `429` responses
+
+Check whether nginx actually reached the module decision path:
+
+```sh
+rg 'rn: result success=' integration-tests/artifacts/nginx-error.log
+```
+
+If there are no `rn:` result lines, inspect the generated location config. The
+test should use `try_files`, not `return 200`, for the test endpoints.
+
+### DNS discovery problems
+
+Check the DNS artifact files:
+
+```sh
+cat integration-tests/artifacts/dns-check.log
+cat integration-tests/artifacts/dns.log
+```
+
+The SRV response should include the current server port and a target like
+`s-<server_id>.localhost`.
+
+### Server registration problems
+
+Inspect:
+
+```sh
+less integration-tests/artifacts/rl-server.log
+less integration-tests/artifacts/tenant-register.log
+```
+
+The script verifies that the tenant registration ACK `server_id` matches the
+server id printed by the local `ratelimitly-server`.
+
+## Relationship to `tests/`
+
+The `tests/` directory still contains lower-level manual helpers:
+
+- `tests/build-nginx.sh`
+- `tests/burst-test.sh`
+- `tests/nginx.conf`
+- `tests/smoke-test.sh`
+
+The integration test reuses `tests/build-nginx.sh`, but generates its own
+nginx config, tenant key, DNS records, and runtime processes. Use
+`integration-tests/test.sh` when you want a reproducible local end-to-end check.
