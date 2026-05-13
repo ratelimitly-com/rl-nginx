@@ -19,20 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure SSH for private submodules
-        env:
-          RL_CI_SSH_KEY: ${{ secrets.RL_CI_SSH_KEY }}
-        run: |
-          if [ -z "$RL_CI_SSH_KEY" ]; then
-            echo "::error::Set the RL_CI_SSH_KEY secret so CI can checkout private submodules."
-            exit 1
-          fi
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$RL_CI_SSH_KEY" > ~/.ssh/rl_ci
-          chmod 600 ~/.ssh/rl_ci
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          git config --global core.sshCommand "ssh -i ~/.ssh/rl_ci -o IdentitiesOnly=yes"
-
       - name: Checkout submodules
         run: |
           git submodule sync --recursive

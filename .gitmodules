@@ -3,5 +3,5 @@
 	url = https://github.com/nginx/nginx.git
 [submodule "rl-c-client"]
 	path = rl-c-client
-	url = git@github.com:ratelimitly-com/rl-c-client.git
+	url = https://github.com/ratelimitly-com/rl-c-client.git
 	branch = main
