@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nginx-module:
+    name: nginx module
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH for private submodules
+        env:
+          RL_CI_SSH_KEY: ${{ secrets.RL_CI_SSH_KEY }}
+        run: |
+          if [ -z "$RL_CI_SSH_KEY" ]; then
+            echo "::error::Set the RL_CI_SSH_KEY secret so CI can checkout private submodules."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$RL_CI_SSH_KEY" > ~/.ssh/rl_ci
+          chmod 600 ~/.ssh/rl_ci
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git config --global core.sshCommand "ssh -i ~/.ssh/rl_ci -o IdentitiesOnly=yes"
+
+      - name: Checkout submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          git submodule status --recursive
+          git diff --quiet --submodule=diff
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            curl \
+            libpcre3-dev \
+            libssl-dev \
+            ripgrep \
+            zlib1g-dev
+
+      - name: Build and test C client
+        run: |
+          make -C rl-c-client
+          make -C rl-c-client test
+
+      - name: Build nginx module
+        run: bash tests/build-nginx.sh upstream-nginx --clean --debug
