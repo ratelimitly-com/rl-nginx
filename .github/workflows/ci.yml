@@ -20,36 +20,28 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Checkout submodules
-        id: submodules
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RL_CI_SSH_KEY: ${{ secrets.RL_CI_SSH_KEY }}
         run: |
-          if [ -n "$RL_CI_SSH_KEY" ]; then
-            mkdir -p ~/.ssh
-            printf '%s\n' "$RL_CI_SSH_KEY" > ~/.ssh/rl_ci
-            chmod 600 ~/.ssh/rl_ci
-            ssh-keyscan github.com >> ~/.ssh/known_hosts
-            git config --global core.sshCommand "ssh -i ~/.ssh/rl_ci -o IdentitiesOnly=yes"
-            git config --global url."git@github.com:".insteadOf https://github.com/
-            git config --global url."git@github.com:".insteadOf ssh://git@github.com/
-          else
-            git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf https://github.com/
-            git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf git@github.com:
-            git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf ssh://git@github.com/
-          fi
-          if git submodule sync --recursive \
-            && git submodule update --init --recursive \
-            && git submodule status --recursive \
-            && git diff --quiet --submodule=diff; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::Private submodules are unavailable; set RL_CI_SSH_KEY to run the nginx module build."
-            echo "available=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$RL_CI_SSH_KEY" ]; then
+            echo "::error::Set the RL_CI_SSH_KEY secret so CI can checkout private submodules and run the nginx module build."
+            exit 1
           fi
 
+          mkdir -p ~/.ssh
+          printf '%s\n' "$RL_CI_SSH_KEY" > ~/.ssh/rl_ci
+          chmod 600 ~/.ssh/rl_ci
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git config --global core.sshCommand "ssh -i ~/.ssh/rl_ci -o IdentitiesOnly=yes"
+          git config --global url."git@github.com:".insteadOf https://github.com/
+          git config --global url."git@github.com:".insteadOf ssh://git@github.com/
+
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          git submodule status --recursive
+          git diff --quiet --submodule=diff
+
       - name: Install dependencies
-        if: steps.submodules.outputs.available == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -62,11 +54,9 @@ jobs:
             zlib1g-dev
 
       - name: Build and test C client
-        if: steps.submodules.outputs.available == 'true'
         run: |
           make -C rl-c-client
           make -C rl-c-client test
 
       - name: Build nginx module
-        if: steps.submodules.outputs.available == 'true'
         run: bash tests/build-nginx.sh upstream-nginx --clean --debug
