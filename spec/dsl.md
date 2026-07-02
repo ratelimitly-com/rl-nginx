@@ -23,7 +23,6 @@ ratelimitly_auth_key <bech32_api_key>;
 Notes:
 - Required.
 - Must be one of:
-  - `rl-none...`
   - `rl-cookie...` (payload is 32-byte cookie hash)
   - `rl-aes...` (payload is 32-byte AES key)
 - The embedded `key_id` is used as tenant id automatically.

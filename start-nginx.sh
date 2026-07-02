@@ -3,10 +3,10 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./start-nginx.sh [--dynamic] [--clean] [--no-debug] [--nginx-src=PATH] [--conf=PATH] [--prefix=PATH]
+Usage: ./start-nginx.sh [--dynamic] [--compat] [--clean] [--no-debug] [--nginx-src=PATH] [--conf=PATH] [--prefix=PATH]
 
-Builds rclient, builds nginx with the rn module, then runs nginx in the foreground
-with error_log sent to both stderr and logs/error.log.
+Builds rl-c-client, builds nginx with the rl-nginx module, then runs nginx in
+the foreground with error_log sent to both stderr and logs/error.log.
 
 By default nginx is built with debug support (`--with-debug`).
 Use `--no-debug` to disable it.
@@ -24,15 +24,11 @@ PREFIX="${NGINX_PREFIX:-$RN_DIR}"
 
 detect_rclient_dir() {
   if [[ -n "${RCLIENT_DIR:-}" ]]; then
-    echo "$RCLIENT_DIR"
+    (cd "$RCLIENT_DIR" && pwd)
     return 0
   fi
-  if [[ -d "$RN_DIR/rl-c-client" ]]; then
-    echo "$RN_DIR/rl-c-client"
-    return 0
-  fi
-  if [[ -d "$RN_DIR/upstream-rl/clients/c" ]]; then
-    echo "$RN_DIR/upstream-rl/clients/c"
+  if [[ -d "$RN_DIR/../rl-c-client" ]]; then
+    (cd "$RN_DIR/../rl-c-client" && pwd)
     return 0
   fi
   return 1
@@ -43,7 +39,7 @@ DEBUG_BUILD=1
 
 for arg in "$@"; do
   case "$arg" in
-  --dynamic|--clean)
+  --dynamic|--compat|--clean)
       BUILD_ARGS+=("$arg")
       ;;
     --debug)
@@ -89,15 +85,14 @@ fi
 
 RCLIENT_DIR="$(detect_rclient_dir || true)"
 if [[ -z "$RCLIENT_DIR" ]]; then
-  echo "C r-client not found."
-  echo "Set RCLIENT_DIR or provide one of:"
-  echo "  - $RN_DIR/rl-c-client"
-  echo "  - $RN_DIR/upstream-rl/clients/c"
+  echo "rl-c-client not found."
+  echo "Set RCLIENT_DIR or clone rl-c-client next to this repo:"
+  echo "  git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client"
   exit 1
 fi
 
 make -C "$RCLIENT_DIR"
-"$RN_DIR/tests/build-nginx.sh" "$NGX_SRC" "${BUILD_ARGS[@]}"
+RCLIENT_DIR="$RCLIENT_DIR" "$RN_DIR/tests/build-nginx.sh" "$NGX_SRC" "${BUILD_ARGS[@]}"
 
 NGINX_BIN="$NGX_SRC/objs/nginx"
 if [[ ! -x "$NGINX_BIN" ]]; then

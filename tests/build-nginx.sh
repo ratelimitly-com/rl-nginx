@@ -1,34 +1,47 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug]"
+  exit 0
+fi
+
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--clean] [--debug]"
+  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug]"
   exit 1
 fi
 
 NGX_SRC="$1"
 DYNAMIC=""
+COMPAT=""
 CLEAN=""
 DEBUG=""
 for arg in "${@:2}"; do
   case "$arg" in
     --dynamic) DYNAMIC="--dynamic" ;;
+    --compat) COMPAT="--compat" ;;
     --clean) CLEAN="--clean" ;;
     --debug) DEBUG="--debug" ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug]" >&2
+      exit 1
+      ;;
   esac
 done
 RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -n "${RCLIENT_DIR:-}" ]]; then
-  C_CLIENT="$RCLIENT_DIR"
-elif [[ -d "$RN_DIR/rl-c-client" ]]; then
-  C_CLIENT="$RN_DIR/rl-c-client"
-elif [[ -d "$RN_DIR/upstream-rl/clients/c" ]]; then
-  C_CLIENT="$RN_DIR/upstream-rl/clients/c"
+  if [[ ! -d "$RCLIENT_DIR" ]]; then
+    echo "rl-c-client path not found: $RCLIENT_DIR" >&2
+    exit 1
+  fi
+  C_CLIENT="$(cd "$RCLIENT_DIR" && pwd)"
+elif [[ -d "$RN_DIR/../rl-c-client" ]]; then
+  C_CLIENT="$(cd "$RN_DIR/../rl-c-client" && pwd)"
 else
-  echo "C r-client not found." >&2
-  echo "Set RCLIENT_DIR or provide one of:" >&2
-  echo "  - $RN_DIR/rl-c-client" >&2
-  echo "  - $RN_DIR/upstream-rl/clients/c" >&2
+  echo "rl-c-client not found." >&2
+  echo "Set RCLIENT_DIR or clone rl-c-client next to this repo:" >&2
+  echo "  git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client" >&2
   exit 1
 fi
 
@@ -46,6 +59,8 @@ if [[ ! -f "$NGX_ROOT/configure" && ! -f "$NGX_ROOT/auto/configure" ]]; then
     echo "nginx configure script not found under: $NGX_SRC" >&2
     exit 1
   fi
+else
+  NGX_ROOT="$(cd "$NGX_ROOT" && pwd)"
 fi
 
 FLAGS=(
@@ -54,6 +69,9 @@ FLAGS=(
 )
 if [[ "$DEBUG" == "--debug" ]]; then
   FLAGS+=("--with-debug")
+fi
+if [[ "$COMPAT" == "--compat" ]]; then
+  FLAGS+=("--with-compat")
 fi
 
 cd "$NGX_ROOT"
@@ -67,9 +85,17 @@ fi
 if [[ "$DYNAMIC" == "--dynamic" ]]; then
   "$CONFIG" --add-dynamic-module="$RN_DIR" "${FLAGS[@]}"
   make modules
-  echo "Built dynamic module in $NGX_SRC/objs"
+  if [[ ! -f "$NGX_ROOT/objs/ngx_http_rn_module.so" ]]; then
+    echo "dynamic module was not produced: $NGX_ROOT/objs/ngx_http_rn_module.so" >&2
+    exit 1
+  fi
+  echo "Built dynamic module: $NGX_ROOT/objs/ngx_http_rn_module.so"
 else
   "$CONFIG" --add-module="$RN_DIR" "${FLAGS[@]}"
   make -j
-  echo "Built nginx with rn module"
+  if [[ ! -x "$NGX_ROOT/objs/nginx" ]]; then
+    echo "nginx binary was not produced: $NGX_ROOT/objs/nginx" >&2
+    exit 1
+  fi
+  echo "Built nginx with rl-nginx module"
 fi
