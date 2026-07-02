@@ -6,7 +6,7 @@ running `tests/burst-test.sh`, and inspecting rates by hand.
 
 The test builds and runs the real local components:
 
-- `rl-c-client`, used by the nginx module.
+- `rl-c-client`, used by the nginx module, from a sibling checkout by default.
 - `rlnet`, from `../rl/xdp`, when the static library is not already built.
 - `ratelimitly-server`, from `../rl/implementations/rust` by default.
 - nginx, from the `upstream-nginx` submodule, with this repo's module added.
@@ -32,6 +32,33 @@ Show script help:
 ```sh
 ./integration-tests/test.sh --help
 ```
+
+## External server run
+
+When a Ratelimitly test server and tenant key already exist, run against the
+published tenant SRV record instead of starting a local Rust server:
+
+```sh
+EXTERNAL_SERVER=1 \
+DOMAIN=c-5107024729143590554.p0.ratelimitly.com \
+TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
+./integration-tests/test.sh
+```
+
+External mode still builds `rl-c-client` and nginx locally, but skips local
+Rust server startup, tenant registration, and the local DNS server. The script
+uses `DNS_SERVER`/`DNS_PORT` when set; otherwise it uses the first resolver from
+`/etc/resolv.conf` on port `53`. The generated nginx config defaults to
+`ipv6=off` resolver options because the public test SRV target is IPv4-only.
+
+External mode also uses a more conservative default load profile:
+
+```sh
+RATELIMITLY_TIMEOUT=1000ms ALLOW_REQUESTS=20 DENY_REQUESTS=80 PARALLELISM=5
+```
+
+Override those values when testing a dedicated server or a lower-latency
+network path.
 
 ## Expected repository layout
 
@@ -72,10 +99,12 @@ The script checks for these commands before running:
 - `make`
 - `python3`
 
-The repo submodules must be present and up to date:
+The nginx source submodule must be present and up to date:
 
-- `./rl-c-client`
 - `./upstream-nginx`
+
+The C client is an external checkout. By default the test expects it at
+`../rl-c-client`; set `RCLIENT_DIR=/path/to/rl-c-client` to use another path.
 
 The test also expects the tenant-management Elixir CLI source under
 `../rl/tenant_management/elixir`.
@@ -110,9 +139,15 @@ running Ratelimitly server, nginx instance, or local DNS setup.
 11. Writes a generated nginx config under `integration-tests/artifacts/`.
 12. Runs `nginx -t` against the generated config.
 13. Starts nginx in the foreground, managed by the script.
-14. Sends burst traffic to `/allow` and `/deny`.
-15. Asserts HTTP status counts and nginx `rn:` decision logs.
-16. Stops nginx, the DNS server, and the Ratelimitly server on exit.
+14. Waits for nginx to answer on the unprotected `/health` endpoint.
+15. Warms the Ratelimitly client by probing `/allow` until a real module
+    decision is logged.
+16. Sends burst traffic to `/allow` and `/deny`.
+17. Asserts HTTP status counts and nginx `rn:` decision logs.
+18. Stops nginx, the DNS server, and the Ratelimitly server on exit.
+
+With `EXTERNAL_SERVER=1`, steps 3, 6, 8, and 9 are skipped. The DNS check uses
+the real `_ratelimitly._udp.<domain>` SRV record.
 
 ## Generated DNS
 
@@ -137,7 +172,7 @@ s-<server_id>.localhost
 The generated nginx config points nginx's resolver at this DNS server:
 
 ```nginx
-resolver 127.0.0.1:<DNS_PORT> valid=1s;
+resolver 127.0.0.1:<DNS_PORT> valid=1s ipv6=off;
 ```
 
 ## Generated nginx test config
@@ -155,8 +190,9 @@ ratelimitly_zone allow_zone bucket="allow:$uri" rate=10000r/s;
 ratelimitly_zone deny_zone  bucket="deny:$uri"  rate=1r/s;
 ```
 
-It exposes two local endpoints:
+It exposes three local endpoints:
 
+- `/health`: unprotected nginx readiness endpoint, expected to return `204`.
 - `/allow`: high quota, expected to return only successful HTTP responses.
 - `/deny`: low quota, expected to return at least some `429` responses.
 
@@ -194,12 +230,14 @@ Common overrides:
 | `RL_ROOT` | `../rl` | Root of the `rl` repo. |
 | `RL_RUST_ROOT` | `$RL_ROOT/implementations/rust` | Rust server crate root. |
 | `RL_SERVER_BIN` | `$RL_RUST_ROOT/target/release/ratelimitly-server` | Server binary to run after build. |
-| `RCLIENT_DIR` | `./rl-c-client` | C client submodule path. |
+| `RCLIENT_DIR` | `../rl-c-client` | C client checkout path. |
 | `NGINX_SRC` | `./upstream-nginx` | nginx source submodule path. |
 | `NGINX_BIN` | `$NGINX_SRC/objs/nginx` | Built nginx binary. |
+| `EXTERNAL_SERVER` | `0` | Set to `1` to use an already-running server and existing tenant key. |
 | `DOMAIN` | `rn-itest.local` | Tenant DNS name used by nginx and local DNS. |
 | `DNS_SERVER` | `127.0.0.1` | Local DNS bind address. |
 | `DNS_PORT` | `53535` | Local DNS UDP port. |
+| `NGINX_RESOLVER_OPTIONS` | `ipv6=off` | Extra nginx resolver options in the generated test config. |
 | `RL_HOST` | `127.0.0.1` | Ratelimitly server bind address. |
 | `RL_SERVER_PORT` | `39080` | Ratelimitly server UDP port. |
 | `RL_NODE_ID` | `11` | Server node id passed to `ratelimitly-server`. |
@@ -208,9 +246,11 @@ Common overrides:
 | `TENANT_AUTH` | `aes` | Auth mode used by tenant registration. |
 | `TENANT_ID` | timestamp-derived | Temporary tenant id. |
 | `TENANT_SEED` | `tenant-seed-$TENANT_ID` | Temporary tenant credential seed. |
-| `ALLOW_REQUESTS` | `50` | Requests sent to `/allow`. |
-| `DENY_REQUESTS` | `200` | Requests sent to `/deny`. |
-| `PARALLELISM` | `20` | `xargs -P` curl concurrency. |
+| `TENANT_KEY` | empty | Existing tenant key, required when `EXTERNAL_SERVER=1`. |
+| `RATELIMITLY_TIMEOUT` | `100ms` local, `1000ms` external | Module timeout written to the generated nginx config. |
+| `ALLOW_REQUESTS` | `50` local, `20` external | Requests sent to `/allow`. |
+| `DENY_REQUESTS` | `200` local, `80` external | Requests sent to `/deny`. |
+| `PARALLELISM` | `20` local, `5` external | `xargs -P` curl concurrency. |
 | `CLIENT_TIMEOUT_SEC` | `30` | curl max-time for readiness and burst requests. |
 
 The optional first positional argument overrides the shared Ratelimitly server

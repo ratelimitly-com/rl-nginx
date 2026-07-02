@@ -1,22 +1,20 @@
-# rn test harness
+# rl-nginx test harness
 
-This guide shows how to build nginx with the rn module, run it with a test
+This guide shows how to build nginx with the rl-nginx module, run it with a test
 config, and validate traffic against a running Ratelimitly server.
 
-This requires local access to the C r-client repo, preferably at
-`./rl-c-client` (legacy fallback: `./upstream-rl/clients/c`), so nginx can
-link against the compiled r-client library.
+This requires local access to the `rl-c-client` repo so nginx can link against
+the compiled C client library. The default development layout keeps `rl-c-client`
+and `rl-nginx` as sibling checkouts.
 
-## 1) Build the C r-client
+## 1) Build rl-c-client
 
 ```sh
-export RCLIENT_DIR=./rl-c-client
-# legacy fallback:
-# export RCLIENT_DIR=./upstream-rl/clients/c
+export RCLIENT_DIR=../rl-c-client
 make -C "$RCLIENT_DIR"
 ```
 
-## 2) Build nginx with the rn module
+## 2) Build nginx with the rl-nginx module
 
 **Static module (simplest):**
 
@@ -41,14 +39,14 @@ sudo make -C /path/to/nginx-src install
 make -C /path/to/nginx-src modules
 ```
 
-A helper script is provided (pass the nginx repo root, not `/src`):
+A public helper script is provided (pass the nginx repo root, not `/src`):
 
 ```sh
-./tests/build-nginx.sh /path/to/nginx-src
+./tools/build-nginx.sh /path/to/nginx-src
 # or
-./tests/build-nginx.sh /path/to/nginx-src --dynamic
- # clean rebuild
-./tests/build-nginx.sh /path/to/nginx-src --clean
+./tools/build-nginx.sh /path/to/nginx-src --dynamic --compat
+# clean rebuild
+./tools/build-nginx.sh /path/to/nginx-src --clean
 ```
 
 ## 3) Run nginx with the test config
@@ -204,11 +202,11 @@ Counter interpretation quick check:
 
 - This guide expects a running Ratelimitly server (Rust) and valid DNS entries.
 - `tests/nginx.conf` currently uses `ratelimitly_auth_key` with an `rl-aes...` key.
-  Use `rl-none...` for local dev or `rl-cookie...`/`rl-aes...` for real setups.
+  Use a current `rl-cookie...` or `rl-aes...` key for local dev and real setups.
 
 ## Scripts in this folder
 
-- `build-nginx.sh` — builds nginx with the rn module (static or dynamic).
+- `build-nginx.sh` — lower-level build helper used by `../tools/build-nginx.sh`.
   - Run: `./tests/build-nginx.sh /path/to/nginx-src [--dynamic]`
 - `run-nginx.sh` — starts nginx with a specified config.
   - Run: `./tests/run-nginx.sh /path/to/nginx-bin [/path/to/nginx.conf]`

@@ -1,89 +1,206 @@
-# rate-nginx (rn)
+# rl-nginx
 
-This directory tracks the nginx plugin effort for Ratelimitly.
+`rl-nginx` is an nginx HTTP module for enforcing RateLimitly decisions at the
+nginx access phase.
 
-## Purpose
+The module evaluates one or more configured rate-limit resources for each
+request, sends those resources to RateLimitly through `rl-c-client`, and either
+lets nginx continue request processing or returns `429 Too Many Requests`.
 
-- Spec for the nginx module and config DSL.
-- Design notes and decision records.
-- Implementation (work-in-progress).
+This repository contains the nginx module source, build helpers, configuration
+examples, and integration tests. It does not contain the RateLimitly server or
+tenant-management service.
 
-## Structure
+## What The Module Does
 
-- `docs/`: Narrative docs, rationale, ADRs, guides.
-- `spec/`: Formal specs (DSL, protocol mapping, behavior).
-- `src/`: nginx module source (C).
+- Discovers RateLimitly servers with DNS SRV records:
+  `_ratelimitly._udp.<tenant-domain>`.
+- Authenticates requests with a RateLimitly tenant API key:
+  `rl-cookie...` or `rl-aes...`.
+- Defines nginx-native rate-limit resources with `ratelimitly_zone`.
+- Groups multiple resources with `ratelimitly_group`.
+- Optionally sends latency guard blocks with `ratelimitly_guard`.
+- Enforces RateLimitly allow/deny decisions before proxying or serving content.
+- Supports fail-open or fail-closed behavior when RateLimitly cannot be reached.
 
-## Quick links
+It does not create tenants, issue API keys, manage DNS, or run a local
+RateLimitly server. Those are provided by the RateLimitly control plane and
+server deployment.
 
-- Spec index: `spec/index.md`
-- Docs index: `docs/index.md`
-- Test harness: `tests/README.md`
+## Repository Layout
 
-## Build (dev)
-
-- Requires a local C r-client checkout, preferably at `./rl-c-client`.
-  - Legacy layout is still supported at `./upstream-rl/clients/c`.
-- Build the C r-client: `make -C ./rl-c-client`
-- Configure nginx with the module (example):
-  - `./configure --add-module=.` (run from `rn/`)
-  - Add include/lib flags for the C r-client as needed
-    (see `./rl-c-client/README.md`).
-
-## Local run helper
-
-Use `./start-nginx.sh` to build and run nginx in one step.
-
-```sh
-./start-nginx.sh
+```text
+rl-nginx/
+  src/                         nginx module source
+  examples/                    copyable nginx configuration examples
+  docs/                        build, configuration, and operations guides
+  integration-tests/           end-to-end test harness
+  spec/                        detailed configuration and behavior specs
+  tests/                       development smoke/burst helpers
+  tools/build-nginx.sh         public build helper
+  config                       nginx module build descriptor
 ```
 
-Notes:
-- Builds nginx with debug support by default (`--with-debug`).
-- Use `--no-debug` to disable debug build.
-- Runs nginx in foreground and writes debug logs to both:
-  - `stderr` (your console)
-  - `./logs/error.log` (under the selected prefix)
+`rl-c-client` is an external dependency. The default development layout keeps
+the two repositories as siblings:
 
-## Minimal config example
+```text
+workspace/
+  rl-c-client/
+  rl-nginx/
+```
+
+Set `RCLIENT_DIR=/path/to/rl-c-client` when using another layout.
+
+## Requirements
+
+- nginx source tree for the nginx version you will run.
+- `rl-c-client` source checkout.
+- C compiler and standard nginx build dependencies.
+- OpenSSL development headers and libraries (`libcrypto`; the helper also links
+  `libssl` for compatibility with existing build environments).
+- PCRE2 and zlib development packages, as required by nginx.
+- A RateLimitly tenant domain with a working SRV record.
+- A valid RateLimitly API key for that tenant.
+
+For production dynamic modules, build the module against the same nginx version
+and compatible configure options as the nginx binary that will load it.
+
+## Build
+
+Build `rl-c-client` first:
+
+```sh
+git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client
+make -C ../rl-c-client
+```
+
+Then build nginx with this module. The simplest source build is a static module:
+
+```sh
+RCLIENT_DIR=../rl-c-client \
+./tools/build-nginx.sh /path/to/nginx-src --clean
+```
+
+For a dynamic module:
+
+```sh
+RCLIENT_DIR=../rl-c-client \
+./tools/build-nginx.sh /path/to/nginx-src --dynamic --compat --clean
+```
+
+The dynamic module is written under the nginx build directory, usually:
+
+```text
+/path/to/nginx-src/objs/ngx_http_rn_module.so
+```
+
+Raw nginx configure commands are documented in [docs/build.md](docs/build.md).
+
+## Minimal Configuration
+
+For a static module build:
 
 ```nginx
+events {}
+
 http {
-  map $arg_user $rl_dynamic_rate {
-    default 1r/s;
-    wojtek 10r/s;
-  }
+  resolver 127.0.0.53 valid=30s ipv6=off;
 
-  ratelimitly_tenant   ratelimitly.example.com;
-  ratelimitly_auth_key rl-cookie1...; # embeds auth type + key_id + 32-byte cookie hash
-  ratelimitly_timeout  20ms;
-  ratelimitly_fail     open;
-  # Optional local bind address for UDP client socket
-  ratelimitly_bind     0.0.0.0;
-  # Optional debug logging
-  ratelimitly_debug    on;
+  ratelimitly_tenant   c-5107024729143590554.p0.ratelimitly.com;
+  ratelimitly_auth_key rl-aes1...;
+  ratelimitly_timeout  50ms;
+  ratelimitly_fail     close;
 
-  # rate can be static (e.g. 120r/m) or a variable that resolves to that format.
-  ratelimitly_zone api_read  bucket="low:$uri:user=$arg_user" rate=$rl_dynamic_rate;
-  ratelimitly_zone api_write bucket="high:$uri:sess=$cookie_session" rate=120r/m;
-
-  ratelimitly_group api_all zone=api_read zone=api_write;
+  ratelimitly_zone api bucket="api:$binary_remote_addr:$request_method:$uri" rate=100r/s;
 
   server {
+    listen 8080;
+
     location /api/ {
-      ratelimitly_label "api:$request_method:$uri:user=$arg_user";
-      ratelimitly group=api_all;
+      ratelimitly_label "api:$request_method:$uri";
+      ratelimitly zone=api;
+      proxy_pass http://127.0.0.1:9000;
     }
   }
 }
 ```
 
-`rate` values must resolve per request to `N r / period` without spaces,
-for example: `10r/s`, `600r/m`, `100r/2s`, `500r/1h`.
+For a dynamic module build, add a top-level `load_module` directive before the
+`events` block:
 
-## Test assets
+```nginx
+load_module modules/ngx_http_rn_module.so;
+```
 
-- `tests/nginx.conf` — ready-to-edit test config
-- `tests/build-nginx.sh` — nginx build helper with rn module + C r-client
-- `tests/burst-test.sh` — burst runner with HTTP/result counters
-- `start-nginx.sh` — build+run helper with debug logging defaults
+A complete example is available in [examples/minimal.conf](examples/minimal.conf).
+
+## Configuration Directives
+
+Core directives:
+
+- `ratelimitly_tenant <tenant-domain>;`
+- `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
+- `ratelimitly_timeout <duration>;`
+- `ratelimitly_fail open|close;`
+- `ratelimitly_bind <ip>;`
+- `ratelimitly_debug on|off;`
+- `ratelimitly_zone <name> bucket="<template>" rate=<rate>;`
+- `ratelimitly_group <name> zone=<zone> ...;`
+- `ratelimitly_guard <name> service="<template>" threshold=<duration> ...;`
+- `ratelimitly zone=<name>|group=<name> [guard=<name>] ...;`
+- `ratelimitly_label "<template>";`
+
+See [docs/configuration.md](docs/configuration.md) for directive details and
+[spec/dsl.md](spec/dsl.md) for the full DSL reference.
+
+## Runtime Behavior
+
+When a protected request arrives, the module:
+
+1. Expands nginx variables in bucket, rate, label, and guard templates.
+2. Hashes resource bucket names and guard service names into protocol IDs.
+3. Sends a UDP request to the discovered RateLimitly server through
+   `rl-c-client`.
+4. Continues nginx processing when RateLimitly allows the request.
+5. Returns `429 Too Many Requests` when RateLimitly denies the request.
+6. Applies `ratelimitly_fail open|close` when DNS, UDP, timeout, or protocol
+   errors prevent a valid decision.
+
+Operational guidance is in [docs/operations.md](docs/operations.md).
+
+## Test
+
+Syntax and development build checks:
+
+```sh
+for script in tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+  bash -n "$script"
+done
+RCLIENT_DIR=../rl-c-client ./tools/build-nginx.sh ./upstream-nginx --clean --debug
+```
+
+Full integration test with the local Rust RateLimitly server:
+
+```sh
+./integration-tests/test.sh
+```
+
+Full integration test against an existing RateLimitly server and tenant:
+
+```sh
+EXTERNAL_SERVER=1 \
+DOMAIN=c-5107024729143590554.p0.ratelimitly.com \
+TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
+./integration-tests/test.sh
+```
+
+The integration harness uses the Rust server implementation for local tests.
+Do not use the obsolete Python server for validation.
+
+## Status
+
+The module is source-built today. Distribution packages for common nginx
+platforms are not published yet.
+
+This repository is licensed under the MIT License; see [LICENSE](LICENSE).

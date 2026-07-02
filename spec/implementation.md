@@ -1,6 +1,7 @@
-# Implementation Spec (MVP)
+# Implementation Spec
 
-This document defines the required implementation work for the nginx plugin (rate-nginx / rn).
+This document defines the required implementation behavior for the rl-nginx
+module.
 
 ## A) Core behavior
 
@@ -89,10 +90,9 @@ Steering feedback:
 ## G) Auth
 
 - Accept one Bech32 auth key via `ratelimitly_auth_key`.
-- Supported HRPs: `rl-none`, `rl-cookie`, `rl-aes`.
+- Supported HRPs: `rl-cookie`, `rl-aes`.
 - Derive tenant id from embedded Bech32 `key_id`.
 - Validate embedded payload length at config load:
-  - `rl-none`: 0 bytes
   - `rl-cookie`: 32 bytes
   - `rl-aes`: 32 bytes
 
@@ -123,11 +123,11 @@ Optional:
 - Avoid string building except for bucket/service template rendering and label.
 - Keep latency reporting off the critical path (fire-and-forget).
 
-## K) C r-client integration assumptions
+## K) rl-c-client integration assumptions
 
-- Use the standalone C r-client repo as the protocol engine.
-  - Preferred local path: `./rl-c-client`.
-  - Legacy fallback path: `./upstream-rl/clients/c`.
+- Use the standalone `rl-c-client` repo as the protocol engine.
+  - Preferred development layout: sibling checkout at `../rl-c-client`.
+  - Other layouts MUST set `RCLIENT_DIR=/path/to/rl-c-client`.
 - Use `r_client_check_rate_limit_async_borrowed` for rate requests to avoid per-request copies.
 - Use `r_client_report_latency` for post-response latency telemetry.
 - nginx MUST override the r-client default policy:

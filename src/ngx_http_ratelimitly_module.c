@@ -4,7 +4,6 @@
 #include <ngx_resolver.h>
 
 #include "r_client.h"
-#include "../rl-c-client/src/r_crypto.h"
 
 #include <errno.h>
 #include <sys/socket.h>
@@ -636,7 +635,7 @@ ngx_http_rn_create_main_conf(ngx_conf_t *cf) {
     mcf->tenant_dns.len = 0;
     mcf->tenant_dns.data = NULL;
     mcf->key_id = 0;
-    mcf->auth_type = R_AUTH_NONE;
+    mcf->auth_type = (r_auth_type_t) 0;
     mcf->auth_key.len = 0;
     mcf->auth_key.data = NULL;
     mcf->timeout_ms = 20;
@@ -772,30 +771,14 @@ ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_memcpy(key, value[1].data, value[1].len);
     key[value[1].len] = '\0';
 
-    r_auth_type_t decoded_type = R_AUTH_NONE;
-    uint64_t decoded_key_id = 0;
-    uint8_t secret[64];
-    size_t secret_len = 0;
-    if (r_decode_api_key_bech32(
-            key,
-            &decoded_type,
-            &decoded_key_id,
-            secret,
-            sizeof(secret),
-            &secret_len) != 0) {
+    r_auth_key_info_t info;
+    if (r_client_parse_auth_key(key, &info) != RCLIENT_OK) {
         return "invalid ratelimitly_auth_key bech32 value";
     }
 
-    if ((decoded_type == R_AUTH_COOKIE || decoded_type == R_AUTH_AES_GCM) && secret_len != 32u) {
-        return "ratelimitly_auth_key must embed a 32-byte cookie/aes payload";
-    }
-    if (decoded_type == R_AUTH_NONE && secret_len != 0u) {
-        return "ratelimitly_auth_key rl-none payload must be empty";
-    }
-
     mcf->auth_key = value[1];
-    mcf->auth_type = decoded_type;
-    mcf->key_id = decoded_key_id;
+    mcf->auth_type = info.type;
+    mcf->key_id = info.key_id;
     return NGX_CONF_OK;
 }
 
@@ -1466,8 +1449,6 @@ rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name) {
 static const char *
 rn_auth_type_name(r_auth_type_t t) {
     switch (t) {
-    case R_AUTH_NONE:
-        return "none";
     case R_AUTH_COOKIE:
         return "cookie";
     case R_AUTH_AES_GCM:
@@ -1503,8 +1484,6 @@ rn_read_le64(const uint8_t *p) {
 static const char *
 rn_auth_tlv_name(uint16_t tlv_type) {
     switch (tlv_type) {
-    case 0x414E:
-        return "none";
     case 0x4143:
         return "cookie";
     case 0x4541:

@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Check out rl-c-client
+        uses: actions/checkout@v4
+        with:
+          repository: ratelimitly-com/rl-c-client
+          path: rl-c-client
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Shell syntax
+        run: |
+          for script in tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+            bash -n "$script"
+          done
+
+      - name: Build nginx module
+        run: RCLIENT_DIR=./rl-c-client ./tools/build-nginx.sh ./upstream-nginx --clean --debug
+
+      - name: Check whitespace
+        run: git diff --check

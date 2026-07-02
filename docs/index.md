@@ -1,11 +1,13 @@
-# rate-nginx docs
+# rl-nginx docs
 
 ## Topics
 
-- `design-overview.md` (placeholder)
-- `decisions.md` (placeholder)
-- `c-client.md` (C r-client integration notes)
+- `build.md` - building nginx with the module.
+- `configuration.md` - nginx directives and examples.
+- `operations.md` - DNS, failure modes, warmup, logging, and rollout checks.
+- `c-client.md` - C client integration notes.
 
 ## Notes
 
-Add high-level rationale and non-normative explanations here.
+The root `README.md` is the public entry point. These docs carry the detail
+needed once a user has decided to build or operate the module.

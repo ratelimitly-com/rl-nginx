@@ -19,16 +19,31 @@ Runs a local rl-nginx integration test from the rl-nginx repo root:
   5. starts nginx with the generated test config;
   6. verifies an allow path and a rate-limited deny path.
 
+External-server mode:
+  EXTERNAL_SERVER=1 DOMAIN=<tenant-domain> TENANT_KEY=<rl-aes/rl-cookie key> integration-tests/test.sh
+
+This skips local Rust server startup, tenant registration, and local DNS. It
+uses the configured DNS resolver to resolve _ratelimitly._udp.\${DOMAIN}.
+
 Common environment overrides:
   RL_ROOT=${RN_ROOT}/../rl
   RL_RUST_ROOT=\${RL_ROOT}/implementations/rust
+  RCLIENT_DIR=${RN_ROOT}/../rl-c-client
   DNS_PORT=53535
+  NGINX_RESOLVER_OPTIONS=ipv6=off
   RL_SERVER_PORT=39080
   NGINX_PORT=18088
+  RATELIMITLY_TIMEOUT=100ms
   ALLOW_REQUESTS=50
   DENY_REQUESTS=200
   PARALLELISM=20
   CLIENT_TIMEOUT_SEC=30
+
+External mode uses more conservative defaults:
+  RATELIMITLY_TIMEOUT=1000ms
+  ALLOW_REQUESTS=20
+  DENY_REQUESTS=80
+  PARALLELISM=5
 
 Artifacts are written to:
   ${SCRIPT_DIR}/artifacts
@@ -56,40 +71,69 @@ exec > >(tee "${MASTER_LOG}") 2>&1
 DEFAULT_SECRET="rl-secret16rkc9fkshnpdmdwp6dn0g8fpzamkx3ftlrlg2azvfnm3nkzdfc7qd2v85f"
 SECRET="${1:-${SECRET:-${DEFAULT_SECRET}}}"
 
+default_dns_server() {
+  awk '/^nameserver[[:space:]]+/ { print $2; exit }' /etc/resolv.conf
+}
+
 RL_ROOT="${RL_ROOT:-${RN_ROOT}/../rl}"
 RL_RUST_ROOT="${RL_RUST_ROOT:-${RL_ROOT}/implementations/rust}"
 RL_SERVER_BIN="${RL_SERVER_BIN:-${RL_RUST_ROOT}/target/release/ratelimitly-server}"
 TENANT_CLI_DIR="${RL_ROOT}/tenant_management/elixir"
 LOCAL_DNS_SERVER="${SCRIPT_DIR}/local_dns_server.py"
 
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/rl-c-client}"
+RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/../rl-c-client}"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_SRC}/objs/nginx}"
 
-DOMAIN="${DOMAIN:-rn-itest.local}"
-DNS_SERVER="${DNS_SERVER:-127.0.0.1}"
-DNS_PORT="${DNS_PORT:-53535}"
+EXTERNAL_SERVER="${EXTERNAL_SERVER:-0}"
+if [[ "${EXTERNAL_SERVER}" == "1" ]]; then
+  if [[ -z "${DOMAIN:-}" ]]; then
+    echo "EXTERNAL_SERVER=1 requires DOMAIN=<tenant-domain>" >&2
+    exit 1
+  fi
+  DNS_SERVER="${DNS_SERVER:-$(default_dns_server)}"
+  DNS_PORT="${DNS_PORT:-53}"
+else
+  DOMAIN="${DOMAIN:-rn-itest.local}"
+  DNS_SERVER="${DNS_SERVER:-127.0.0.1}"
+  DNS_PORT="${DNS_PORT:-53535}"
+fi
 RL_HOST="${RL_HOST:-127.0.0.1}"
 RL_SERVER_PORT="${RL_SERVER_PORT:-39080}"
 RL_NODE_ID="${RL_NODE_ID:-11}"
 NGINX_HOST="${NGINX_HOST:-127.0.0.1}"
 NGINX_PORT="${NGINX_PORT:-18088}"
+NGINX_RESOLVER_OPTIONS="${NGINX_RESOLVER_OPTIONS-ipv6=off}"
 TENANT_AUTH="${TENANT_AUTH:-aes}"
 TENANT_ID="${TENANT_ID:-$(( ( $(date +%s) % 1000000000 ) + 1000 ))}"
 TENANT_SEED="${TENANT_SEED:-tenant-seed-${TENANT_ID}}"
 TEST_DEDUP_N_BUCKETS_LOG2="${RL_DEDUP_N_BUCKETS_LOG2:-12}"
 TEST_DEDUP_TTL_MS="${RL_DEDUP_TTL:-300}"
 TENANT_DEDUP_TTL_MS_MAX="${TENANT_DEDUP_TTL_MS_MAX:-${TEST_DEDUP_TTL_MS}}"
-ALLOW_REQUESTS="${ALLOW_REQUESTS:-50}"
-DENY_REQUESTS="${DENY_REQUESTS:-200}"
-PARALLELISM="${PARALLELISM:-20}"
+
+if [[ "${EXTERNAL_SERVER}" == "1" ]]; then
+  DEFAULT_RATELIMITLY_TIMEOUT=1000ms
+  DEFAULT_ALLOW_REQUESTS=20
+  DEFAULT_DENY_REQUESTS=80
+  DEFAULT_PARALLELISM=5
+else
+  DEFAULT_RATELIMITLY_TIMEOUT=100ms
+  DEFAULT_ALLOW_REQUESTS=50
+  DEFAULT_DENY_REQUESTS=200
+  DEFAULT_PARALLELISM=20
+fi
+
+RATELIMITLY_TIMEOUT="${RATELIMITLY_TIMEOUT:-${DEFAULT_RATELIMITLY_TIMEOUT}}"
+ALLOW_REQUESTS="${ALLOW_REQUESTS:-${DEFAULT_ALLOW_REQUESTS}}"
+DENY_REQUESTS="${DENY_REQUESTS:-${DEFAULT_DENY_REQUESTS}}"
+PARALLELISM="${PARALLELISM:-${DEFAULT_PARALLELISM}}"
 CLIENT_TIMEOUT_SEC="${CLIENT_TIMEOUT_SEC:-30}"
 
 SERVER_PID=""
 DNS_PID=""
 NGINX_PID=""
 SERVER_ID=""
-TENANT_KEY=""
+TENANT_KEY="${TENANT_KEY:-}"
 
 log() {
   printf '[itest] %s\n' "$*"
@@ -173,13 +217,15 @@ build_all() {
   make -C "${RCLIENT_DIR}" clean
   make -C "${RCLIENT_DIR}"
 
-  ensure_local_rlnet_build
+  if [[ "${EXTERNAL_SERVER}" != "1" ]]; then
+    ensure_local_rlnet_build
 
-  log "Building ratelimitly-server"
-  cargo build --release --features full --bin ratelimitly-server --manifest-path "${RL_RUST_ROOT}/Cargo.toml"
+    log "Building ratelimitly-server"
+    cargo build --release --features full --bin ratelimitly-server --manifest-path "${RL_RUST_ROOT}/Cargo.toml"
+  fi
 
   log "Building nginx with rl-nginx module"
-  "${RN_ROOT}/tests/build-nginx.sh" "${NGINX_SRC}" --clean --debug
+  RCLIENT_DIR="${RCLIENT_DIR}" "${RN_ROOT}/tests/build-nginx.sh" "${NGINX_SRC}" --clean --debug
 }
 
 wait_for_server_ready() {
@@ -278,6 +324,15 @@ start_dns() {
   fi
 }
 
+check_external_dns() {
+  log "Checking external DNS SRV _ratelimitly._udp.${DOMAIN} via ${DNS_SERVER}:${DNS_PORT}"
+  dig @"${DNS_SERVER}" -p "${DNS_PORT}" +short SRV "_ratelimitly._udp.${DOMAIN}" | tee "${ARTIFACT_DIR}/dns-check.log"
+  if ! grep -Eq '^[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+[^[:space:]]+\.$' "${ARTIFACT_DIR}/dns-check.log"; then
+    echo "DNS SRV check did not return a usable record for _ratelimitly._udp.${DOMAIN}" >&2
+    exit 1
+  fi
+}
+
 write_nginx_config() {
   local conf="${ARTIFACT_DIR}/nginx.conf"
   local prefix="${ARTIFACT_DIR}/nginx-prefix"
@@ -289,12 +344,12 @@ events {
 }
 
 http {
-  resolver ${DNS_SERVER}:${DNS_PORT} valid=1s;
+  resolver ${DNS_SERVER}:${DNS_PORT} valid=1s ${NGINX_RESOLVER_OPTIONS};
   resolver_timeout 2s;
 
   ratelimitly_tenant   ${DOMAIN};
   ratelimitly_auth_key ${TENANT_KEY};
-  ratelimitly_timeout  100ms;
+  ratelimitly_timeout  ${RATELIMITLY_TIMEOUT};
   ratelimitly_fail     close;
   ratelimitly_debug    on;
 
@@ -303,6 +358,10 @@ http {
 
   server {
     listen ${NGINX_HOST}:${NGINX_PORT};
+
+    location = /health {
+      return 204;
+    }
 
     location = /allow {
       ratelimitly_label "ALLOW:\$uri";
@@ -345,7 +404,7 @@ start_nginx() {
       echo "nginx exited early; see ${error_log}" >&2
       exit 1
     fi
-    if curl --max-time "${CLIENT_TIMEOUT_SEC}" -fsS -o /dev/null "http://${NGINX_HOST}:${NGINX_PORT}/allow" 2>/dev/null; then
+    if curl --max-time "${CLIENT_TIMEOUT_SEC}" -fsS -o /dev/null "http://${NGINX_HOST}:${NGINX_PORT}/health" 2>/dev/null; then
       log "nginx is reachable"
       return
     fi
@@ -353,6 +412,29 @@ start_nginx() {
   done
 
   echo "Timed out waiting for nginx; see ${error_log}" >&2
+  exit 1
+}
+
+wait_for_ratelimitly_ready() {
+  local error_log="${ARTIFACT_DIR}/nginx-error.log"
+  local url="http://${NGINX_HOST}:${NGINX_PORT}/allow"
+  local code
+
+  log "Warming Ratelimitly client via ${url}"
+  for _ in $(seq 1 60); do
+    code="$(curl --max-time "${CLIENT_TIMEOUT_SEC}" -s -o /dev/null -w "%{http_code}" "${url}" || true)"
+    if grep -q 'rn: result success=1' "${error_log}"; then
+      log "Ratelimitly client is ready"
+      return
+    fi
+    if [[ "${code}" != "000" ]]; then
+      sleep 0.2
+    else
+      sleep 0.5
+    fi
+  done
+
+  echo "Timed out waiting for Ratelimitly client decision; see ${error_log}" >&2
   exit 1
 }
 
@@ -447,21 +529,33 @@ assert_results() {
 }
 
 main() {
-  need_cmd cargo
-  need_cmd cmake
   need_cmd curl
   need_cmd dig
-  need_cmd elixir
   need_cmd make
-  need_cmd python3
+  if [[ "${EXTERNAL_SERVER}" != "1" ]]; then
+    need_cmd cargo
+    need_cmd cmake
+    need_cmd elixir
+    need_cmd python3
+  fi
 
   : > "${ARTIFACT_DIR}/results.tsv"
   build_all
-  start_rl_server
-  register_tenant
-  start_dns
+  if [[ "${EXTERNAL_SERVER}" == "1" ]]; then
+    if [[ -z "${TENANT_KEY}" ]]; then
+      echo "EXTERNAL_SERVER=1 requires TENANT_KEY=<rl-aes/rl-cookie key>" >&2
+      exit 1
+    fi
+    log "Using external Ratelimitly server for tenant ${DOMAIN}"
+    check_external_dns
+  else
+    start_rl_server
+    register_tenant
+    start_dns
+  fi
   write_nginx_config
   start_nginx
+  wait_for_ratelimitly_ready
   run_burst allow /allow "${ALLOW_REQUESTS}"
   run_burst deny /deny "${DENY_REQUESTS}"
   assert_results

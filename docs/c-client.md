@@ -1,10 +1,18 @@
-# C r-client integration
+# C Client Integration
 
-This module uses the standalone C r-client repo as the protocol engine.
-Preferred local path is `./rl-c-client` (legacy fallback:
-`./upstream-rl/clients/c`).
+This module uses the standalone `rl-c-client` repo as the protocol engine.
+The preferred development layout keeps `rl-c-client` and `rl-nginx` as sibling
+checkouts:
 
-## Key assumptions
+```text
+glar/
+  rl-c-client/
+  rl-nginx/
+```
+
+Set `RCLIENT_DIR=/path/to/rl-c-client` when using another layout.
+
+## Key Assumptions
 
 - Multi-target send is allowed only when commit safety is guaranteed; otherwise use a single deterministic commit target for mutating requests.
 - DNS refresh interval MUST NOT exceed the minimum SRV TTL.
@@ -16,4 +24,4 @@ Preferred local path is `./rl-c-client` (legacy fallback:
 ## Notes
 
 The nginx module MUST provide I/O and DNS adapters via `r_client_io.h`
-(see `./rl-c-client/IO_ABSTRACTION.md`).
+(see `../rl-c-client/IO_ABSTRACTION.md` in the sibling checkout).
