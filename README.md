@@ -66,6 +66,9 @@ Set `RCLIENT_DIR=/path/to/rl-c-client` when using another layout.
 For production dynamic modules, build the module against the same nginx version
 and compatible configure options as the nginx binary that will load it.
 
+The first public release scope and validation matrix are documented in
+[docs/compatibility.md](docs/compatibility.md).
+
 ## Build
 
 Build `rl-c-client` first:
@@ -200,7 +203,9 @@ Do not use the obsolete Python server for validation.
 
 ## Status
 
-The module is source-built today. Distribution packages for common nginx
-platforms are not published yet.
+The planned `0.1.x` public-preview release is source-only. Distribution packages
+and container images are explicit non-goals for that release. See
+[docs/compatibility.md](docs/compatibility.md) for the target nginx, C-client,
+platform, and module-mode matrix.
 
 This repository is licensed under the MIT License; see [LICENSE](LICENSE).

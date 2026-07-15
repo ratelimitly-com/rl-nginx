@@ -3,6 +3,7 @@
 ## Topics
 
 - `build.md` - building nginx with the module.
+- `compatibility.md` - first-release scope and supported version matrix.
 - `configuration.md` - nginx directives and examples.
 - `operations.md` - DNS, failure modes, warmup, logging, and rollout checks.
 - `c-client.md` - C client integration notes.
