@@ -6,7 +6,8 @@ running `tests/burst-test.sh`, and inspecting rates by hand.
 
 The test builds and runs the real local components:
 
-- `rl-c-client`, used by the nginx module, from a sibling checkout by default.
+- `rl-c-client`, used by the nginx module, from the locked `./_deps` checkout
+  when present, with a sibling development checkout as a fallback.
 - `rlnet`, from `../rl/xdp`, when the static library is not already built.
 - `ratelimitly-server`, from `../rl/implementations/rust` by default.
 - nginx, from the `upstream-nginx` submodule, with this repo's module added.
@@ -103,8 +104,10 @@ The nginx source submodule must be present and up to date:
 
 - `./upstream-nginx`
 
-The C client is an external checkout. By default the test expects it at
-`../rl-c-client`; set `RCLIENT_DIR=/path/to/rl-c-client` to use another path.
+Fetch the supported C client with `./tools/fetch-rl-c-client.sh`. The test uses
+`./_deps/rl-c-client` when present, falls back to `../rl-c-client` for existing
+development workspaces, and accepts `RCLIENT_DIR=/path/to/rl-c-client` as an
+explicit override.
 
 The test also expects the tenant-management Elixir CLI source under
 `../rl/tenant_management/elixir`.
@@ -230,7 +233,7 @@ Common overrides:
 | `RL_ROOT` | `../rl` | Root of the `rl` repo. |
 | `RL_RUST_ROOT` | `$RL_ROOT/implementations/rust` | Rust server crate root. |
 | `RL_SERVER_BIN` | `$RL_RUST_ROOT/target/release/ratelimitly-server` | Server binary to run after build. |
-| `RCLIENT_DIR` | `../rl-c-client` | C client checkout path. |
+| `RCLIENT_DIR` | `./_deps/rl-c-client`, then `../rl-c-client` | C client checkout path. |
 | `NGINX_SRC` | `./upstream-nginx` | nginx source submodule path. |
 | `NGINX_BIN` | `$NGINX_SRC/objs/nginx` | Built nginx binary. |
 | `EXTERNAL_SERVER` | `0` | Set to `1` to use an already-running server and existing tenant key. |

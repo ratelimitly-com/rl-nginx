@@ -11,7 +11,9 @@ Environment:
   RCLIENT_DIR=/path/to/rl-c-client   C client checkout path.
 
 Defaults:
-  RCLIENT_DIR is auto-detected as ../rl-c-client when present.
+  RCLIENT_DIR is auto-detected from the locked ./_deps checkout, then from a
+  sibling ../rl-c-client checkout. Run ./tools/fetch-rl-c-client.sh to create
+  the locked checkout.
 EOF
 }
 
@@ -57,6 +59,10 @@ detect_rclient_dir() {
     (cd "$RCLIENT_DIR" && pwd)
     return 0
   fi
+  if [[ -d "$RN_DIR/_deps/rl-c-client" ]]; then
+    (cd "$RN_DIR/_deps/rl-c-client" && pwd)
+    return 0
+  fi
   if [[ -d "$RN_DIR/../rl-c-client" ]]; then
     (cd "$RN_DIR/../rl-c-client" && pwd)
     return 0
@@ -66,8 +72,8 @@ detect_rclient_dir() {
 
 RCLIENT_DIR="$(detect_rclient_dir || true)"
 if [[ -z "$RCLIENT_DIR" ]]; then
-  echo "C client not found. Set RCLIENT_DIR or clone rl-c-client next to this repo:" >&2
-  echo "  git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client" >&2
+  echo "C client not found. Fetch the locked release or set RCLIENT_DIR:" >&2
+  echo "  ./tools/fetch-rl-c-client.sh" >&2
   exit 1
 fi
 

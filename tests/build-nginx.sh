@@ -36,12 +36,14 @@ if [[ -n "${RCLIENT_DIR:-}" ]]; then
     exit 1
   fi
   C_CLIENT="$(cd "$RCLIENT_DIR" && pwd)"
+elif [[ -d "$RN_DIR/_deps/rl-c-client" ]]; then
+  C_CLIENT="$(cd "$RN_DIR/_deps/rl-c-client" && pwd)"
 elif [[ -d "$RN_DIR/../rl-c-client" ]]; then
   C_CLIENT="$(cd "$RN_DIR/../rl-c-client" && pwd)"
 else
   echo "rl-c-client not found." >&2
-  echo "Set RCLIENT_DIR or clone rl-c-client next to this repo:" >&2
-  echo "  git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client" >&2
+  echo "Fetch the locked release or set RCLIENT_DIR:" >&2
+  echo "  ./tools/fetch-rl-c-client.sh" >&2
   exit 1
 fi
 

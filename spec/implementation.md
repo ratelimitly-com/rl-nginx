@@ -126,8 +126,11 @@ Optional:
 ## K) rl-c-client integration assumptions
 
 - Use the standalone `rl-c-client` repo as the protocol engine.
-  - Preferred development layout: sibling checkout at `../rl-c-client`.
-  - Other layouts MUST set `RCLIENT_DIR=/path/to/rl-c-client`.
+  - Supported builds MUST use the tag and full SHA in
+    `dependencies/rl-c-client.env`.
+  - The fetch helper installs that revision at `./_deps/rl-c-client`.
+  - Development or packaging overrides MUST set
+    `RCLIENT_DIR=/path/to/rl-c-client` explicitly.
 - Use `r_client_check_rate_limit_async_borrowed` for rate requests to avoid per-request copies.
 - Use `r_client_report_latency` for post-response latency telemetry.
 - nginx MUST override the r-client default policy:

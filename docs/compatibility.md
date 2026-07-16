@@ -14,7 +14,7 @@ gates below pass for the release candidate.
 | Architectures | `x86_64` and `aarch64` |
 | nginx module modes | Static and dynamic |
 | nginx releases | Stable `1.30.2` and mainline `1.31.1` |
-| `rl-c-client` | One public immutable tag and full commit SHA, still to be released and locked |
+| `rl-c-client` | [`v0.2.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.2.0) at `6cafd3f5bea6ba2f8a791966a70b8ab8e56c485f` |
 
 Public preview means the module is suitable for evaluation and controlled
 deployments after operators test their exact nginx build and failure policy. It
@@ -22,10 +22,10 @@ does not promise configuration or ABI stability across the `0.1.x` line.
 Breaking changes must nevertheless be called out in the changelog and release
 notes.
 
-The C-client row is intentionally not a floating branch. The first public
-release is blocked until `rl-c-client` publishes the test support and APIs
-required by `rl-nginx`, and this repository records that release tag and full
-commit SHA in a machine-readable dependency lock.
+The C-client row is intentionally not a floating branch. The authoritative tag
+and full SHA live in
+[`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env); public CI and
+the fetch helper consume that lock and fail if the tag resolves elsewhere.
 
 ## Compatibility rules
 

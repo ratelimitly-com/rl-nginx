@@ -19,41 +19,42 @@ Install the normal nginx build dependencies for your operating system:
 You also need:
 
 - an nginx source tree for the nginx version you will run
-- an `rl-c-client` checkout
+- public HTTPS access to the locked `rl-c-client` release
 
-The default local layout is:
+The supported dependency revision is recorded once in
+[`../dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). Fetching it
+creates this default ignored layout:
 
 ```text
-workspace/
-  rl-c-client/
-  rl-nginx/
-  nginx/
+rl-nginx/
+  _deps/
+    rl-c-client/
 ```
 
-Set `RCLIENT_DIR=/path/to/rl-c-client` if the C client is elsewhere.
+Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally building a
+different source checkout.
 
 ## Build The C Client
 
 ```sh
-git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client
-make -C ../rl-c-client
+./tools/fetch-rl-c-client.sh
+make -C ./_deps/rl-c-client
 ```
 
-This produces `librclient.a` and `librclient.so`.
+The fetch fails if the public tag does not resolve to the locked full commit
+SHA. The build produces `librclient.a` and `librclient.so`.
 
 ## Build With The Helper
 
 Static module:
 
 ```sh
-RCLIENT_DIR=../rl-c-client \
 ./tools/build-nginx.sh /path/to/nginx-src --clean
 ```
 
 Dynamic module:
 
 ```sh
-RCLIENT_DIR=../rl-c-client \
 ./tools/build-nginx.sh /path/to/nginx-src --dynamic --compat --clean
 ```
 
@@ -122,6 +123,11 @@ The helper uses `-Wl,-rpath,...` and `start-nginx.sh` also exports
 `LD_LIBRARY_PATH` for local development.
 
 ## Version Compatibility
+
+Supported builds use the C-client tag and SHA in
+[`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). A
+`RCLIENT_DIR` override is useful for development, but it does not change the
+supported release combination.
 
 For static modules, build and run the resulting nginx binary together.
 

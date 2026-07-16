@@ -1,16 +1,17 @@
 # C Client Integration
 
-This module uses the standalone `rl-c-client` repo as the protocol engine.
-The preferred development layout keeps `rl-c-client` and `rl-nginx` as sibling
-checkouts:
+This module uses the standalone `rl-c-client` repository as the protocol
+engine. The supported tag and full commit SHA are recorded in
+[`../dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). Fetch the
+locked public release with:
 
-```text
-glar/
-  rl-c-client/
-  rl-nginx/
+```sh
+./tools/fetch-rl-c-client.sh
 ```
 
-Set `RCLIENT_DIR=/path/to/rl-c-client` when using another layout.
+The default checkout is `./_deps/rl-c-client`. Set
+`RCLIENT_DIR=/path/to/rl-c-client` to test an intentional development or
+packaging checkout; doing so does not change the supported release revision.
 
 ## Key Assumptions
 
@@ -23,5 +24,5 @@ Set `RCLIENT_DIR=/path/to/rl-c-client` when using another layout.
 
 ## Notes
 
-The nginx module MUST provide I/O and DNS adapters via `r_client_io.h`
-(see `../rl-c-client/IO_ABSTRACTION.md` in the sibling checkout).
+The nginx module MUST provide I/O and DNS adapters via `r_client_io.h` (see
+`IO_ABSTRACTION.md` in the selected C-client checkout).

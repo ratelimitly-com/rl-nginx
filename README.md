@@ -41,21 +41,24 @@ rl-nginx/
   config                       nginx module build descriptor
 ```
 
-`rl-c-client` is an external dependency. The default development layout keeps
-the two repositories as siblings:
+`rl-c-client` is an external dependency. Supported builds use the public tag
+and full commit SHA recorded in
+[`dependencies/rl-c-client.env`](dependencies/rl-c-client.env). Fetch that exact
+release into the default ignored dependency directory:
 
-```text
-workspace/
-  rl-c-client/
-  rl-nginx/
+```sh
+./tools/fetch-rl-c-client.sh
 ```
 
-Set `RCLIENT_DIR=/path/to/rl-c-client` when using another layout.
+This creates `./_deps/rl-c-client`. Set
+`RCLIENT_DIR=/path/to/rl-c-client` only when intentionally building another
+checkout, such as while developing or packaging the C client.
 
 ## Requirements
 
 - nginx source tree for the nginx version you will run.
-- `rl-c-client` source checkout.
+- The locked public `rl-c-client` source release, fetched with the repository
+  helper, or an intentional `RCLIENT_DIR` override.
 - C compiler and standard nginx build dependencies.
 - OpenSSL development headers and libraries (`libcrypto`; the helper also links
   `libssl` for compatibility with existing build environments).
@@ -71,24 +74,22 @@ The first public release scope and validation matrix are documented in
 
 ## Build
 
-Build `rl-c-client` first:
+Fetch the locked `rl-c-client` release:
 
 ```sh
-git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client
-make -C ../rl-c-client
+./tools/fetch-rl-c-client.sh
 ```
 
-Then build nginx with this module. The simplest source build is a static module:
+Then build nginx with this module. The helper builds the C client first. The
+simplest source build is a static module:
 
 ```sh
-RCLIENT_DIR=../rl-c-client \
 ./tools/build-nginx.sh /path/to/nginx-src --clean
 ```
 
 For a dynamic module:
 
 ```sh
-RCLIENT_DIR=../rl-c-client \
 ./tools/build-nginx.sh /path/to/nginx-src --dynamic --compat --clean
 ```
 
@@ -177,10 +178,11 @@ Operational guidance is in [docs/operations.md](docs/operations.md).
 Syntax and development build checks:
 
 ```sh
-for script in tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
   bash -n "$script"
 done
-RCLIENT_DIR=../rl-c-client ./tools/build-nginx.sh ./upstream-nginx --clean --debug
+sh -n config
+./tools/build-nginx.sh ./upstream-nginx --clean --debug
 ```
 
 Full integration test with the local Rust RateLimitly server:
