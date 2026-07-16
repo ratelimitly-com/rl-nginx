@@ -27,6 +27,10 @@ detect_rclient_dir() {
     (cd "$RCLIENT_DIR" && pwd)
     return 0
   fi
+  if [[ -d "$RN_DIR/_deps/rl-c-client" ]]; then
+    (cd "$RN_DIR/_deps/rl-c-client" && pwd)
+    return 0
+  fi
   if [[ -d "$RN_DIR/../rl-c-client" ]]; then
     (cd "$RN_DIR/../rl-c-client" && pwd)
     return 0
@@ -86,8 +90,8 @@ fi
 RCLIENT_DIR="$(detect_rclient_dir || true)"
 if [[ -z "$RCLIENT_DIR" ]]; then
   echo "rl-c-client not found."
-  echo "Set RCLIENT_DIR or clone rl-c-client next to this repo:"
-  echo "  git clone https://github.com/ratelimitly-com/rl-c-client.git ../rl-c-client"
+  echo "Fetch the locked release or set RCLIENT_DIR:"
+  echo "  ./tools/fetch-rl-c-client.sh"
   exit 1
 fi
 

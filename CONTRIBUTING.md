@@ -2,17 +2,16 @@
 
 This repository contains the nginx module for RateLimitly.
 
-## Development Layout
+## Development Dependency
 
-Use sibling checkouts:
+Fetch the supported public C-client release from the repository lock:
 
-```text
-workspace/
-  rl-c-client/
-  rl-nginx/
+```sh
+./tools/fetch-rl-c-client.sh
 ```
 
-Override the C client path with:
+This creates `./_deps/rl-c-client`. Override it only when intentionally testing
+another C-client checkout:
 
 ```sh
 export RCLIENT_DIR=/path/to/rl-c-client
@@ -23,10 +22,11 @@ export RCLIENT_DIR=/path/to/rl-c-client
 Run from the `rl-nginx` repo root:
 
 ```sh
-for script in tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
   bash -n "$script"
 done
-RCLIENT_DIR=../rl-c-client ./tools/build-nginx.sh ./upstream-nginx --clean --debug
+sh -n config
+./tools/build-nginx.sh ./upstream-nginx --clean --debug
 git diff --check
 ```
 

@@ -1,8 +1,17 @@
 ngx_addon_name=ngx_http_rn_module
 
-RN_RCLIENT_DIR="${RN_RCLIENT_DIR:-${RCLIENT_DIR:-$ngx_addon_dir/../rl-c-client}}"
+if [ -n "${RN_RCLIENT_DIR:-}" ]; then
+    :
+elif [ -n "${RCLIENT_DIR:-}" ]; then
+    RN_RCLIENT_DIR="$RCLIENT_DIR"
+elif [ -d "$ngx_addon_dir/_deps/rl-c-client/include" ]; then
+    RN_RCLIENT_DIR="$ngx_addon_dir/_deps/rl-c-client"
+else
+    RN_RCLIENT_DIR="$ngx_addon_dir/../rl-c-client"
+fi
 if [ ! -d "$RN_RCLIENT_DIR/include" ]; then
-  echo "ngx_http_rn_module requires rl-c-client headers. Set RN_RCLIENT_DIR or RCLIENT_DIR." >&2
+  echo "ngx_http_rn_module requires rl-c-client headers." >&2
+  echo "Run $ngx_addon_dir/tools/fetch-rl-c-client.sh or set RN_RCLIENT_DIR or RCLIENT_DIR." >&2
   exit 1
 fi
 

@@ -3,14 +3,14 @@
 This guide shows how to build nginx with the rl-nginx module, run it with a test
 config, and validate traffic against a running Ratelimitly server.
 
-This requires local access to the `rl-c-client` repo so nginx can link against
-the compiled C client library. The default development layout keeps `rl-c-client`
-and `rl-nginx` as sibling checkouts.
+This requires the locked public `rl-c-client` release so nginx can link against
+the compiled C client library.
 
 ## 1) Build rl-c-client
 
 ```sh
-export RCLIENT_DIR=../rl-c-client
+./tools/fetch-rl-c-client.sh
+export RCLIENT_DIR=./_deps/rl-c-client
 make -C "$RCLIENT_DIR"
 ```
 

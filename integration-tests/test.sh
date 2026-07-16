@@ -28,7 +28,7 @@ uses the configured DNS resolver to resolve _ratelimitly._udp.\${DOMAIN}.
 Common environment overrides:
   RL_ROOT=${RN_ROOT}/../rl
   RL_RUST_ROOT=\${RL_ROOT}/implementations/rust
-  RCLIENT_DIR=${RN_ROOT}/../rl-c-client
+  RCLIENT_DIR=${RN_ROOT}/_deps/rl-c-client (locked checkout when present)
   DNS_PORT=53535
   NGINX_RESOLVER_OPTIONS=ipv6=off
   RL_SERVER_PORT=39080
@@ -81,7 +81,13 @@ RL_SERVER_BIN="${RL_SERVER_BIN:-${RL_RUST_ROOT}/target/release/ratelimitly-serve
 TENANT_CLI_DIR="${RL_ROOT}/tenant_management/elixir"
 LOCAL_DNS_SERVER="${SCRIPT_DIR}/local_dns_server.py"
 
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/../rl-c-client}"
+if [[ -z "${RCLIENT_DIR:-}" ]]; then
+  if [[ -d "${RN_ROOT}/_deps/rl-c-client" ]]; then
+    RCLIENT_DIR="${RN_ROOT}/_deps/rl-c-client"
+  else
+    RCLIENT_DIR="${RN_ROOT}/../rl-c-client"
+  fi
+fi
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_SRC}/objs/nginx}"
 
