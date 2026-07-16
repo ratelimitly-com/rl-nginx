@@ -22,9 +22,10 @@ export RCLIENT_DIR=/path/to/rl-c-client
 Run from the `rl-nginx` repo root:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
   bash -n "$script"
 done
+python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
 sh -n config
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
 git diff --check

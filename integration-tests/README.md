@@ -4,6 +4,49 @@ This directory contains an end-to-end local integration test for the nginx
 Ratelimitly module. The test replaces the older manual flow of starting nginx,
 running `tests/burst-test.sh`, and inspecting rates by hand.
 
+## Public lifecycle regressions
+
+`lifecycle-regressions.sh` uses only public dependencies: the locked
+`rl-c-client` test responder, the local DNS fixture, nginx, and this module. It
+does not start the private RateLimitly server or register a tenant.
+
+Run all lifecycle cases:
+
+```sh
+./integration-tests/lifecycle-regressions.sh
+```
+
+Run one case while developing a fix:
+
+```sh
+./integration-tests/lifecycle-regressions.sh timeout
+./integration-tests/lifecycle-regressions.sh aborted-client
+./integration-tests/lifecycle-regressions.sh steering-rebind
+```
+
+Every case establishes a successful baseline, records the single nginx worker
+PID, triggers the selected lifecycle path, asserts that the same worker remains
+alive, and requires a successful follow-up rate-limited request. The aborted
+client case uses delayed responder output so clients close while requests are
+in flight; the timeout case uses `drop`; the steering case requests a source
+port rebind through response feedback and verifies the port through Linux
+`/proc` socket metadata.
+
+These are regressions, not an expected-failure wrapper. Before the lifecycle
+fixes land, each is expected to return nonzero for its named invariant while
+still checking worker survival and the follow-up request:
+
+- `timeout`: the timeout handler logs completion and then continues through the
+  request-owned handler context;
+- `aborted-client`: module request timers fire after the clients reset their
+  connections;
+- `steering-rebind`: the UDP connection is replaced while its read callback is
+  still active.
+
+Diagnostic artifacts are preserved under
+`integration-tests/artifacts/lifecycle/<case>/`. Once the fixes land, the same
+commands become the passing acceptance gate.
+
 The test builds and runs the real local components:
 
 - `rl-c-client`, used by the nginx module, from the locked `./_deps` checkout

@@ -95,6 +95,8 @@ typedef struct rn_worker_ctx {
     ngx_log_t *log;
     ngx_uint_t inflight;
     ngx_flag_t rebind_pending;
+    /* Diagnostic invariant: socket replacement must observe this as false. */
+    ngx_flag_t udp_read_active;
     ngx_str_t bind_addr;
     ngx_flag_t debug;
 } rn_worker_ctx_t;
@@ -2022,6 +2024,10 @@ rn_rebind_socket(rn_worker_ctx_t *worker) {
     if (worker == NULL) {
         return NGX_ERROR;
     }
+    if (worker->debug) {
+        ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
+            "rn: rebind_socket udp_read_active=%d", (int) worker->udp_read_active);
+    }
     if (worker->udp_conn) {
         ngx_del_event(worker->udp_conn->read, NGX_READ_EVENT, 0);
         ngx_close_connection(worker->udp_conn);
@@ -2129,6 +2135,7 @@ rn_udp_read_handler(ngx_event_t *ev) {
     if (worker == NULL || worker->client == NULL) {
         return;
     }
+    worker->udp_read_active = 1;
 
     for (;;) {
         u_char buf[2048];
@@ -2137,15 +2144,18 @@ rn_udp_read_handler(ngx_event_t *ev) {
         ssize_t n = recvfrom(worker->udp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &slen);
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                worker->udp_read_active = 0;
                 return;
             }
             if (worker->debug) {
                 ngx_log_error(NGX_LOG_WARN, worker->log, ngx_socket_errno,
                     "rn: recvfrom failed");
             }
+            worker->udp_read_active = 0;
             return;
         }
         if (n == 0) {
+            worker->udp_read_active = 0;
             return;
         }
         r_addr_t from;

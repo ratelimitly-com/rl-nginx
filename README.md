@@ -178,12 +178,26 @@ Operational guidance is in [docs/operations.md](docs/operations.md).
 Syntax and development build checks:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
   bash -n "$script"
 done
+python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
 sh -n config
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
 ```
+
+Public timeout, aborted-client, and steering-rebind lifecycle regressions:
+
+```sh
+./integration-tests/lifecycle-regressions.sh
+```
+
+Each case requires the original nginx worker to survive and serve a successful
+follow-up request. On the current implementation all three commands return
+nonzero after proving the timeout post-completion access, armed timer after
+client resets, or in-callback UDP rebind respectively. These failures are the
+intended reproductions until the corresponding lifecycle fixes land; artifacts
+are written under `integration-tests/artifacts/lifecycle/`.
 
 Full integration test with the local Rust RateLimitly server:
 

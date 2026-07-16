@@ -23,11 +23,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libpcre2-dev zlib1g-dev libssl-dev
 
-      - name: Shell syntax
+      - name: Script syntax
         run: |
-          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh; do
+          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
             bash -n "$script"
           done
+          python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
           sh -n config
 
       - name: Fetch locked rl-c-client release
