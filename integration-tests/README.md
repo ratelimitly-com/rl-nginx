@@ -10,17 +10,20 @@ running `tests/burst-test.sh`, and inspecting rates by hand.
 `rl-c-client` test responder, the local DNS fixture, nginx, and this module. It
 does not start the private RateLimitly server or register a tenant.
 
-Before running the socket-level cases, test the portable numeric and SRV-record
-helpers directly:
+Before running the socket-level cases, test the portable DNS, numeric, and
+SRV-record helpers directly:
 
 ```sh
+python3 integration-tests/test_local_dns_server.py
 ./tests/test-numeric.sh
 RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
 ```
 
-The numeric unit covers the largest accepted 32-bit protocol values, the first
-rejected values, decimal and period-multiplication overflow, and conversion of
-an absolute resolver deadline to a remaining DNS TTL.
+The DNS unit builds real query packets without opening a socket and requires
+advertised SRV targets to resolve while unadvertised `*.localhost` names return
+NXDOMAIN. The numeric unit covers the largest accepted 32-bit protocol values,
+the first rejected values, decimal and period-multiplication overflow, and
+conversion of an absolute resolver deadline to a remaining DNS TTL.
 
 The SRV unit injects failure at each allocation point. A failed build must free
 all partial state and return an empty result, so the C client can never receive
@@ -251,8 +254,12 @@ rn-itest.local
 The script starts a local UDP DNS server and serves:
 
 - SRV records for `_ratelimitly._udp.rn-itest.local`.
-- A records for `localhost` and `*.localhost` pointing to `127.0.0.1`.
-- AAAA records for `localhost` and `*.localhost` pointing to `::1`.
+- A records for the exact advertised SRV targets, pointing to `127.0.0.1`.
+- AAAA records for the exact advertised SRV targets, pointing to `::1`.
+
+Every other name, including plain `localhost` and unadvertised `*.localhost`
+names, returns NXDOMAIN so malformed target construction cannot be hidden by
+the fixture.
 
 The SRV target format is:
 
