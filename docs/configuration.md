@@ -125,8 +125,10 @@ Both the rate and the period converted to milliseconds are unsigned 32-bit
 wire fields. The rate must be between `1` and `4294967295`. Period conversion
 must not exceed `4294967295ms`; the largest accepted whole-unit periods are
 `4294967s`, `71582m`, and `1193h`. Decimal overflow and the first larger value
-in each unit are rejected when the rendered rate is evaluated. That runtime
-error follows the configured `ratelimitly_fail` policy.
+in each unit are rejected. A static invalid value makes `nginx -t` fail. A
+value containing nginx variables cannot be validated until a request renders
+it; an invalid rendered value then follows the configured `ratelimitly_fail`
+policy.
 
 ## Groups
 
@@ -154,6 +156,12 @@ Guard thresholds and TTLs are converted to milliseconds and must fit an
 unsigned 32-bit wire field (`0` through `4294967295`). The three sample-count
 fields also reject decimal values above `4294967295`; `max_samples` and
 `buffer_size` additionally require a nonzero value.
+
+A static invalid `threshold` makes `nginx -t` fail. A threshold containing
+nginx variables is parsed after it is rendered for a request, and an invalid
+rendered value follows the configured `ratelimitly_fail` policy. The other
+guard tuning fields are static and are always validated while loading the
+configuration.
 
 `min_sample_threshold=0` is intentional and disables the insertion-rate
 sufficiency gate. It does not create a latency value by itself: RateLimitly must
