@@ -109,12 +109,11 @@ Before putting traffic through the module:
 
 1. Build against the nginx version you will run.
 2. Confirm nginx can load the module or start the statically built binary.
-3. Confirm `librclient.so` can be loaded when using shared linking.
-4. Verify `_ratelimitly._udp.<tenant-domain>` returns usable SRV records.
-5. Verify SRV targets resolve to reachable IP addresses.
-6. Run a low-rate protected test route.
-7. Confirm both allow and deny decisions are visible in logs.
-8. Choose and document the desired `ratelimitly_fail` behavior.
+3. Verify `_ratelimitly._udp.<tenant-domain>` returns usable SRV records.
+4. Verify SRV targets resolve to reachable IP addresses.
+5. Run a low-rate protected test route.
+6. Confirm both allow and deny decisions are visible in logs.
+7. Choose and document the desired `ratelimitly_fail` behavior.
 
 ## Internal Full-Stack Test
 

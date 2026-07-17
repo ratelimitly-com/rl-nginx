@@ -43,6 +43,8 @@ make -C ./_deps/rl-c-client
 
 The fetch fails if the public tag does not resolve to the locked full commit
 SHA. The build produces `librclient.a` and `librclient.so`.
+The nginx module descriptor links the PIC `librclient.a` into the nginx binary
+or dynamic module; `librclient.so` is not a runtime dependency.
 
 ## Build With The Helper
 
@@ -73,10 +75,8 @@ Useful flags:
 From the nginx source tree:
 
 ```sh
-./configure \
-  --add-module=/path/to/rl-nginx \
-  --with-cc-opt="-I/path/to/rl-c-client/include" \
-  --with-ld-opt="-L/path/to/rl-c-client -lrclient -lcrypto -lssl -Wl,-rpath,/path/to/rl-c-client"
+RCLIENT_DIR=/path/to/rl-c-client \
+  ./configure --add-module=/path/to/rl-nginx
 
 make -j
 ```
@@ -88,11 +88,10 @@ The resulting nginx binary includes `ngx_http_rn_module`.
 From the nginx source tree:
 
 ```sh
-./configure \
-  --with-compat \
-  --add-dynamic-module=/path/to/rl-nginx \
-  --with-cc-opt="-I/path/to/rl-c-client/include" \
-  --with-ld-opt="-L/path/to/rl-c-client -lrclient -lcrypto -lssl -Wl,-rpath,/path/to/rl-c-client"
+RCLIENT_DIR=/path/to/rl-c-client \
+  ./configure \
+    --with-compat \
+    --add-dynamic-module=/path/to/rl-nginx
 
 make modules
 ```
@@ -111,16 +110,10 @@ load_module modules/ngx_http_rn_module.so;
 
 ## Runtime Library Loading
 
-If you link against `librclient.so`, nginx must be able to load it at runtime.
-Use one of:
-
-- `-Wl,-rpath,/path/to/rl-c-client` at build time
-- `LD_LIBRARY_PATH=/path/to/rl-c-client` when starting nginx
-- system installation of `librclient.so` through your package manager or
-  deployment image
-
-The helper uses `-Wl,-rpath,...` and `start-nginx.sh` also exports
-`LD_LIBRARY_PATH` for local development.
+The build embeds the PIC `librclient.a` in the resulting nginx binary or
+`ngx_http_rn_module.so`. Deployments therefore do not need `librclient.so`, an
+`LD_LIBRARY_PATH` override, or a runtime path pointing at the build checkout.
+The system OpenSSL `libcrypto` library remains a runtime dependency.
 
 ## Version Compatibility
 

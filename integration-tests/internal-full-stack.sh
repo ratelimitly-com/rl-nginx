@@ -406,12 +406,10 @@ start_nginx() {
   local error_log="${ARTIFACT_DIR}/nginx-error.log"
 
   log "Checking generated nginx config"
-  LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-    "${NGINX_BIN}" -p "${prefix}" -c "${conf}" -t
+  "${NGINX_BIN}" -p "${prefix}" -c "${conf}" -t
 
   log "Starting nginx on ${NGINX_HOST}:${NGINX_PORT}"
-  LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-    "${NGINX_BIN}" \
+  "${NGINX_BIN}" \
       -p "${prefix}" \
       -c "${conf}" \
       -e "${error_log}" \

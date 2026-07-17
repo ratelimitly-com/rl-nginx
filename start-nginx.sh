@@ -106,8 +106,6 @@ fi
 
 mkdir -p "$PREFIX/logs"
 
-export LD_LIBRARY_PATH="$RCLIENT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
 exec "$NGINX_BIN" \
   -p "$PREFIX" \
   -c "$CONF" \
