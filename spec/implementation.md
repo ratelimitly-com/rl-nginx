@@ -112,7 +112,10 @@ Optional:
 
 ## I) Error handling
 
-- Invalid config (unknown zone/guard, invalid rate/threshold, bad auth settings) -> nginx config error.
+- Invalid config (unknown zone/guard, invalid static rate/threshold, bad auth
+  settings) -> nginx config error.
+- An invalid rate or threshold rendered from nginx variables at request time ->
+  use fail-open/fail-close behavior.
 - Runtime errors (DNS failure, network errors) -> use fail-open/fail-close behavior.
 - Runtime latency-report send errors are logged/debugged but do not affect request decision.
 

@@ -1007,6 +1007,8 @@ ngx_http_rn_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_str_t zone_name = value[1];
     ngx_str_t bucket = ngx_null_string;
     ngx_str_t rate = ngx_null_string;
+    uint32_t static_rate;
+    uint32_t static_window_ms;
 
     if (zone_name.len == 0 || ngx_strlchr(zone_name.data, zone_name.data + zone_name.len, '=') != NULL) {
         return "ratelimitly_zone requires positional <name> as first argument";
@@ -1026,6 +1028,12 @@ ngx_http_rn_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
     if (bucket.len == 0 || rate.len == 0) {
         return "ratelimitly_zone requires <name>, bucket=, rate=";
+    }
+    if (ngx_http_script_variables_count(&rate) == 0
+        && rn_numeric_parse_rate(rate.data, rate.len, &static_rate,
+            &static_window_ms) != 0)
+    {
+        return "invalid ratelimitly_zone rate";
     }
 
     if (mcf->zones == NULL) {
@@ -1129,6 +1137,7 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     uint32_t max_samples = 128;
     uint32_t buffer_size = 128;
     uint32_t min_sample_threshold = 8;
+    uint32_t static_threshold_ms;
 
     if (cf->args->nelts < 4) {
         return "ratelimitly_guard requires <name>, service=, threshold=";
@@ -1185,6 +1194,12 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
     if (service.len == 0 || threshold.len == 0) {
         return "ratelimitly_guard requires <name>, service=, threshold=";
+    }
+    if (ngx_http_script_variables_count(&threshold) == 0
+        && rn_parse_protocol_duration_ms(&threshold,
+            &static_threshold_ms) != NGX_OK)
+    {
+        return "invalid ratelimitly_guard threshold";
     }
 
     if (mcf->guards == NULL) {

@@ -72,6 +72,9 @@ Notes:
 - `rate` is evaluated per request using nginx complex values.
   - Static example: `rate=600r/m`
   - Dynamic example: `rate=$rl_dynamic_rate`
+- A static `rate` MUST be validated at configuration load time. A `rate`
+  containing nginx variables MUST be validated after rendering it for a
+  request.
 - Rendered `rate` must match `N r / period` without spaces (e.g. `10r/s`, `100r/2s`, `500r/1h`).
 - `<period>` unit supports `s`, `m`, `h` (seconds, minutes, hours).
 - `N` MUST be in `1..4294967295`.
@@ -95,6 +98,9 @@ Notes:
 - `threshold` is rendered per request and parsed as duration in milliseconds.
   - Static example: `threshold=80ms`
   - Dynamic example: `threshold=$rl_guard_threshold`
+- A static `threshold` MUST be validated at configuration load time. A
+  `threshold` containing nginx variables MUST be validated after rendering it
+  for a request.
 - Optional parameters map to guard tuning fields in the wire protocol:
   - `ttl` -> `ttl_ms`
   - `max_samples` -> `max_samples`
