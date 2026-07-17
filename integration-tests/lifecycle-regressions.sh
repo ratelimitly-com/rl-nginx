@@ -116,13 +116,32 @@ stop_responder() {
 }
 
 stop_nginx() {
+  local attempt
+
   if [[ -n "${NGINX_PID}" ]] && kill -0 "${NGINX_PID}" 2>/dev/null; then
     LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
       "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s quit \
       >/dev/null 2>&1 || true
+    for (( attempt = 0; attempt < 30; attempt++ )); do
+      if ! kill -0 "${NGINX_PID}" 2>/dev/null; then
+        wait "${NGINX_PID}" 2>/dev/null || true
+        NGINX_PID=""
+        return 0
+      fi
+      sleep 0.1
+    done
   fi
   terminate_pid "${NGINX_PID}" "nginx master"
   NGINX_PID=""
+}
+
+check_clean_nginx_shutdown() {
+  stop_nginx
+  if grep -Eq '\[alert\].*(open socket .* left|aborting)' "${NGINX_ERROR_LOG}"; then
+    record_failure "nginx reported a leaked connection during worker shutdown"
+  else
+    log "worker shutdown completed without leaked-connection alerts"
+  fi
 }
 
 cleanup() {
@@ -521,6 +540,8 @@ run_one() {
     aborted-client) run_aborted_client_case ;;
     steering-rebind) run_steering_rebind_case ;;
   esac
+
+  check_clean_nginx_shutdown
 
   if (( CASE_FAILED > 0 )); then
     log "regression failed; artifacts: ${ARTIFACT_DIR}"

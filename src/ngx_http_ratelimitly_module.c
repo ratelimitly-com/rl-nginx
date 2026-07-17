@@ -95,6 +95,8 @@ typedef struct rn_worker_ctx {
     ngx_log_t *log;
     ngx_uint_t inflight;
     ngx_flag_t rebind_pending;
+    ngx_flag_t rebind_scheduled;
+    ngx_event_t rebind_event;
     /* Diagnostic invariant: socket replacement must observe this as false. */
     ngx_flag_t udp_read_active;
     ngx_str_t bind_addr;
@@ -111,13 +113,15 @@ typedef struct {
     ngx_int_t decision;
     ngx_flag_t waiting;
     ngx_flag_t done;
-    ngx_flag_t counted;
+    ngx_flag_t nginx_counted;
+    ngx_flag_t inflight_counted;
     ngx_flag_t lat_report_enabled;
     ngx_flag_t lat_report_sent;
     ngx_flag_t ratelimitly_denied;
 } rn_req_ctx_t;
 
 static ngx_int_t ngx_http_rn_init(ngx_conf_t *cf);
+static void rn_exit_process(ngx_cycle_t *cycle);
 
 static void *ngx_http_rn_create_main_conf(ngx_conf_t *cf);
 static void *ngx_http_rn_create_srv_conf(ngx_conf_t *cf);
@@ -140,10 +144,17 @@ static char *ngx_http_rn_label(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static rn_zone_t *rn_find_zone(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_guard_t *rn_find_guard(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_group_t *rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name);
-static ngx_int_t rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver);
+static ngx_int_t rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver);
 static ngx_int_t rn_rebind_socket(rn_worker_ctx_t *worker);
+static void rn_schedule_rebind(rn_worker_ctx_t *worker);
+static void rn_rebind_handler(ngx_event_t *ev);
 static void rn_udp_read_handler(ngx_event_t *ev);
 static void rn_request_timeout_handler(ngx_event_t *ev);
+static void rn_request_teardown(
+    rn_req_ctx_t *ctx,
+    r_client_req_t *completed_req,
+    ngx_flag_t cancel
+);
 static void rn_request_cleanup(void *data);
 static void rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_result_t *result);
 static ngx_int_t ngx_http_rn_log_handler(ngx_http_request_t *r);
@@ -272,13 +283,13 @@ ngx_module_t ngx_http_rn_module = {
     &ngx_http_rn_module_ctx,
     ngx_http_rn_commands,
     NGX_HTTP_MODULE,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
+    NULL,                 /* init master */
+    NULL,                 /* init module */
+    NULL,                 /* init process */
+    NULL,                 /* init thread */
+    NULL,                 /* exit thread */
+    rn_exit_process,      /* exit process */
+    NULL,                 /* exit master */
     NGX_MODULE_V1_PADDING
 };
 
@@ -330,7 +341,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             }
             return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
         }
-        if (rn_worker_init(mcf, r->connection->log, clcf->resolver) != NGX_OK) {
+        if (rn_worker_init(mcf, clcf->resolver) != NGX_OK) {
             if (mcf->debug) {
                 ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
                     "rn: bypass uri=%V reason=worker_init_failed fail_open=%d",
@@ -524,13 +535,14 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     ctx->worker = worker;
     ctx->timer.handler = rn_request_timeout_handler;
     ctx->timer.data = ctx;
-    ctx->timer.log = r->connection->log;
+    ctx->timer.log = worker->log;
     ctx->lat_reports = lat_reports;
     ctx->lat_report_count = guard_idx;
     ctx->waiting = 0;
     ctx->done = 0;
     ctx->decision = NGX_DECLINED;
-    ctx->counted = 0;
+    ctx->nginx_counted = 0;
+    ctx->inflight_counted = 0;
     ctx->lat_report_enabled = (guard_idx > 0);
     ctx->lat_report_sent = 0;
     ctx->ratelimitly_denied = 0;
@@ -567,6 +579,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
 
     ctx->req = req;
     worker->inflight++;
+    ctx->inflight_counted = 1;
 
     uint64_t deadline_ms = 0;
     if (r_client_request_deadline_ms(req, &deadline_ms) == RCLIENT_OK) {
@@ -580,7 +593,16 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
 
     ctx->waiting = 1;
     r->main->count++;
-    ctx->counted = 1;
+    ctx->nginx_counted = 1;
+
+    if (r->connection->read->ready) {
+        ngx_post_event(r->connection->read, &ngx_posted_events);
+    } else if (ngx_handle_read_event(r->connection->read, 0) != NGX_OK) {
+        rn_request_teardown(ctx, NULL, 1);
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    r->read_event_handler = ngx_http_test_reading;
+
     return NGX_AGAIN;
 }
 
@@ -1620,9 +1642,7 @@ rn_on_steering_feedback(void *ctx, bool keep_port) {
     if (worker->debug) {
         ngx_log_error(NGX_LOG_INFO, worker->log, 0, "rn: steering_feedback=0 (rebind pending)");
     }
-    if (worker->inflight == 0) {
-        (void) rn_rebind_socket(worker);
-    }
+    rn_schedule_rebind(worker);
 }
 
 typedef struct {
@@ -2041,7 +2061,7 @@ rn_rebind_socket(rn_worker_ctx_t *worker) {
 }
 
 static ngx_int_t
-rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
+rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
     if (mcf == NULL) {
         return NGX_ERROR;
     }
@@ -2055,10 +2075,14 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
     }
     worker->udp_fd = (ngx_socket_t) -1;
     worker->udp_family = AF_UNSPEC;
-    worker->log = log;
+    worker->log = ngx_cycle->log;
     worker->resolver = resolver;
     worker->bind_addr = mcf->bind_addr;
     worker->debug = mcf->debug;
+    worker->rebind_event.handler = rn_rebind_handler;
+    worker->rebind_event.data = worker;
+    worker->rebind_event.log = worker->log;
+    worker->rebind_event.cancelable = 1;
 
     if (rn_open_socket(worker) != NGX_OK) {
         return NGX_ERROR;
@@ -2126,6 +2150,73 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_log_t *log, ngx_resolver_t *resolver) {
 }
 
 static void
+rn_exit_process(ngx_cycle_t *cycle) {
+    rn_main_conf_t *mcf;
+    rn_worker_ctx_t *worker;
+
+    mcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_rn_module);
+    if (mcf == NULL || mcf->worker == NULL) {
+        return;
+    }
+    worker = mcf->worker;
+
+    if (worker->rebind_event.timer_set) {
+        ngx_del_timer(&worker->rebind_event);
+    }
+    worker->rebind_scheduled = 0;
+    worker->rebind_pending = 0;
+
+    if (worker->udp_conn != NULL) {
+        ngx_close_connection(worker->udp_conn);
+        worker->udp_conn = NULL;
+    } else if (worker->udp_fd != (ngx_socket_t) -1) {
+        ngx_close_socket(worker->udp_fd);
+    }
+    worker->udp_fd = (ngx_socket_t) -1;
+
+    if (worker->client != NULL) {
+        r_client_destroy(worker->client);
+        worker->client = NULL;
+    }
+    worker->inflight = 0;
+    mcf->worker = NULL;
+}
+
+static void
+rn_schedule_rebind(rn_worker_ctx_t *worker) {
+    if (worker == NULL || !worker->rebind_pending || worker->inflight != 0
+        || worker->rebind_scheduled)
+    {
+        return;
+    }
+
+    worker->rebind_scheduled = 1;
+    ngx_add_timer(&worker->rebind_event, 0);
+}
+
+static void
+rn_rebind_handler(ngx_event_t *ev) {
+    rn_worker_ctx_t *worker;
+
+    if (ev == NULL || ev->data == NULL) {
+        return;
+    }
+    worker = ev->data;
+    worker->rebind_scheduled = 0;
+
+    if (!worker->rebind_pending || worker->inflight != 0) {
+        return;
+    }
+    if (worker->udp_read_active) {
+        worker->rebind_scheduled = 1;
+        ngx_add_timer(&worker->rebind_event, 1);
+        return;
+    }
+
+    (void) rn_rebind_socket(worker);
+}
+
+static void
 rn_udp_read_handler(ngx_event_t *ev) {
     if (ev == NULL || ev->data == NULL) {
         return;
@@ -2189,37 +2280,87 @@ rn_udp_read_handler(ngx_event_t *ev) {
 
 static void
 rn_request_timeout_handler(ngx_event_t *ev) {
-    rn_req_ctx_t *ctx = ev->data;
+    rn_req_ctx_t *ctx;
+    rn_worker_ctx_t *worker;
+    r_client_req_t *req;
+    uint64_t deadline_ms;
+    uint64_t now_ms;
+
+    if (ev == NULL || ev->data == NULL) {
+        return;
+    }
+    ctx = ev->data;
     if (ctx == NULL || ctx->worker == NULL || ctx->worker->client == NULL || ctx->req == NULL) {
         return;
     }
 
-    uint64_t now_ms = ctx->worker->io_ops.now_ms(ctx->worker);
-    (void) r_client_on_timeout(ctx->worker->client, ctx->req, now_ms);
-    if (ctx->worker->debug) {
-        ngx_log_error(NGX_LOG_DEBUG, ctx->worker->log, 0, "rn: timeout tick");
+    worker = ctx->worker;
+    req = ctx->req;
+    now_ms = worker->io_ops.now_ms(worker);
+    deadline_ms = 0;
+    if (r_client_request_deadline_ms(req, &deadline_ms) == RCLIENT_OK
+        && deadline_ms > now_ms)
+    {
+        ngx_add_timer(&ctx->timer, (ngx_msec_t) (deadline_ms - now_ms));
+        return;
     }
 
-    if (ctx->req != NULL) {
-        uint64_t deadline_ms = 0;
-        if (r_client_request_deadline_ms(ctx->req, &deadline_ms) == RCLIENT_OK) {
-            ngx_msec_t delay = 0;
-            if (deadline_ms > now_ms) {
-                delay = (ngx_msec_t)(deadline_ms - now_ms);
-            }
-            ngx_add_timer(&ctx->timer, delay);
-        }
+    /* With retries disabled, this synchronously invokes rn_rate_cb and may
+     * release the request pool containing ctx. Do not access ctx afterwards. */
+    (void) r_client_on_timeout(worker->client, req, now_ms);
+}
+
+static void
+rn_request_teardown(rn_req_ctx_t *ctx, r_client_req_t *completed_req,
+    ngx_flag_t cancel)
+{
+    rn_worker_ctx_t *worker;
+    r_client_req_t *owned_req;
+
+    /* This is the only function that releases asynchronous request
+     * ownership. Every flag is cleared even when teardown is called twice. */
+    if (ctx == NULL) {
+        return;
     }
+    worker = ctx->worker;
+    owned_req = ctx->req;
+
+    if (!cancel && owned_req != completed_req) {
+        return;
+    }
+    if (ctx->timer.timer_set) {
+        ngx_del_timer(&ctx->timer);
+    }
+
+    ctx->req = NULL;
+    if (cancel && owned_req != NULL && worker != NULL && worker->client != NULL) {
+        r_client_cancel_request(worker->client, owned_req);
+    }
+
+    if (ctx->inflight_counted) {
+        if (worker != NULL && worker->inflight > 0) {
+            worker->inflight--;
+        }
+        ctx->inflight_counted = 0;
+    }
+    if (ctx->nginx_counted) {
+        if (ctx->r != NULL && ctx->r->main != NULL && ctx->r->main->count > 0) {
+            ctx->r->main->count--;
+        }
+        ctx->nginx_counted = 0;
+    }
+    ctx->waiting = 0;
+
+    rn_schedule_rebind(worker);
 }
 
 static void
 rn_request_cleanup(void *data) {
     rn_req_ctx_t *ctx = data;
-    if (ctx == NULL || ctx->worker == NULL || ctx->req == NULL) {
-        return;
+    if (ctx != NULL) {
+        rn_request_teardown(ctx, NULL, 1);
+        ctx->r = NULL;
     }
-    r_client_cancel_request(ctx->worker->client, ctx->req);
-    ctx->req = NULL;
 }
 
 static ngx_int_t
@@ -2292,21 +2433,17 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     }
     rn_req_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_rn_module);
     rn_main_conf_t *mcf = ngx_http_get_module_main_conf(r, ngx_http_rn_module);
+    rn_worker_ctx_t *worker;
     if (ctx == NULL || ctx->worker == NULL) {
         return;
     }
-    if (ctx->timer.timer_set) {
-        ngx_del_timer(&ctx->timer);
+    worker = ctx->worker;
+    if (ctx->req != req) {
+        ngx_log_error(NGX_LOG_ALERT, worker->log, 0,
+            "rn: completion callback does not own the active request");
+        return;
     }
-    if (ctx->req == req) {
-        ctx->req = NULL;
-    }
-    if (ctx->worker->inflight > 0) {
-        ctx->worker->inflight--;
-    }
-    if (ctx->worker->rebind_pending && ctx->worker->inflight == 0) {
-        (void) rn_rebind_socket(ctx->worker);
-    }
+    rn_request_teardown(ctx, req, 0);
 
     ngx_int_t rc;
     if (status == RCLIENT_OK && result) {
@@ -2333,13 +2470,13 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     } else {
         rc = (mcf && mcf->fail_open) ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
     }
-    if (ctx->worker->debug) {
+    if (worker->debug) {
         if (status == RCLIENT_OK && result) {
-            ngx_log_error(NGX_LOG_DEBUG, ctx->worker->log, 0,
+            ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
                 "rn: result success=%d server_id=%uL",
                 result->success ? 1 : 0, (unsigned long) result->server_id);
         } else {
-            ngx_log_error(NGX_LOG_DEBUG, ctx->worker->log, 0,
+            ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
                 "rn: result error status=%d", status);
         }
     }
@@ -2348,11 +2485,6 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     ctx->ratelimitly_denied = (rc == NGX_HTTP_TOO_MANY_REQUESTS) ? 1 : 0;
     ctx->done = 1;
     ctx->waiting = 0;
-
-    if (ctx->counted && r->main && r->main->count > 0) {
-        r->main->count--;
-        ctx->counted = 0;
-    }
 
     /*
      * Resume phase processing directly. Finalizing with NGX_DECLINED clears
