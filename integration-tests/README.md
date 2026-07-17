@@ -10,16 +10,21 @@ running `tests/burst-test.sh`, and inspecting rates by hand.
 `rl-c-client` test responder, the local DNS fixture, nginx, and this module. It
 does not start the private RateLimitly server or register a tenant.
 
-Before running the socket-level cases, test the portable SRV-record builder
-directly:
+Before running the socket-level cases, test the portable numeric and SRV-record
+helpers directly:
 
 ```sh
+./tests/test-numeric.sh
 RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
 ```
 
-The unit injects failure at each allocation point. A failed build must free all
-partial state and return an empty result, so the C client can never receive a
-successful DNS callback containing a null SRV target.
+The numeric unit covers the largest accepted 32-bit protocol values, the first
+rejected values, decimal and period-multiplication overflow, and conversion of
+an absolute resolver deadline to a remaining DNS TTL.
+
+The SRV unit injects failure at each allocation point. A failed build must free
+all partial state and return an empty result, so the C client can never receive
+a successful DNS callback containing a null SRV target.
 
 Run all lifecycle cases:
 

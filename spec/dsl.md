@@ -74,6 +74,12 @@ Notes:
   - Dynamic example: `rate=$rl_dynamic_rate`
 - Rendered `rate` must match `N r / period` without spaces (e.g. `10r/s`, `100r/2s`, `500r/1h`).
 - `<period>` unit supports `s`, `m`, `h` (seconds, minutes, hours).
+- `N` MUST be in `1..4294967295`.
+- The period converted to milliseconds MUST be in `1..4294967295`. With the
+  supported whole-unit syntax, the largest accepted period values are
+  `4294967s`, `71582m`, and `1193h`.
+- An implementation MUST reject decimal accumulation or unit multiplication
+  that would overflow the corresponding 32-bit wire field.
 
 ### ratelimitly_guard
 
@@ -94,6 +100,10 @@ Notes:
   - `max_samples` -> `max_samples`
   - `buffer_size` -> `buffer_size`
   - `min_sample_threshold` -> `min_sample_threshold`
+- Parsed threshold and TTL milliseconds and all three tuning integers MUST fit
+  an unsigned 32-bit wire field. `max_samples` and `buffer_size` MUST be
+  nonzero. This numeric-width rule does not decide whether
+  `min_sample_threshold=0` is valid.
 - Guards referenced by `ratelimitly ... guard=<name>` must be defined before use.
 
 ### ratelimitly_group

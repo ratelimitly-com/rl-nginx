@@ -4,6 +4,7 @@
 #include <ngx_resolver.h>
 
 #include "r_client.h"
+#include "rn_numeric.h"
 #include "rn_srv_records.h"
 
 #include <errno.h>
@@ -173,11 +174,13 @@ static ngx_int_t rn_build_zone_resource(
 static ngx_int_t rn_zone_rate_for_request(
     ngx_http_request_t *r,
     rn_zone_t *zone,
-    ngx_uint_t *out_rate,
-    ngx_msec_t *out_window_ms
+    uint32_t *out_rate,
+    uint32_t *out_window_ms
 );
-static ngx_int_t rn_parse_duration_ms(ngx_str_t *value, ngx_msec_t *out_ms);
-static ngx_int_t rn_parse_u32(ngx_str_t *value, uint32_t *out);
+static ngx_int_t rn_parse_protocol_duration_ms(
+    ngx_str_t *value,
+    uint32_t *out_ms
+);
 static ngx_int_t rn_build_guard_entries(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
@@ -764,23 +767,6 @@ ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     return NGX_CONF_OK;
 }
 
-static ngx_int_t
-rn_parse_u64(ngx_str_t *value, uint64_t *out) {
-    if (value == NULL || out == NULL || value->len == 0) {
-        return NGX_ERROR;
-    }
-    uint64_t v = 0;
-    for (size_t i = 0; i < value->len; i++) {
-        u_char c = value->data[i];
-        if (c < '0' || c > '9') {
-            return NGX_ERROR;
-        }
-        v = v * 10 + (uint64_t)(c - '0');
-    }
-    *out = v;
-    return NGX_OK;
-}
-
 static char *
 ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
@@ -873,65 +859,7 @@ ngx_http_rn_set_debug(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 }
 
 static ngx_int_t
-rn_parse_rate(ngx_str_t *value, ngx_uint_t *out_rate, ngx_msec_t *out_window_ms) {
-    ngx_uint_t rate = 0;
-    ngx_uint_t window_val = 0;
-    ngx_msec_t window_ms = 0;
-    u_char *p = value->data;
-    u_char *end = p + value->len;
-
-    if (value->len == 0) {
-        return NGX_ERROR;
-    }
-
-    while (p < end && *p >= '0' && *p <= '9') {
-        rate = rate * 10 + (ngx_uint_t)(*p - '0');
-        p++;
-    }
-    if (rate == 0 || p >= end || *p != 'r') {
-        return NGX_ERROR;
-    }
-    p++;
-    if (p >= end || *p != '/') {
-        return NGX_ERROR;
-    }
-    p++;
-
-    while (p < end && *p >= '0' && *p <= '9') {
-        window_val = window_val * 10 + (ngx_uint_t)(*p - '0');
-        p++;
-    }
-    if (window_val == 0) {
-        window_val = 1;
-    }
-    if (p >= end) {
-        return NGX_ERROR;
-    }
-
-    switch (*p) {
-    case 's':
-        window_ms = (ngx_msec_t) window_val * 1000;
-        break;
-    case 'm':
-        window_ms = (ngx_msec_t) window_val * 60000;
-        break;
-    case 'h':
-        window_ms = (ngx_msec_t) window_val * 3600000;
-        break;
-    default:
-        return NGX_ERROR;
-    }
-    if (p + 1 != end) {
-        return NGX_ERROR;
-    }
-
-    *out_rate = rate;
-    *out_window_ms = window_ms;
-    return NGX_OK;
-}
-
-static ngx_int_t
-rn_parse_duration_ms(ngx_str_t *value, ngx_msec_t *out_ms) {
+rn_parse_protocol_duration_ms(ngx_str_t *value, uint32_t *out_ms) {
     ngx_msec_t ms;
 
     if (value == NULL || out_ms == NULL || value->len == 0) {
@@ -939,25 +867,12 @@ rn_parse_duration_ms(ngx_str_t *value, ngx_msec_t *out_ms) {
     }
 
     ms = ngx_parse_time(value, 0);
-    if (ms == (ngx_msec_t) NGX_ERROR) {
+    if (ms == (ngx_msec_t) NGX_ERROR
+        || rn_numeric_u32_from_u64((uint64_t) ms, out_ms) != 0)
+    {
         return NGX_ERROR;
     }
 
-    *out_ms = ms;
-    return NGX_OK;
-}
-
-static ngx_int_t
-rn_parse_u32(ngx_str_t *value, uint32_t *out) {
-    uint64_t v = 0;
-
-    if (value == NULL || out == NULL) {
-        return NGX_ERROR;
-    }
-    if (rn_parse_u64(value, &v) != NGX_OK || v > 0xFFFFFFFFu) {
-        return NGX_ERROR;
-    }
-    *out = (uint32_t) v;
     return NGX_OK;
 }
 
@@ -970,8 +885,8 @@ rn_build_zone_resource(
 ) {
     ngx_str_t bucket = ngx_null_string;
     u_char *bucket_cstr;
-    ngx_uint_t zone_rate_limit = 0;
-    ngx_msec_t zone_window_ms = 0;
+    uint32_t zone_rate_limit = 0;
+    uint32_t zone_window_ms = 0;
 
     if (r == NULL || worker == NULL || zone == NULL || out == NULL) {
         return NGX_ERROR;
@@ -998,8 +913,8 @@ rn_build_zone_resource(
     if (rn_zone_rate_for_request(r, zone, &zone_rate_limit, &zone_window_ms) != NGX_OK) {
         return NGX_ERROR;
     }
-    out->window_size_ms = (uint32_t) zone_window_ms;
-    out->rate_limit = (uint32_t) zone_rate_limit;
+    out->window_size_ms = zone_window_ms;
+    out->rate_limit = zone_rate_limit;
     out->tokens_requested = 1;
     return NGX_OK;
 }
@@ -1008,8 +923,8 @@ static ngx_int_t
 rn_zone_rate_for_request(
     ngx_http_request_t *r,
     rn_zone_t *zone,
-    ngx_uint_t *out_rate,
-    ngx_msec_t *out_window_ms
+    uint32_t *out_rate,
+    uint32_t *out_window_ms
 ) {
     if (r == NULL || zone == NULL || out_rate == NULL || out_window_ms == NULL) {
         return NGX_ERROR;
@@ -1019,7 +934,8 @@ rn_zone_rate_for_request(
     if (ngx_http_complex_value(r, &zone->rate_cv, &rate) != NGX_OK) {
         return NGX_ERROR;
     }
-    return rn_parse_rate(&rate, out_rate, out_window_ms);
+    return rn_numeric_parse_rate(rate.data, rate.len, out_rate, out_window_ms)
+        == 0 ? NGX_OK : NGX_ERROR;
 }
 
 static ngx_int_t
@@ -1032,7 +948,7 @@ rn_build_guard_entries(
 ) {
     ngx_str_t service = ngx_null_string;
     ngx_str_t threshold = ngx_null_string;
-    ngx_msec_t threshold_ms = 0;
+    uint32_t threshold_ms = 0;
     u_char *service_cstr;
 
     if (r == NULL || worker == NULL || guard == NULL
@@ -1055,11 +971,11 @@ rn_build_guard_entries(
     if (ngx_http_complex_value(r, &guard->threshold_cv, &threshold) != NGX_OK) {
         return NGX_ERROR;
     }
-    if (rn_parse_duration_ms(&threshold, &threshold_ms) != NGX_OK || threshold_ms > 0xFFFFFFFFu) {
+    if (rn_parse_protocol_duration_ms(&threshold, &threshold_ms) != NGX_OK) {
         return NGX_ERROR;
     }
 
-    out_guard->threshold_ms = (uint32_t) threshold_ms;
+    out_guard->threshold_ms = threshold_ms;
     out_guard->ttl_ms = guard->ttl_ms;
     out_guard->max_samples = guard->max_samples;
     out_guard->buffer_size = guard->buffer_size;
@@ -1209,7 +1125,7 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_str_t guard_name = value[1];
     ngx_str_t service = ngx_null_string;
     ngx_str_t threshold = ngx_null_string;
-    ngx_msec_t ttl_ms = 30000;
+    uint32_t ttl_ms = 30000;
     uint32_t max_samples = 128;
     uint32_t buffer_size = 128;
     uint32_t min_sample_threshold = 8;
@@ -1232,28 +1148,34 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
             ngx_str_t ttl;
             ttl.data = value[i].data + 4;
             ttl.len = value[i].len - 4;
-            if (rn_parse_duration_ms(&ttl, &ttl_ms) != NGX_OK || ttl_ms > 0xFFFFFFFFu) {
+            if (rn_parse_protocol_duration_ms(&ttl, &ttl_ms) != NGX_OK) {
                 return "invalid ratelimitly_guard ttl";
             }
         } else if (ngx_strncmp(value[i].data, "max_samples=", 12) == 0) {
             ngx_str_t n;
             n.data = value[i].data + 12;
             n.len = value[i].len - 12;
-            if (rn_parse_u32(&n, &max_samples) != NGX_OK || max_samples == 0) {
+            if (rn_numeric_parse_u32(n.data, n.len, &max_samples) != 0
+                || max_samples == 0)
+            {
                 return "invalid ratelimitly_guard max_samples";
             }
         } else if (ngx_strncmp(value[i].data, "buffer_size=", 12) == 0) {
             ngx_str_t n;
             n.data = value[i].data + 12;
             n.len = value[i].len - 12;
-            if (rn_parse_u32(&n, &buffer_size) != NGX_OK || buffer_size == 0) {
+            if (rn_numeric_parse_u32(n.data, n.len, &buffer_size) != 0
+                || buffer_size == 0)
+            {
                 return "invalid ratelimitly_guard buffer_size";
             }
         } else if (ngx_strncmp(value[i].data, "min_sample_threshold=", 21) == 0) {
             ngx_str_t n;
             n.data = value[i].data + 21;
             n.len = value[i].len - 21;
-            if (rn_parse_u32(&n, &min_sample_threshold) != NGX_OK) {
+            if (rn_numeric_parse_u32(n.data, n.len,
+                    &min_sample_threshold) != 0)
+            {
                 return "invalid ratelimitly_guard min_sample_threshold";
             }
         } else {
@@ -1283,7 +1205,7 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     guard->name = guard_name;
     guard->service_template = service;
     guard->threshold_template = threshold;
-    guard->ttl_ms = (uint32_t) ttl_ms;
+    guard->ttl_ms = ttl_ms;
     guard->max_samples = max_samples;
     guard->buffer_size = buffer_size;
     guard->min_sample_threshold = min_sample_threshold;
@@ -1956,8 +1878,16 @@ rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx) {
     } else {
         rn_srv_source_t *sources;
         rn_srv_records_t result;
+        uint32_t ttl_ms;
+        time_t now_s;
 
         ngx_memzero(&result, sizeof(result));
+        now_s = ngx_time();
+        ttl_ms = 0;
+        if (ctx->valid > now_s) {
+            ttl_ms = rn_numeric_ttl_ms_until((uint64_t) ctx->valid,
+                (uint64_t) now_s);
+        }
         if (ctx->nsrvs > SIZE_MAX / sizeof(rn_srv_source_t)) {
             req->srv_cb(req->user, -1, NULL, 0);
         } else {
@@ -1973,7 +1903,7 @@ rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx) {
                     sources[i].port = (uint16_t) srv->port;
                     sources[i].priority = (uint16_t) srv->priority;
                     sources[i].weight = (uint16_t) srv->weight;
-                    sources[i].ttl_ms = (uint32_t) (ctx->valid * 1000);
+                    sources[i].ttl_ms = ttl_ms;
                 }
                 if (rn_srv_records_build(sources, ctx->nsrvs,
                         rn_srv_ngx_alloc, rn_srv_ngx_free, req->worker,
