@@ -7,9 +7,9 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|enforcement-boundary|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|outage-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|count-empty|count-short|count-extra]
 
-Runs the public lifecycle, enforcement-boundary, and response-cardinality
+Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
 original nginx worker PID, triggers its target path, and requires both worker
 survival and a successful follow-up request.
@@ -39,7 +39,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|enforcement-boundary|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra) ;;
+  all|cardinality|outage-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -237,6 +237,30 @@ run_cardinality() {
     return 1
   fi
   log "all response-cardinality regressions passed"
+}
+
+run_outage_policy() {
+  local failures=0
+  local policy
+
+  prepare_binaries
+  for policy in close open; do
+    if ARTIFACT_ROOT="${ARTIFACT_ROOT}/outage/${policy}" \
+        FAIL_POLICY="${policy}" \
+        SKIP_BUILD=1 \
+        "${SELF}" outage; then
+      printf 'PASS %s/outage\n' "${policy}"
+    else
+      printf 'FAIL %s/outage (see %s/outage/%s/outage)\n' \
+        "${policy}" "${ARTIFACT_ROOT}" "${policy}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if (( failures > 0 )); then
+    echo "${failures} outage-policy regression(s) failed" >&2
+    return 1
+  fi
+  log "all outage-policy regressions passed"
 }
 
 wait_for_log() {
@@ -620,6 +644,37 @@ run_steering_rebind_case() {
   check_follow_up "steering rebind"
 }
 
+run_outage_case() {
+  local code
+  local error_log_start
+  local expected_code
+
+  if [[ "${FAIL_POLICY}" == "open" ]]; then
+    expected_code="200"
+  else
+    expected_code="429"
+  fi
+
+  error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
+  start_responder drop keep 0
+  code="$(request_code)"
+  if [[ "${code}" == "000" ]]; then
+    record_failure "outage with fail-${FAIL_POLICY} caused a transport error"
+  elif [[ "${code}" != "${expected_code}" ]]; then
+    record_failure "outage with fail-${FAIL_POLICY} returned ${code}, expected ${expected_code}"
+  fi
+  wait_for_log '"disposition":"dropped"' "${RESPONDER_LOG}" 20 \
+    || record_failure "drop responder did not observe the outage request"
+  sleep 0.2
+  tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
+    >"${ARTIFACT_DIR}/outage-trigger.log"
+  if ! grep -q 'rn: result error status=-2' "${ARTIFACT_DIR}/outage-trigger.log"; then
+    record_failure "outage did not complete through the C-client timeout callback"
+  fi
+  check_worker_survival "outage fail-${FAIL_POLICY} decision"
+  check_follow_up "outage fail-${FAIL_POLICY} decision"
+}
+
 run_enforcement_boundary_case() {
   local code
   local event_count
@@ -719,6 +774,7 @@ run_one() {
     timeout) run_timeout_case ;;
     aborted-client) run_aborted_client_case ;;
     steering-rebind) run_steering_rebind_case ;;
+    outage) run_outage_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
   esac
@@ -737,6 +793,8 @@ if [[ "${MODE}" == "all" ]]; then
   run_all
 elif [[ "${MODE}" == "cardinality" ]]; then
   run_cardinality
+elif [[ "${MODE}" == "outage-policy" ]]; then
+  run_outage_policy
 else
   run_one
 fi
