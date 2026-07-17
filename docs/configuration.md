@@ -155,6 +155,13 @@ unsigned 32-bit wire field (`0` through `4294967295`). The three sample-count
 fields also reject decimal values above `4294967295`; `max_samples` and
 `buffer_size` additionally require a nonzero value.
 
+`min_sample_threshold=0` is intentional and disables the insertion-rate
+sufficiency gate. It does not create a latency value by itself: RateLimitly must
+still have a retained, non-expired sample before a minimum latency is available.
+A positive value requires the server's estimated insertion rate to reach that
+threshold before retained samples participate in guard decisions. The default
+is `8`.
+
 A guard sends RateLimitly latency metadata for a service key and asks
 RateLimitly to shed requests when observed latency crosses the configured
 threshold.

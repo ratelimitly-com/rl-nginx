@@ -102,8 +102,12 @@ Notes:
   - `min_sample_threshold` -> `min_sample_threshold`
 - Parsed threshold and TTL milliseconds and all three tuning integers MUST fit
   an unsigned 32-bit wire field. `max_samples` and `buffer_size` MUST be
-  nonzero. This numeric-width rule does not decide whether
-  `min_sample_threshold=0` is valid.
+  nonzero.
+- `min_sample_threshold=0` MUST be accepted and MUST disable only the
+  insertion-rate sufficiency gate. A retained, non-expired sample is still
+  required for a minimum latency to be available. A positive value requires
+  the estimated insertion rate to reach that value before retained samples are
+  used by the guard.
 - Guards referenced by `ratelimitly ... guard=<name>` must be defined before use.
 
 ### ratelimitly_group

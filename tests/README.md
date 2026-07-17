@@ -49,6 +49,17 @@ A public helper script is provided (pass the nginx repo root, not `/src`):
 ./tools/build-nginx.sh /path/to/nginx-src --clean
 ```
 
+After building, run the configuration-level acceptance cases:
+
+```sh
+RCLIENT_DIR=./_deps/rl-c-client ./tests/test-config.sh
+```
+
+These cases use `nginx -t` and do not start a listener. The initial cases prove
+that `min_sample_threshold=0` is intentionally accepted alongside positive
+values; the zero value disables the server-side insertion-rate sufficiency
+gate without manufacturing a latency sample.
+
 ## 3) Run nginx with the test config
 
 Edit the config first:
