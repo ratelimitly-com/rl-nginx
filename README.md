@@ -1,113 +1,73 @@
 # rl-nginx
 
-`rl-nginx` is an nginx HTTP module for enforcing RateLimitly decisions at the
-nginx access phase.
+`rl-nginx` is an nginx HTTP module that enforces RateLimitly decisions during
+the nginx access phase. It turns nginx variables into rate-limit resources,
+sends them to RateLimitly through `rl-c-client`, and either lets the request
+continue or returns `429 Too Many Requests`.
 
-The module evaluates one or more configured rate-limit resources for each
-request, sends those resources to RateLimitly through `rl-c-client`, and either
-lets nginx continue request processing or returns `429 Too Many Requests`.
+The planned `0.1.x` public preview is source-only. It supports static and
+dynamic module builds on Linux with glibc and nginx `1.30.2` or `1.31.1`; the
+exact release scope is in [the compatibility guide](docs/compatibility.md).
 
-This repository contains the nginx module source, build helpers, configuration
-examples, and integration tests. It does not contain the RateLimitly server or
-tenant-management service.
+## Quick Start
 
-## What The Module Does
+The commands below use the repository's pinned nginx `1.31.1` submodule and
+automatically fetch the locked public `rl-c-client` `v0.2.0` release. No private
+repository, RateLimitly server, tenant, or API key is needed to build and run
+the public test suite.
 
-- Discovers RateLimitly servers with DNS SRV records:
-  `_ratelimitly._udp.<tenant-domain>`.
-- Authenticates requests with a RateLimitly tenant API key:
-  `rl-cookie...` or `rl-aes...`.
-- Defines nginx-native rate-limit resources with `ratelimitly_zone`.
-- Groups multiple resources with `ratelimitly_group`.
-- Optionally sends latency guard blocks with `ratelimitly_guard`.
-- Enforces RateLimitly allow/deny decisions before proxying or serving content.
-- Supports fail-open or fail-closed behavior when RateLimitly cannot be reached.
+On Debian or Ubuntu, install the required tools and build dependencies:
 
-It does not create tenants, issue API keys, manage DNS, or run a local
-RateLimitly server. Those are provided by the RateLimitly control plane and
-server deployment.
+```sh
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential curl dnsutils git libpcre2-dev libssl-dev procps python3 \
+  zlib1g-dev
+```
 
-## Repository Layout
+Clone the repository with its pinned nginx source and run the required public
+gate:
+
+```sh
+git clone --recurse-submodules https://github.com/ratelimitly-com/rl-nginx.git
+cd rl-nginx
+make check BUILD_FLAGS="--clean"
+```
+
+`make check` verifies scripts and dependency locks, builds the static module,
+checks nginx configuration, runs the deterministic public integration suite,
+and checks whitespace. It materializes the C client at
+`./_deps/rl-c-client`; that checkout must match the tag and full commit in
+[`dependencies/rl-c-client.env`](dependencies/rl-c-client.env).
+
+The resulting static nginx binary is:
 
 ```text
-rl-nginx/
-  src/                         nginx module source
-  examples/                    copyable nginx configuration examples
-  docs/                        build, configuration, and operations guides
-  integration-tests/           end-to-end test harness
-  spec/                        detailed configuration and behavior specs
-  tests/                       lower-level tests plus manual diagnostics
-  tools/build-nginx.sh         public build helper
-  config                       nginx module build descriptor
+upstream-nginx/objs/nginx
 ```
 
-`rl-c-client` is an external dependency. Supported builds use the public tag
-and full commit SHA recorded in
-[`dependencies/rl-c-client.env`](dependencies/rl-c-client.env). Fetch that exact
-release into the default ignored dependency directory:
+For a dynamic module instead, run:
 
 ```sh
-./tools/fetch-rl-c-client.sh
+make build BUILD_FLAGS="--dynamic --compat --clean"
+make dynamic-relocation-test
 ```
 
-This creates `./_deps/rl-c-client`. The public build and test helpers perform
-the same fetch-or-verify operation automatically when no override is set. Set
-`RCLIENT_DIR=/path/to/rl-c-client` only when intentionally building another
-checkout, such as while developing or packaging the C client; no adjacent
-checkout is selected implicitly.
-
-## Requirements
-
-- nginx source tree for the nginx version you will run.
-- The locked public `rl-c-client` source release, fetched with the repository
-  helper, or an intentional `RCLIENT_DIR` override.
-- C compiler and standard nginx build dependencies.
-- OpenSSL development headers and libraries (`libcrypto`). The PIC
-  `librclient.a` archive is embedded in the nginx binary or dynamic module, so
-  `librclient.so` is not required at runtime.
-- PCRE2 and zlib development packages, as required by nginx.
-- A RateLimitly tenant domain with a working SRV record.
-- A valid RateLimitly API key for that tenant.
-
-For production dynamic modules, build the module against the same nginx version
-and compatible configure options as the nginx binary that will load it.
-
-The first public release scope and validation matrix are documented in
-[docs/compatibility.md](docs/compatibility.md).
-
-## Build
-
-Optionally fetch the locked `rl-c-client` release up front:
-
-```sh
-./tools/fetch-rl-c-client.sh
-```
-
-Then build nginx with this module. If the default checkout is absent, the helper
-materializes the exact locked release before building the C client. The
-simplest source build is a static module:
-
-```sh
-./tools/build-nginx.sh /path/to/nginx-src --clean
-```
-
-For a dynamic module:
-
-```sh
-./tools/build-nginx.sh /path/to/nginx-src --dynamic --compat --clean
-```
-
-The dynamic module is written under the nginx build directory, usually:
+The dynamic artifact is:
 
 ```text
-/path/to/nginx-src/objs/ngx_http_rn_module.so
+upstream-nginx/objs/ngx_http_rn_module.so
 ```
 
-Raw nginx configure commands are documented in [docs/build.md](docs/build.md).
+Build a deployment artifact against the same nginx release and compatible
+configure options as the nginx binary that will run it. See
+[Building rl-nginx](docs/build.md) before installing either artifact.
 
 ## Minimal Configuration
 
-For a static module build:
+The tenant domain and API key below are deliberately non-working placeholders.
+Replace both before running `nginx -t`. Also replace the resolver address if
+`127.0.0.53` is not the DNS resolver available to your nginx workers.
 
 ```nginx
 events {}
@@ -115,12 +75,14 @@ events {}
 http {
   resolver 127.0.0.53 valid=30s ipv6=off;
 
-  ratelimitly_tenant   c-5107024729143590554.p0.ratelimitly.com;
-  ratelimitly_auth_key rl-aes1...;
+  ratelimitly_tenant   tenant.example.invalid;
+  ratelimitly_auth_key rl-aes1REPLACE_WITH_YOUR_KEY;
   ratelimitly_timeout  50ms;
   ratelimitly_fail     close;
 
-  ratelimitly_zone api bucket="api:$binary_remote_addr:$request_method:$uri" rate=100r/s;
+  ratelimitly_zone api
+    bucket="api:$binary_remote_addr:$request_method:$uri"
+    rate=100r/s;
 
   server {
     listen 8080;
@@ -134,18 +96,40 @@ http {
 }
 ```
 
-For a dynamic module build, add a top-level `load_module` directive before the
-`events` block:
+For a dynamic build, load the installed module before the `events` block:
 
 ```nginx
 load_module modules/ngx_http_rn_module.so;
 ```
 
-A complete example is available in [examples/minimal.conf](examples/minimal.conf).
+RateLimitly discovery queries
+`_ratelimitly._udp.<your-tenant-domain>`. The control plane must provide the
+tenant, API key, and corresponding DNS SRV record; this repository does not
+create or run those services. Start from
+[`examples/minimal.conf`](examples/minimal.conf) and read the
+[configuration guide](docs/configuration.md) before deploying. Treat
+`ratelimitly_auth_key` as a secret.
 
-## Configuration Directives
+## What the Module Does
 
-Core directives:
+- Discovers RateLimitly servers through tenant-specific DNS SRV records.
+- Defines nginx-native resources with `ratelimitly_zone`.
+- Groups resources with `ratelimitly_group`.
+- Optionally reports latency guard blocks with `ratelimitly_guard`.
+- Enforces allow and deny decisions before proxying or serving content.
+- Applies a configured fail-open or fail-closed policy when no valid decision
+  is available.
+
+When a protected request arrives, the module expands the configured nginx
+variables, hashes bucket and service names into protocol identifiers, and sends
+the decision request over UDP through `rl-c-client`. A valid allow continues
+normal nginx processing; a valid deny returns `429`; DNS, network, timeout, and
+protocol failures follow `ratelimitly_fail open|close`.
+
+The module does not create tenants, issue credentials, manage DNS, or include a
+RateLimitly server.
+
+## Core Directives
 
 - `ratelimitly_tenant <tenant-domain>;`
 - `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
@@ -159,37 +143,37 @@ Core directives:
 - `ratelimitly zone=<name>|group=<name> [guard=<name>] ...;`
 - `ratelimitly_label "<template>";`
 
-See [docs/configuration.md](docs/configuration.md) for directive details and
-[spec/dsl.md](spec/dsl.md) for the full DSL reference.
+See the [configuration guide](docs/configuration.md) for directive behavior and
+the [DSL reference](spec/dsl.md) for complete syntax.
 
-## Runtime Behavior
+## Supported Dependency Policy
 
-When a protected request arrives, the module:
+Supported builds use immutable inputs:
 
-1. Expands nginx variables in bucket, rate, label, and guard templates.
-2. Hashes resource bucket names and guard service names into protocol IDs.
-3. Sends a UDP request to the discovered RateLimitly server through
-   `rl-c-client`.
-4. Continues nginx processing when RateLimitly allows the request.
-5. Returns `429 Too Many Requests` when RateLimitly denies the request.
-6. Applies `ratelimitly_fail open|close` when DNS, UDP, timeout, or protocol
-   errors prevent a valid decision.
+| Dependency | Supported revision |
+| --- | --- |
+| nginx stable | `release-1.30.2` at `a92a537860c7b87d3793d9eb41c9cf3ed833b53c` |
+| nginx mainline and default submodule | `release-1.31.1` at `d44205284fa41662da803b796d6056fc1e59b1f3` |
+| `rl-c-client` | `v0.2.0` at `6cafd3f5bea6ba2f8a791966a70b8ab8e56c485f` |
 
-Operational guidance is in [docs/operations.md](docs/operations.md).
+Set `NGINX_SRC=/path/to/nginx-src` when testing another supported nginx source
+tree. Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally developing
+or packaging against another client checkout. An override is not a supported
+release lock, and no sibling checkout is selected implicitly.
 
-## Test
+Scheduled compatibility probes test `rl-c-client/main` and nginx `master` for
+early warning only. Required builds and support claims remain on the immutable
+revisions above.
 
-Required public-readiness gate:
+## Testing
+
+The required contributor and release-readiness entrypoint is:
 
 ```sh
 make check
 ```
 
-This fetches the locked public C-client release, runs shell/Python/config syntax
-checks, unit tests, nginx/module build, configuration tests, the public
-integration suite, and the whitespace check.
-
-The same steps are also available as narrower root targets:
+Useful narrower gates are:
 
 ```sh
 make syntax
@@ -197,64 +181,50 @@ make unit
 make build
 make config-test
 make public-test
-```
-
-The numeric unit checks every 32-bit wire boundary before a value can be
-narrowed; the SRV-record unit injects a failure at every allocation point and
-requires the adapter to return no partial records and retain no allocations.
-
-Required public integration suite:
-
-```sh
-make public-test
-```
-
-This uses only the locked public C-client responder, local DNS fixture, pinned
-nginx source, and this module. It covers timeout, aborted-client,
-steering-rebind, an exact three-allow/two-deny enforcement boundary,
-fail-open/fail-close outage policy, DNS failure and recovery, and
-guard/latency behavior, malformed protocol responses, and response-cardinality
-behavior. Each case requires the original nginx worker to survive and serve a
-successful follow-up request, validates a reload, and requires a clean worker
-shutdown. Artifacts are written under `integration-tests/artifacts/lifecycle/`.
-
-The legacy `tests/smoke-test.sh` and `tests/burst-test.sh` scripts are manual
-diagnostics only. They print one-off HTTP/log samples or burst counters and do
-not define required pass/fail expectations. Do not use them as release or CI
-gates; use `integration-tests/public.sh` and the sanitizer gate instead.
-
-Run the lifecycle and response-cardinality gates three times with ASan and
-UBSan instrumentation in nginx, this module, and the C client:
-
-```sh
+make dynamic-relocation-test
 make sanitizers
 ```
 
-Optional internal full-stack test with the private Rust RateLimitly server:
+The public integration suite uses the locked C-client responder and local DNS
+fixture. It covers enforcement boundaries, fail-open/fail-closed outages, DNS
+failure and recovery, timeouts, aborted clients, steering rebinds, guards,
+malformed responses, response cardinality, reload, worker survival, and clean
+shutdown. It requires no real tenant or credential.
 
-```sh
-./integration-tests/internal-full-stack.sh
+`tests/smoke-test.sh` and `tests/burst-test.sh` are manual diagnostics, not
+release gates. The private full-stack harness is optional and is not required
+for public contributors. See [the integration-test guide](integration-tests/README.md)
+for those workflows.
+
+## Documentation and Project Links
+
+- [Documentation index](docs/index.md)
+- [Build and installation](docs/build.md)
+- [Configuration](docs/configuration.md)
+- [Operations and troubleshooting](docs/operations.md)
+- [Compatibility and release scope](docs/compatibility.md)
+- [C-client integration](docs/c-client.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Support and bug reports](https://github.com/ratelimitly-com/rl-nginx/issues)
+- [Release notes and source archives](https://github.com/ratelimitly-com/rl-nginx/releases)
+
+Do not report suspected vulnerabilities in a public issue. Follow
+[`SECURITY.md`](SECURITY.md) instead, and remove tenant credentials from every
+configuration snippet and log you share.
+
+## Repository Layout
+
+```text
+rl-nginx/
+  src/                         nginx module source
+  examples/                    copyable nginx configurations
+  docs/                        build, configuration, and operations guides
+  integration-tests/           deterministic public test harness
+  spec/                        detailed configuration and behavior references
+  tests/                       lower-level tests and manual diagnostics
+  tools/build-nginx.sh         supported build helper
+  config                       nginx module build descriptor
 ```
-
-Optional full-stack test against an existing RateLimitly server and tenant:
-
-```sh
-EXTERNAL_SERVER=1 \
-DOMAIN=c-5107024729143590554.p0.ratelimitly.com \
-TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
-./integration-tests/internal-full-stack.sh
-```
-
-The internal harness is not a public contributor requirement. Its local mode
-requires the private `../rl` workspace and tenant-management tooling. It uses
-the Rust server implementation; do not use the obsolete Python server for
-validation.
-
-## Status
-
-The planned `0.1.x` public-preview release is source-only. Distribution packages
-and container images are explicit non-goals for that release. See
-[docs/compatibility.md](docs/compatibility.md) for the target nginx, C-client,
-platform, and module-mode matrix.
 
 This repository is licensed under the MIT License; see [LICENSE](LICENSE).
