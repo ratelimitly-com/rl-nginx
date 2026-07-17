@@ -116,13 +116,23 @@ Guard test path note:
 - The backend endpoint `/backend/ok.txt` returns explicit HTTP `200` for clean burst-test accounting.
 - Latency reports sent by the nginx module clamp observed latency to minimum `1ms` (avoids `0ms` artifacts).
 
-## 6) Smoke test helper
+## 6) Smoke diagnostic helper
+
+This script samples one request and prints recent `rn:` debug lines. It is a
+manual diagnostic helper, not a required pass/fail test. Use
+`../integration-tests/public.sh` for the public readiness gate.
 
 ```sh
 ./tests/smoke-test.sh http://127.0.0.1:8088/api/static/test ./logs/error.log
 ```
 
-## 7) Burst test helper
+## 7) Burst diagnostic helper
+
+This script sends traffic bursts and reports observed HTTP and `rn:` counters.
+It is a manual diagnostic helper, not a required pass/fail test; it exits
+nonzero for invocation/tooling failures but does not enforce traffic
+expectations. Use `../integration-tests/public.sh` for deterministic behavioral
+coverage.
 
 ```sh
 # Defaults:
@@ -224,7 +234,7 @@ Counter interpretation quick check:
   - Run: `./tests/build-nginx.sh /path/to/nginx-src [--dynamic]`
 - `run-nginx.sh` — starts nginx with a specified config.
   - Run: `./tests/run-nginx.sh /path/to/nginx-bin [/path/to/nginx.conf]`
-- `smoke-test.sh` — issues a request and prints recent `rn:` debug lines.
+- `smoke-test.sh` — diagnostic helper that issues a request and prints recent `rn:` debug lines; not a required pass/fail test.
   - Run: `./tests/smoke-test.sh http://127.0.0.1:8088/api/static/test ./logs/error.log`
-- `burst-test.sh` — sends burst traffic and reports HTTP + rn result counters.
+- `burst-test.sh` — diagnostic helper that sends burst traffic and reports HTTP + rn result counters; not a required pass/fail test.
   - Run: `./tests/burst-test.sh [BASE_URL] [BURST_SIZE] [PARALLELISM] [NGINX_ERR_LOG]`

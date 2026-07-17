@@ -36,7 +36,7 @@ rl-nginx/
   docs/                        build, configuration, and operations guides
   integration-tests/           end-to-end test harness
   spec/                        detailed configuration and behavior specs
-  tests/                       development smoke/burst helpers
+  tests/                       lower-level tests plus manual diagnostics
   tools/build-nginx.sh         public build helper
   config                       nginx module build descriptor
 ```
@@ -208,6 +208,11 @@ guard/latency behavior, malformed protocol responses, and response-cardinality
 behavior. Each case requires the original nginx worker to survive and serve a
 successful follow-up request, validates a reload, and requires a clean worker
 shutdown. Artifacts are written under `integration-tests/artifacts/lifecycle/`.
+
+The legacy `tests/smoke-test.sh` and `tests/burst-test.sh` scripts are manual
+diagnostics only. They print one-off HTTP/log samples or burst counters and do
+not define required pass/fail expectations. Do not use them as release or CI
+gates; use `integration-tests/public.sh` and the sanitizer gate instead.
 
 Run the lifecycle and response-cardinality gates three times with ASan and
 UBSan instrumentation in nginx, this module, and the C client:

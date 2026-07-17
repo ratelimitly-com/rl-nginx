@@ -17,6 +17,9 @@ Usage:
 What it does:
   Sends burst traffic to the configured ratelimitly nginx test endpoints and
   summarizes HTTP codes and, when nginx error log is available, rn decision lines.
+  This is a diagnostic helper, not a required pass/fail test. It exits nonzero
+  for invocation/tooling failures, but it does not enforce traffic expectations.
+  Use integration-tests/public.sh for the public readiness gate.
 
 Arguments:
   BASE_URL     Target nginx base URL (default: http://127.0.0.1:8088)
@@ -125,6 +128,7 @@ run_burst() {
 }
 
 echo "BASE_URL=$BASE_URL BURST_SIZE=$BURST_SIZE PARALLELISM=$PARALLELISM"
+echo "Diagnostic helper: summarizes observed traffic; does not enforce pass/fail thresholds."
 echo "HTTP summary includes explicit 429/404/5xx/other/000 counts."
 if [[ -f "$NGINX_ERR_LOG" ]]; then
   echo "Using NGINX_ERR_LOG=$NGINX_ERR_LOG"
