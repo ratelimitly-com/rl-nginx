@@ -73,10 +73,18 @@ def build_rr(name_ptr: bytes, rr_type: int, rr_class: int, ttl: int, rdata: byte
 
 
 class DnsServer:
-    def __init__(self, host: str, port: int, domain: str, records: list[str]) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        domain: str,
+        records: list[str],
+        state_file: str | None = None,
+    ) -> None:
         self.host = host
         self.port = port
         self.domain = domain.rstrip(".").lower()
+        self.state_file = state_file
         self.srv_owner = f"_ratelimitly._udp.{self.domain}"
         self.records: list[tuple[int, int]] = []
         self.srv_targets: set[str] = set()
@@ -90,14 +98,33 @@ class DnsServer:
     def stop(self, *_args) -> None:
         self.running = False
 
+    def mode(self) -> str:
+        if not self.state_file:
+            return "normal"
+        try:
+            with open(self.state_file, encoding="ascii") as handle:
+                value = handle.read().strip().lower()
+        except FileNotFoundError:
+            return "normal"
+        return value or "normal"
+
     def name_exists(self, qname: str) -> bool:
+        mode = self.mode()
         qname = qname.rstrip(".").lower()
+        if mode == "missing-srv" and qname == self.srv_owner:
+            return False
+        if mode == "bad-target" and qname in self.srv_targets:
+            return False
         return qname == self.srv_owner or qname in self.srv_targets
 
     def answers_for(self, qname: str, qtype: int) -> list[bytes]:
+        mode = self.mode()
         qname = qname.rstrip(".").lower()
         answers: list[bytes] = []
         name_ptr = b"\xC0\x0C"
+
+        if mode in ("missing-srv", "timeout"):
+            return answers
 
         if qname == self.srv_owner and qtype in (TYPE_SRV, TYPE_ANY):
             for server_id, port in self.records:
@@ -107,6 +134,9 @@ class DnsServer:
             return answers
 
         if qname not in self.srv_targets:
+            return answers
+
+        if mode == "bad-target":
             return answers
 
         if qtype in (TYPE_A, TYPE_ANY):
@@ -154,6 +184,8 @@ class DnsServer:
                         raise
                     break
 
+                if self.mode() == "timeout":
+                    continue
                 response = self.handle_query(payload)
                 if response is not None:
                     sock.sendto(response, addr)
@@ -208,9 +240,16 @@ def main() -> int:
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--domain", required=True)
     parser.add_argument("--record", action="append", default=[])
+    parser.add_argument("--state-file")
     args = parser.parse_args()
 
-    server = DnsServer(args.listen_host, args.port, args.domain, args.record)
+    server = DnsServer(
+        args.listen_host,
+        args.port,
+        args.domain,
+        args.record,
+        args.state_file,
+    )
     signal.signal(signal.SIGTERM, server.stop)
     signal.signal(signal.SIGINT, server.stop)
     return server.serve()
