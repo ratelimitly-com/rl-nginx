@@ -45,6 +45,14 @@ A public helper script is provided (pass the nginx repo root, not `/src`):
 ./tools/build-nginx.sh /path/to/nginx-src --clean
 ```
 
+After a dynamic build, validate that the module can be copied and loaded from
+an isolated runtime tree without a C-client shared library or workspace runtime
+path:
+
+```sh
+make dynamic-relocation-test NGINX_SRC=/path/to/nginx-src
+```
+
 After building, run the configuration validation matrix:
 
 ```sh

@@ -17,6 +17,7 @@ SH_SCRIPTS := \
 	tests/test-srv-records.sh \
 	start-nginx.sh \
 	integration-tests/public.sh \
+	integration-tests/dynamic-module-relocation.sh \
 	integration-tests/lifecycle-regressions.sh \
 	integration-tests/internal-full-stack.sh \
 	tests/smoke-test.sh \
@@ -28,7 +29,7 @@ PY_SCRIPTS := \
 	integration-tests/test_local_dns_server.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check fetch syntax unit build config-test public-test test sanitizers test-internal whitespace
+.PHONY: help check fetch syntax unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
@@ -36,6 +37,7 @@ help:
 		'  make check          required public-readiness gate' \
 		'  make build          fetch locked C client and build nginx/module' \
 		'  make test           unit, config, and public integration tests' \
+		'  make dynamic-relocation-test  relocated dynamic-module gate' \
 		'  make sanitizers     ASan/UBSan lifecycle gate' \
 		'  make test-internal  optional private full-stack validation' \
 		'' \
@@ -71,6 +73,9 @@ config-test:
 
 public-test: fetch
 	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" ./integration-tests/public.sh
+
+dynamic-relocation-test: fetch
+	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" ./integration-tests/dynamic-module-relocation.sh
 
 test: unit build config-test public-test
 
