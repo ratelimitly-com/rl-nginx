@@ -374,8 +374,8 @@ ratelimitly_timeout  100ms;
 ratelimitly_fail     close;
 ratelimitly_debug    on;
 
-ratelimitly_zone allow_zone bucket="allow:$uri" rate=10000r/s;
-ratelimitly_zone deny_zone  bucket="deny:$uri"  rate=1r/s;
+ratelimitly_zone allow_zone bucket="v1|fixture=allow" rate=10000r/s;
+ratelimitly_zone deny_zone  bucket="v1|fixture=deny"  rate=1r/s;
 ```
 
 It exposes three local endpoints:

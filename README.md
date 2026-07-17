@@ -81,14 +81,14 @@ http {
   ratelimitly_fail     close;
 
   ratelimitly_zone api
-    bucket="api:$binary_remote_addr:$request_method:$uri"
+    bucket="v1|scope=api|ip=$remote_addr"
     rate=100r/s;
 
   server {
     listen 8080;
 
     location /api/ {
-      ratelimitly_label "api:$request_method:$uri";
+      ratelimitly_label "scope=api";
       ratelimitly zone=api;
       proxy_pass http://127.0.0.1:9000;
     }
@@ -106,8 +106,9 @@ RateLimitly discovery queries
 `_ratelimitly._udp.<your-tenant-domain>`. The control plane must provide the
 tenant, API key, and corresponding DNS SRV record; this repository does not
 create or run those services. Start from
-[`examples/minimal.conf`](examples/minimal.conf) and read the
-[configuration guide](docs/configuration.md) before deploying. Treat
+[`examples/minimal.conf`](examples/minimal.conf), review
+[`examples/security-conscious.conf`](examples/security-conscious.conf), and
+read the [configuration guide](docs/configuration.md) before deploying. Treat
 `ratelimitly_auth_key` as a secret.
 
 ## What the Module Does

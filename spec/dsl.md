@@ -68,7 +68,14 @@ ratelimitly_zone <name> bucket="<template>" rate=<rate_expr>;
 
 Notes:
 - `<name>` is a positional first argument.
-- `bucket` is a string template evaluated per request using nginx variables (e.g. `"low-throughput:$uri:$cookie"`).
+- `bucket` is a string template evaluated per request using nginx variables
+  (for example, `"v1|scope=low-throughput|ip=$remote_addr"`). Direct request
+  arguments, headers, cookies, and raw paths MUST NOT be treated as trusted
+  identity. Variable components MUST be canonical and bounded so clients cannot
+  create arbitrary buckets or ambiguous field boundaries.
+- `$binary_remote_addr` MUST NOT be used with the current text hash interface;
+  embedded NUL bytes can truncate it. Use textual `$remote_addr` and configure
+  real-IP/proxy-protocol trust before relying on it.
 - `rate` is evaluated per request using nginx complex values.
   - Static example: `rate=600r/m`
   - Dynamic example: `rate=$rl_dynamic_rate`
@@ -94,7 +101,10 @@ Notes:
 - Defines a reusable latency guard for load shedding.
 - `<name>` is a positional first argument.
 - `service` is rendered per request using nginx variables, then hashed with BLAKE2s-128 to produce `service_id`.
-  - Example: `service="svc:api:$host:$uri"`
+  - Example: `service="v1|service=public-api"`
+  - Service values SHOULD be fixed or selected from a finite operator-controlled
+    map. Raw host, URI, argument, header, cookie, or user values MUST NOT create
+    attacker-controlled service cardinality.
 - `threshold` is rendered per request and parsed as duration in milliseconds.
   - Static example: `threshold=80ms`
   - Dynamic example: `threshold=$rl_guard_threshold`
@@ -149,12 +159,18 @@ ratelimitly_label "<template>";
 ```
 
 Notes:
-- Optional. When set, the template is rendered per request (nginx variables expanded) and sent as the `metrics_label` TLV.
+- Optional. When set, the template is rendered per request (nginx variables
+  expanded) and sent as the `metrics_label` TLV.
+- Labels MUST be bounded and non-sensitive. Raw paths, arguments, headers,
+  cookies, credentials, session tokens, user identifiers, email addresses, and
+  source addresses MUST NOT be used as label values.
 
 ## Defaults
 
 - `ratelimitly_timeout`: 20ms
-- `ratelimitly_fail`: open
+- `ratelimitly_fail`: open. Production configurations SHOULD set this
+  explicitly after assessing enforcement bypass under fail-open and legitimate
+  traffic denial under fail-close.
 - `ratelimitly_guard ttl`: 30s
 - `ratelimitly_guard max_samples`: 128
 - `ratelimitly_guard buffer_size`: 128

@@ -366,8 +366,8 @@ http {
   ratelimitly_fail     close;
   ratelimitly_debug    on;
 
-  ratelimitly_zone allow_zone bucket="allow:\$uri" rate=10000r/s;
-  ratelimitly_zone deny_zone  bucket="deny:\$uri"  rate=1r/s;
+  ratelimitly_zone allow_zone bucket="v1|fixture=allow" rate=10000r/s;
+  ratelimitly_zone deny_zone  bucket="v1|fixture=deny"  rate=1r/s;
 
   server {
     listen ${NGINX_HOST}:${NGINX_PORT};
@@ -377,14 +377,14 @@ http {
     }
 
     location = /allow {
-      ratelimitly_label "ALLOW:\$uri";
+      ratelimitly_label "fixture=allow";
       ratelimitly zone=allow_zone;
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
     }
 
     location = /deny {
-      ratelimitly_label "DENY:\$uri";
+      ratelimitly_label "fixture=deny";
       ratelimitly zone=deny_zone;
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
