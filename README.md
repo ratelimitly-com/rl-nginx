@@ -181,8 +181,9 @@ Syntax and development build checks:
 for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-config.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
   bash -n "$script"
 done
-python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
+python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/local_dns_server.py"), pathlib.Path("integration-tests/test_local_dns_server.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
 sh -n config
+python3 integration-tests/test_local_dns_server.py
 ./tests/test-numeric.sh
 RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug

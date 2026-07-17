@@ -79,9 +79,12 @@ class DnsServer:
         self.domain = domain.rstrip(".").lower()
         self.srv_owner = f"_ratelimitly._udp.{self.domain}"
         self.records: list[tuple[int, int]] = []
+        self.srv_targets: set[str] = set()
         for record in records:
             server_id, port_str = record.split(":", 1)
-            self.records.append((int(server_id), int(port_str)))
+            parsed_server_id = int(server_id)
+            self.records.append((parsed_server_id, int(port_str)))
+            self.srv_targets.add(f"s-{parsed_server_id}.localhost")
         self.running = True
 
     def stop(self, *_args) -> None:
@@ -89,7 +92,7 @@ class DnsServer:
 
     def name_exists(self, qname: str) -> bool:
         qname = qname.rstrip(".").lower()
-        return qname == self.srv_owner or qname == "localhost" or qname.endswith(".localhost")
+        return qname == self.srv_owner or qname in self.srv_targets
 
     def answers_for(self, qname: str, qtype: int) -> list[bytes]:
         qname = qname.rstrip(".").lower()
@@ -103,8 +106,7 @@ class DnsServer:
                 answers.append(build_rr(name_ptr, TYPE_SRV, CLASS_IN, 30, rdata))
             return answers
 
-        is_localhost = qname == "localhost" or qname.endswith(".localhost")
-        if not is_localhost:
+        if qname not in self.srv_targets:
             return answers
 
         if qtype in (TYPE_A, TYPE_ANY):
