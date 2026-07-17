@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./tools/build-nginx.sh /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug] [--skip-rclient-build]
+Usage: ./tools/build-nginx.sh /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug] [--sanitize] [--skip-rclient-build]
 
 Builds rl-c-client and then configures/builds nginx with the rl-nginx module.
 
@@ -14,6 +14,11 @@ Defaults:
   RCLIENT_DIR is auto-detected from the locked ./_deps checkout, then from a
   sibling ../rl-c-client checkout. Run ./tools/fetch-rl-c-client.sh to create
   the locked checkout.
+
+Sanitizers:
+  --sanitize instruments nginx and the module. Use
+  ./tools/sanitized-lifecycle.sh to instrument the C client and run the complete
+  lifecycle gate as well.
 EOF
 }
 
@@ -36,7 +41,7 @@ BUILD_ARGS=()
 
 for arg in "$@"; do
   case "$arg" in
-    --dynamic|--compat|--clean|--debug)
+    --dynamic|--compat|--clean|--debug|--sanitize)
       BUILD_ARGS+=("$arg")
       ;;
     --skip-rclient-build)

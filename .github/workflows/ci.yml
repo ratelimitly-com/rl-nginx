@@ -25,7 +25,7 @@ jobs:
 
       - name: Script syntax
         run: |
-          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
+          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
             bash -n "$script"
           done
           python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
@@ -39,3 +39,24 @@ jobs:
 
       - name: Check whitespace
         run: git diff --check
+
+  sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: ./tools/fetch-rl-c-client.sh
+
+      - name: Run sanitized lifecycle gate
+        run: SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 ./tools/sanitized-lifecycle.sh

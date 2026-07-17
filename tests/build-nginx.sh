@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug]"
+  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug] [--sanitize]"
   exit 0
 fi
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug]"
+  echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug] [--sanitize]"
   exit 1
 fi
 
@@ -16,15 +16,17 @@ DYNAMIC=""
 COMPAT=""
 CLEAN=""
 DEBUG=""
+SANITIZE=""
 for arg in "${@:2}"; do
   case "$arg" in
     --dynamic) DYNAMIC="--dynamic" ;;
     --compat) COMPAT="--compat" ;;
     --clean) CLEAN="--clean" ;;
     --debug) DEBUG="--debug" ;;
+    --sanitize) SANITIZE="--sanitize" ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug]" >&2
+      echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug] [--sanitize]" >&2
       exit 1
       ;;
   esac
@@ -69,6 +71,14 @@ FLAGS=(
   "--with-cc-opt=-I${C_CLIENT}/include"
   "--with-ld-opt=-L${C_CLIENT} -lrclient -lcrypto -lssl -Wl,-rpath,${C_CLIENT}"
 )
+if [[ "$SANITIZE" == "--sanitize" ]]; then
+  # nginx formats an empty query string by passing a null source and zero
+  # length to ngx_cpymem(). GCC's nonnull-attribute check reports that upstream
+  # idiom on every request, so disable only that UBSan category for nginx.
+  SANITIZER_FLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize=nonnull-attribute -fno-omit-frame-pointer"
+  FLAGS[0]="--with-cc-opt=-I${C_CLIENT}/include ${SANITIZER_FLAGS}"
+  FLAGS[1]="--with-ld-opt=-L${C_CLIENT} -lrclient -lcrypto -lssl -Wl,-rpath,${C_CLIENT} -fsanitize=address,undefined"
+fi
 if [[ "$DEBUG" == "--debug" ]]; then
   FLAGS+=("--with-debug")
 fi

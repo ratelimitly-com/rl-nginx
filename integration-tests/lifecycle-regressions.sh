@@ -316,6 +316,12 @@ worker_pid() {
     | awk '/nginx: worker process/ { print $1; exit }'
 }
 
+replacement_worker_pid() {
+  ps -o pid=,args= --ppid "${NGINX_PID}" 2>/dev/null \
+    | awk -v old="${ORIGINAL_WORKER_PID}" \
+        '$1 != old && /nginx: worker process/ { print $1; exit }'
+}
+
 worker_udp_port() {
   python3 "${UDP_PORT_HELPER}" "${ORIGINAL_WORKER_PID}"
 }
@@ -455,6 +461,59 @@ check_rebind_follow_up() {
   check_worker_survival "${phase} rebind follow-up"
 }
 
+check_reload() {
+  local attempt
+  local code="000"
+  local old_worker="${ORIGINAL_WORKER_PID}"
+  local new_worker=""
+
+  LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+    "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s reload \
+    >/dev/null 2>&1 \
+    || {
+      record_failure "nginx reload command failed"
+      return 0
+    }
+
+  for (( attempt = 0; attempt < 100; attempt++ )); do
+    new_worker="$(replacement_worker_pid)"
+    if [[ -n "${new_worker}" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ -z "${new_worker}" ]]; then
+    record_failure "nginx did not start a replacement worker during reload"
+    return 0
+  fi
+
+  for (( attempt = 0; attempt < 100; attempt++ )); do
+    if ! kill -0 "${old_worker}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  if kill -0 "${old_worker}" 2>/dev/null; then
+    record_failure "old worker ${old_worker} did not exit after reload"
+  fi
+
+  ORIGINAL_WORKER_PID="${new_worker}"
+  for (( attempt = 0; attempt < 40; attempt++ )); do
+    code="$(request_code)"
+    if [[ "${code}" == "200" ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ "${code}" != "200" ]]; then
+    record_failure "request after nginx reload returned ${code}, expected 200"
+  elif ! worker_udp_port >/dev/null; then
+    record_failure "replacement worker did not initialize its UDP client"
+  else
+    log "reload replaced worker ${old_worker} with ${new_worker}; follow-up succeeded"
+  fi
+}
+
 run_timeout_case() {
   local code
   local error_log_start
@@ -541,6 +600,7 @@ run_one() {
     steering-rebind) run_steering_rebind_case ;;
   esac
 
+  check_reload
   check_clean_nginx_shutdown
 
   if (( CASE_FAILED > 0 )); then
