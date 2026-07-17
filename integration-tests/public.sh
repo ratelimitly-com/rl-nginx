@@ -3,8 +3,6 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-LOCKED_RCLIENT_DIR="${RN_ROOT}/_deps/rl-c-client"
-RCLIENT_DIR="${RCLIENT_DIR:-${LOCKED_RCLIENT_DIR}}"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 
 usage() {
@@ -39,13 +37,7 @@ if (( $# != 0 )); then
   exit 2
 fi
 
-if [[ ! -d "${RCLIENT_DIR}" ]]; then
-  if [[ "${RCLIENT_DIR}" != "${LOCKED_RCLIENT_DIR}" ]]; then
-    echo "C-client checkout not found: ${RCLIENT_DIR}" >&2
-    exit 1
-  fi
-  "${RN_ROOT}/tools/fetch-rl-c-client.sh"
-fi
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
 if [[ ! -f "${NGINX_SRC}/auto/configure" ]]; then
   echo "nginx source not initialized: ${NGINX_SRC}" >&2
   echo "Run: git submodule update --init upstream-nginx" >&2

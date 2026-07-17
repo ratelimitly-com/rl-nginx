@@ -12,6 +12,8 @@ locked public release with:
 The default checkout is `./_deps/rl-c-client`. Set
 `RCLIENT_DIR=/path/to/rl-c-client` to test an intentional development or
 packaging checkout; doing so does not change the supported release revision.
+Without an override, build and test entrypoints fetch or verify the locked
+checkout before use and never fall back to an adjacent development checkout.
 
 ## Key Assumptions
 

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-RCLIENT_DIR ?= ./_deps/rl-c-client
+RCLIENT_DIR ?=
 NGINX_SRC ?= ./upstream-nginx
 NGINX_BIN ?= $(NGINX_SRC)/objs/nginx
 BUILD_FLAGS ?= --clean --debug
@@ -9,11 +9,13 @@ KEEP_SANITIZED_BUILD ?= 0
 
 SH_SCRIPTS := \
 	tools/fetch-rl-c-client.sh \
+	tools/resolve-rl-c-client.sh \
 	tools/build-nginx.sh \
 	tools/sanitized-lifecycle.sh \
 	tests/build-nginx.sh \
 	tests/test-config.sh \
 	tests/test-numeric.sh \
+	tests/test-dependency-bootstrap.sh \
 	tests/test-srv-records.sh \
 	start-nginx.sh \
 	integration-tests/public.sh \
@@ -29,20 +31,21 @@ PY_SCRIPTS := \
 	integration-tests/test_local_dns_server.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check fetch syntax unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
+.PHONY: help check fetch syntax dependency-bootstrap-test unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
 		'  make check          required public-readiness gate' \
-		'  make build          fetch locked C client and build nginx/module' \
+		'  make build          resolve C client and build nginx/module' \
+		'  make dependency-bootstrap-test  deterministic dependency gate' \
 		'  make test           unit, config, and public integration tests' \
 		'  make dynamic-relocation-test  relocated dynamic-module gate' \
 		'  make sanitizers     ASan/UBSan lifecycle gate' \
 		'  make test-internal  optional private full-stack validation' \
 		'' \
 		'Variables:' \
-		'  RCLIENT_DIR=./_deps/rl-c-client' \
+		'  RCLIENT_DIR=<intentional override; default is locked ./_deps checkout>' \
 		'  NGINX_SRC=./upstream-nginx' \
 		'  NGINX_BIN=$$(NGINX_SRC)/objs/nginx' \
 		'  BUILD_FLAGS="--clean --debug"' \
@@ -51,7 +54,12 @@ help:
 check: fetch syntax unit build config-test public-test whitespace
 
 fetch:
-	./tools/fetch-rl-c-client.sh "$(RCLIENT_DIR)"
+	@if [[ -n "$(RCLIENT_DIR)" ]]; then \
+		RCLIENT_DIR="$(RCLIENT_DIR)" ./tools/resolve-rl-c-client.sh >/dev/null; \
+		echo "Using explicit RCLIENT_DIR=$(RCLIENT_DIR)"; \
+	else \
+		./tools/fetch-rl-c-client.sh; \
+	fi
 
 syntax:
 	@for script in $(SH_SCRIPTS); do \
@@ -60,7 +68,10 @@ syntax:
 	@python3 -c 'import ast, pathlib; paths = [pathlib.Path(path) for path in "$(PY_SCRIPTS)".split()]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
 	@sh -n config
 
-unit:
+dependency-bootstrap-test:
+	./tests/test-dependency-bootstrap.sh
+
+unit: dependency-bootstrap-test
 	python3 integration-tests/test_local_dns_server.py
 	./tests/test-numeric.sh
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-srv-records.sh

@@ -51,7 +51,8 @@ case "${MODE}" in
     ;;
 esac
 
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/_deps/rl-c-client}"
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
+export RCLIENT_DIR
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_SRC}/objs/nginx}"
 NGINX_LOAD_MODULE="${NGINX_LOAD_MODULE:-}"
@@ -177,13 +178,6 @@ prepare_binaries() {
   need_cmd make
   need_cmd ps
   need_cmd python3
-
-  if [[ ! -d "${RCLIENT_DIR}" ]]; then
-    if [[ "${RCLIENT_DIR}" != "${RN_ROOT}/_deps/rl-c-client" ]]; then
-      fail "C-client checkout not found: ${RCLIENT_DIR}"
-    fi
-    "${RN_ROOT}/tools/fetch-rl-c-client.sh"
-  fi
 
   if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     log "building the public test responder"

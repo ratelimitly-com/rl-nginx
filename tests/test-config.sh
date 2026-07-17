@@ -3,7 +3,7 @@ set -euo pipefail
 
 RN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NGINX_BIN="${NGINX_BIN:-${RN_ROOT}/upstream-nginx/objs/nginx}"
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/_deps/rl-c-client}"
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rn-config.XXXXXX")"
 trap 'rm -rf "${TEST_ROOT}"' EXIT
 

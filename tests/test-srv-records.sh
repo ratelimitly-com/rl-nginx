@@ -2,7 +2,7 @@
 set -euo pipefail
 
 RN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/_deps/rl-c-client}"
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
 TEST_BIN="$(mktemp "${TMPDIR:-/tmp}/rn-srv-records.XXXXXX")"
 trap 'rm -f "${TEST_BIN}"' EXIT
 

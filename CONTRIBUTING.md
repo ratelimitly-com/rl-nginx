@@ -17,16 +17,17 @@ another C-client checkout:
 export RCLIENT_DIR=/path/to/rl-c-client
 ```
 
+Build and test entrypoints fetch or verify the locked default automatically.
+They never select a sibling development checkout unless it is named explicitly
+with `RCLIENT_DIR`.
+
 ## Build Checks
 
 Run from the `rl-nginx` repo root:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/public.sh integration-tests/lifecycle-regressions.sh integration-tests/internal-full-stack.sh; do
-  bash -n "$script"
-done
-python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/local_dns_server.py"), pathlib.Path("integration-tests/test_local_dns_server.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
-sh -n config
+make syntax
+make dependency-bootstrap-test
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
 git diff --check
 ```
