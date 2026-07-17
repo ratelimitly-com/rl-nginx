@@ -24,28 +24,44 @@ Run one case while developing a fix:
 ./integration-tests/lifecycle-regressions.sh steering-rebind
 ```
 
+Run the complete gate repeatedly with ASan and UBSan instrumentation in both
+the C client and nginx/module code:
+
+```sh
+./tools/sanitized-lifecycle.sh
+```
+
+The sanitizer runner defaults to three complete passes, preserves each pass's
+artifacts under `integration-tests/artifacts/lifecycle-sanitized/`, and restores
+the ordinary C-client build before it exits. Set `SANITIZER_RUNS=1` for a quick
+local check. The C client receives the complete ASan/UBSan set. The nginx build
+disables only UBSan's `nonnull-attribute` category because nginx's core string
+formatter intentionally passes a null source with zero length for an empty
+query string; all other undefined-behavior checks remain enabled.
+
 Every case establishes a successful baseline, records the single nginx worker
 PID, triggers the selected lifecycle path, asserts that the same worker remains
-alive, and requires a successful follow-up rate-limited request. The aborted
-client case uses delayed responder output so clients close while requests are
-in flight; the timeout case uses `drop`; the steering case requests a source
-port rebind through response feedback and verifies the port through Linux
-`/proc` socket metadata.
+alive, requires a successful follow-up rate-limited request, and checks that
+an nginx reload replaces the worker with a functional one before clean shutdown
+reports no leaked connection. The aborted client case uses delayed responder
+output so clients close while requests are in flight; the timeout case uses
+`drop`; the steering case requests a source port rebind through response
+feedback and verifies the port through Linux `/proc` socket metadata.
 
-These are regressions, not an expected-failure wrapper. Before the lifecycle
-fixes land, each is expected to return nonzero for its named invariant while
-still checking worker survival and the follow-up request:
+These are acceptance regressions, not an expected-failure wrapper. Each case
+must return zero and protects a specific ownership invariant that previously
+failed:
 
-- `timeout`: the timeout handler logs completion and then continues through the
-  request-owned handler context;
-- `aborted-client`: module request timers fire after the clients reset their
-  connections;
-- `steering-rebind`: the UDP connection is replaced while its read callback is
-  still active.
+- `timeout`: synchronous C-client completion must be the timeout handler's last
+  access to request-owned state;
+- `aborted-client`: resetting a connection must cancel the C-client request and
+  timer while balancing the nginx and worker request counts;
+- `steering-rebind`: source-port replacement must run in a deferred worker
+  event after the UDP read callback unwinds.
 
 Diagnostic artifacts are preserved under
-`integration-tests/artifacts/lifecycle/<case>/`. Once the fixes land, the same
-commands become the passing acceptance gate.
+`integration-tests/artifacts/lifecycle/<case>/`; the commands above are the
+passing acceptance gate for lifecycle changes.
 
 The test builds and runs the real local components:
 
