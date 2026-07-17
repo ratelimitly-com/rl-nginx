@@ -85,6 +85,12 @@ RCLIENT_DIR="${RCLIENT_DIR}" \
   SKIP_BUILD=1 \
   "${SCRIPT_DIR}/lifecycle-regressions.sh" guard-latency
 
+echo "[public-suite] running malformed protocol regressions"
+RCLIENT_DIR="${RCLIENT_DIR}" \
+  NGINX_SRC="${NGINX_SRC}" \
+  SKIP_BUILD=1 \
+  "${SCRIPT_DIR}/lifecycle-regressions.sh" protocol-policy
+
 echo "[public-suite] running response-cardinality regressions"
 RCLIENT_DIR="${RCLIENT_DIR}" \
   NGINX_SRC="${NGINX_SRC}" \

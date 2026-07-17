@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -42,7 +42,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|count-empty|count-short|count-extra) ;;
+  all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -242,6 +242,33 @@ run_cardinality() {
     return 1
   fi
   log "all response-cardinality regressions passed"
+}
+
+run_protocol_policy() {
+  local failures=0
+  local policy
+  local scenario
+
+  prepare_binaries
+  for policy in close open; do
+    for scenario in malformed-auth malformed-truncated malformed-request-id; do
+      if ARTIFACT_ROOT="${ARTIFACT_ROOT}/protocol/${policy}" \
+          FAIL_POLICY="${policy}" \
+          SKIP_BUILD=1 \
+          "${SELF}" "${scenario}"; then
+        printf 'PASS %s/%s\n' "${policy}" "${scenario}"
+      else
+        printf 'FAIL %s/%s (see %s/protocol/%s/%s)\n' \
+          "${policy}" "${scenario}" "${ARTIFACT_ROOT}" "${policy}" "${scenario}" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  done
+  if (( failures > 0 )); then
+    echo "${failures} protocol-policy regression(s) failed" >&2
+    return 1
+  fi
+  log "all protocol-policy regressions passed"
 }
 
 run_outage_policy() {
@@ -870,6 +897,40 @@ run_guard_case() {
   check_follow_up "${MODE} decision"
 }
 
+run_malformed_protocol_case() {
+  local code
+  local error_log_start
+  local expected_code
+
+  if [[ "${FAIL_POLICY}" == "open" ]]; then
+    expected_code="200"
+  else
+    expected_code="429"
+  fi
+
+  error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
+  start_responder "${MODE}" keep 0
+  code="$(request_code)"
+  if [[ "${code}" == "000" ]]; then
+    record_failure "${MODE} with fail-${FAIL_POLICY} caused a transport error"
+  elif [[ "${code}" != "${expected_code}" ]]; then
+    record_failure "${MODE} with fail-${FAIL_POLICY} returned ${code}, expected ${expected_code}"
+  fi
+  wait_for_log "\"disposition\":\"${MODE}\"" "${RESPONDER_LOG}" 20 \
+    || record_failure "${MODE} responder did not observe the malformed-response request"
+  sleep 0.2
+  tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
+    >"${ARTIFACT_DIR}/${MODE}-trigger.log"
+  if ! grep -q 'rn: result error status=' "${ARTIFACT_DIR}/${MODE}-trigger.log"; then
+    record_failure "${MODE} did not complete through the C-client error callback"
+  fi
+  if grep -q 'rn: result success=' "${ARTIFACT_DIR}/${MODE}-trigger.log"; then
+    record_failure "${MODE} logged the malformed response as a valid result"
+  fi
+  check_worker_survival "${MODE} fail-${FAIL_POLICY} decision"
+  check_follow_up "${MODE} fail-${FAIL_POLICY} decision"
+}
+
 run_enforcement_boundary_case() {
   local code
   local event_count
@@ -980,6 +1041,7 @@ run_one() {
     outage) run_outage_case ;;
     dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;
     guard-pass|guard-deny|guard-multiple) run_guard_case ;;
+    malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
   esac
@@ -998,6 +1060,8 @@ if [[ "${MODE}" == "all" ]]; then
   run_all
 elif [[ "${MODE}" == "cardinality" ]]; then
   run_cardinality
+elif [[ "${MODE}" == "protocol-policy" ]]; then
+  run_protocol_policy
 elif [[ "${MODE}" == "outage-policy" ]]; then
   run_outage_policy
 elif [[ "${MODE}" == "dns-policy" ]]; then
