@@ -96,6 +96,10 @@ if [[ "$CLEAN" == "--clean" ]]; then
 fi
 if [[ "$DYNAMIC" == "--dynamic" ]]; then
   "$CONFIG" --add-dynamic-module="$RN_DIR" "${FLAGS[@]}"
+  if ! grep -Eq -- '(^|[[:space:]])-Werror([[:space:]]|$)' "$NGX_ROOT/objs/Makefile"; then
+    echo "nginx build is not treating compiler warnings as errors" >&2
+    exit 1
+  fi
   make modules
   if [[ ! -f "$NGX_ROOT/objs/ngx_http_rn_module.so" ]]; then
     echo "dynamic module was not produced: $NGX_ROOT/objs/ngx_http_rn_module.so" >&2
@@ -104,6 +108,10 @@ if [[ "$DYNAMIC" == "--dynamic" ]]; then
   echo "Built dynamic module: $NGX_ROOT/objs/ngx_http_rn_module.so"
 else
   "$CONFIG" --add-module="$RN_DIR" "${FLAGS[@]}"
+  if ! grep -Eq -- '(^|[[:space:]])-Werror([[:space:]]|$)' "$NGX_ROOT/objs/Makefile"; then
+    echo "nginx build is not treating compiler warnings as errors" >&2
+    exit 1
+  fi
   make -j
   if [[ ! -x "$NGX_ROOT/objs/nginx" ]]; then
     echo "nginx binary was not produced: $NGX_ROOT/objs/nginx" >&2
