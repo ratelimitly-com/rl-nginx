@@ -116,13 +116,16 @@ Before putting traffic through the module:
 7. Confirm both allow and deny decisions are visible in logs.
 8. Choose and document the desired `ratelimitly_fail` behavior.
 
-## Local Integration Test
+## Internal Full-Stack Test
 
-The local integration harness starts the Rust RateLimitly server, registers a
-temporary tenant, serves local DNS, starts nginx, and checks allow/deny traffic:
+The required public integration suite is documented in the root README and
+does not need a RateLimitly server. Maintainers with access to the private
+`../rl` workspace can additionally start the Rust RateLimitly server, register
+a temporary tenant, serve local DNS, start nginx, and check allow/deny traffic:
 
 ```sh
-./integration-tests/test.sh
+./integration-tests/internal-full-stack.sh
 ```
 
-It intentionally does not use the obsolete Python server.
+This internal harness is optional and intentionally does not use the obsolete
+Python server.

@@ -8,10 +8,11 @@ RN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 usage() {
   cat <<EOF
 Usage:
-  integration-tests/test.sh [SECRET]
-  integration-tests/test.sh -h|--help
+  integration-tests/internal-full-stack.sh [SECRET]
+  integration-tests/internal-full-stack.sh -h|--help
 
-Runs a local rl-nginx integration test from the rl-nginx repo root:
+Runs the optional internal rl-nginx full-stack test from the repo root.
+Local mode requires the private ../rl workspace and:
   1. builds rl-c-client, rlnet if needed, ratelimitly-server, and nginx;
   2. starts ratelimitly-server from ../rl/implementations/rust by default;
   3. registers a temporary tenant;
@@ -20,7 +21,7 @@ Runs a local rl-nginx integration test from the rl-nginx repo root:
   6. verifies an allow path and a rate-limited deny path.
 
 External-server mode:
-  EXTERNAL_SERVER=1 DOMAIN=<tenant-domain> TENANT_KEY=<rl-aes/rl-cookie key> integration-tests/test.sh
+  EXTERNAL_SERVER=1 DOMAIN=<tenant-domain> TENANT_KEY=<rl-aes/rl-cookie key> integration-tests/internal-full-stack.sh
 
 This skips local Rust server startup, tenant registration, and local DNS. It
 uses the configured DNS resolver to resolve _ratelimitly._udp.\${DOMAIN}.

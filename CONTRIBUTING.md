@@ -22,10 +22,10 @@ export RCLIENT_DIR=/path/to/rl-c-client
 Run from the `rl-nginx` repo root:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/public.sh integration-tests/lifecycle-regressions.sh integration-tests/internal-full-stack.sh; do
   bash -n "$script"
 done
-python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
+python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/local_dns_server.py"), pathlib.Path("integration-tests/test_local_dns_server.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
 sh -n config
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
 git diff --check
@@ -33,13 +33,23 @@ git diff --check
 
 ## Integration Tests
 
-Local integration tests use the Rust RateLimitly server from the `rl` repo:
+Run the required integration suite with public dependencies and local fixtures:
 
 ```sh
-./integration-tests/test.sh
+./integration-tests/public.sh
 ```
 
-Do not use the obsolete Python RateLimitly server for validation.
+This does not require a RateLimitly server, tenant, credential, or private
+repository.
+
+Maintainers with access to the private `rl` workspace may optionally run the
+internal full-stack harness:
+
+```sh
+./integration-tests/internal-full-stack.sh
+```
+
+Do not use the obsolete Python RateLimitly server for internal validation.
 
 External-server integration tests can be run when you already have a tenant
 domain and API key:
@@ -48,7 +58,7 @@ domain and API key:
 EXTERNAL_SERVER=1 \
 DOMAIN=<tenant-domain> \
 TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
-./integration-tests/test.sh
+./integration-tests/internal-full-stack.sh
 ```
 
 ## Documentation Changes

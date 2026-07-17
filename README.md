@@ -178,7 +178,7 @@ Operational guidance is in [docs/operations.md](docs/operations.md).
 Syntax and development build checks:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-config.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-config.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/public.sh integration-tests/lifecycle-regressions.sh integration-tests/internal-full-stack.sh; do
   bash -n "$script"
 done
 python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/local_dns_server.py"), pathlib.Path("integration-tests/test_local_dns_server.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
@@ -194,15 +194,18 @@ The numeric unit checks every 32-bit wire boundary before a value can be
 narrowed; the SRV-record unit injects a failure at every allocation point and
 requires the adapter to return no partial records and retain no allocations.
 
-Public timeout, aborted-client, and steering-rebind lifecycle regressions:
+Required public integration suite:
 
 ```sh
-./integration-tests/lifecycle-regressions.sh
+./integration-tests/public.sh
 ```
 
-Each case requires the original nginx worker to survive and serve a successful
-follow-up request, validates a reload, and requires a clean worker shutdown.
-Artifacts are written under `integration-tests/artifacts/lifecycle/`.
+This uses only the locked public C-client responder, local DNS fixture, pinned
+nginx source, and this module. It covers timeout, aborted-client,
+steering-rebind, and response-cardinality behavior. Each case requires the
+original nginx worker to survive and serve a successful follow-up request,
+validates a reload, and requires a clean worker shutdown. Artifacts are written
+under `integration-tests/artifacts/lifecycle/`.
 
 Run the lifecycle and response-cardinality gates three times with ASan and
 UBSan instrumentation in nginx, this module, and the C client:
@@ -211,23 +214,25 @@ UBSan instrumentation in nginx, this module, and the C client:
 ./tools/sanitized-lifecycle.sh
 ```
 
-Full integration test with the local Rust RateLimitly server:
+Optional internal full-stack test with the private Rust RateLimitly server:
 
 ```sh
-./integration-tests/test.sh
+./integration-tests/internal-full-stack.sh
 ```
 
-Full integration test against an existing RateLimitly server and tenant:
+Optional full-stack test against an existing RateLimitly server and tenant:
 
 ```sh
 EXTERNAL_SERVER=1 \
 DOMAIN=c-5107024729143590554.p0.ratelimitly.com \
 TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
-./integration-tests/test.sh
+./integration-tests/internal-full-stack.sh
 ```
 
-The integration harness uses the Rust server implementation for local tests.
-Do not use the obsolete Python server for validation.
+The internal harness is not a public contributor requirement. Its local mode
+requires the private `../rl` workspace and tenant-management tooling. It uses
+the Rust server implementation; do not use the obsolete Python server for
+validation.
 
 ## Status
 
