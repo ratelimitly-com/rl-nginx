@@ -10,6 +10,19 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+        module_mode:
+          - static
+          - dynamic
 
     steps:
       - name: Check out rl-nginx
@@ -32,13 +45,26 @@ jobs:
       - name: Unit tests
         run: make unit
 
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
       - name: Build nginx module
-        run: make build
+        run: |
+          if [[ "${{ matrix.module_mode }}" == "dynamic" ]]; then
+            make build BUILD_FLAGS="--dynamic --compat --clean --debug"
+          else
+            make build BUILD_FLAGS="--clean --debug"
+          fi
 
       - name: Configuration tests
+        if: matrix.module_mode == 'static'
         run: make config-test
 
       - name: Public integration suite
+        if: matrix.module_mode == 'static'
         run: make public-test
 
       - name: Check whitespace
