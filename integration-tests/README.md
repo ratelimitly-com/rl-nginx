@@ -220,7 +220,7 @@ published tenant SRV record instead of starting a local Rust server:
 
 ```sh
 EXTERNAL_SERVER=1 \
-DOMAIN=c-5107024729143590554.p0.ratelimitly.com \
+DOMAIN='<tenant-domain>' \
 TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
 ./integration-tests/internal-full-stack.sh
 ```
@@ -441,14 +441,17 @@ Common overrides:
 | `PARALLELISM` | `20` local, `5` external | `xargs -P` curl concurrency. |
 | `CLIENT_TIMEOUT_SEC` | `30` | curl max-time for readiness and burst requests. |
 
-The optional first positional argument overrides the shared Ratelimitly server
-secret:
+The optional first positional argument overrides only the synthetic local
+Ratelimitly server's shared secret:
 
 ```sh
 ./integration-tests/internal-full-stack.sh rl-secret...
 ```
 
 The same value can also be supplied with `SECRET`.
+Use the built-in test value for an isolated local run; never put a production
+secret in this argument because command arguments can be exposed through shell
+history and process inspection.
 
 ## Artifacts
 
@@ -473,7 +476,12 @@ This directory is ignored by git. Important files:
 | `deny.codes` | HTTP status codes from the `/deny` burst. |
 | `results.tsv` | Per-scenario status summary. |
 
-Artifacts are cleaned at the start of each run.
+The harness applies `umask 077` and mode `0700` to the artifact directory
+because `test.log`, `tenant-register.log`, and `nginx.conf` contain the
+generated tenant key. Artifacts are cleaned at the start of each run, but the
+ignored directory is not a durable secret store: use only temporary test
+credentials, do not publish it as a CI artifact, and remove it when the
+investigation is complete.
 
 ## Troubleshooting
 

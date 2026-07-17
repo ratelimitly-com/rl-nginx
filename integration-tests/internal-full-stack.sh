@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 shopt -s inherit_errexit
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -65,6 +66,7 @@ fi
 
 ARTIFACT_DIR="${SCRIPT_DIR}/artifacts"
 mkdir -p "${ARTIFACT_DIR}"
+chmod 700 "${ARTIFACT_DIR}"
 find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 -type f -delete
 
 MASTER_LOG="${ARTIFACT_DIR}/test.log"

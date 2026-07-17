@@ -1,130 +1,329 @@
 # Operating rl-nginx
 
-This guide covers runtime expectations for operating the RateLimitly nginx
-module.
+This runbook describes the behavior operators must account for when deploying,
+warming, observing, recovering, and rolling back the RateLimitly nginx module.
+Read [Configuring rl-nginx](configuration.md) first for identity, credential,
+resolver, and failure-policy security guidance.
 
-## DNS Discovery
+## Runtime contract
 
-The module discovers RateLimitly servers through DNS SRV:
+- Each nginx worker creates its own UDP client lazily, on that worker's first
+  protected request. Starting nginx, passing `nginx -t`, or reaching an
+  unprotected health endpoint does not prove RateLimitly readiness.
+- The client discovers RateLimitly servers through tenant-specific DNS SRV
+  records. There is no directive for a fixed server address.
+- A valid allow continues nginx request processing. A valid RateLimitly deny,
+  a failed guard, or a nonzero resource deficit returns `429 Too Many
+  Requests`, regardless of the failure policy.
+- DNS, transport, timeout, and invalid-response paths follow
+  `ratelimitly_fail open|close`. Fail-open continues nginx processing;
+  fail-close returns `429`.
+- The current integration disables C-client request retries. A request waits at
+  most the configured `ratelimitly_timeout` for its single attempt.
+- Internal nginx failures such as request-pool allocation or event-registration
+  failure can return `500`. `ratelimitly_fail` is not a blanket conversion of
+  every nginx failure.
+
+Because allow and fail-open both continue the nginx pipeline, the final HTTP
+status can still come from an upstream or another nginx module. Because a real
+deny and a fail-closed dependency error both return `429`, HTTP status alone
+cannot distinguish them. Use the module log markers described below.
+
+## DNS discovery and network path
+
+The module queries:
 
 ```text
 _ratelimitly._udp.<tenant-domain>
 ```
 
-The SRV target must resolve to an address nginx can reach over UDP. A typical
-record looks like:
+Each SRV target must resolve to a reachable A or AAAA address. Its name encodes
+the RateLimitly server ID used to validate and route responses. This synthetic
+shape uses the reserved, non-working `example.invalid` domain:
 
 ```text
-10 50 8080 s-396140499959812.c-5107024729143590554.p0.ratelimitly.com.
+10 50 8080 s-396140499959812.tenant.example.invalid.
 ```
 
-The target host encodes the RateLimitly server id. The C client uses that id to
-validate and route protocol responses.
-
-Nginx requires a `resolver` directive when runtime DNS resolution is needed:
+nginx must have a trusted runtime resolver:
 
 ```nginx
 resolver 127.0.0.53 valid=30s ipv6=off;
 resolver_timeout 2s;
 ```
 
-Use `ipv6=off` when your SRV targets are IPv4-only.
+Use the resolver address and IPv4/IPv6 policy that are actually reachable from
+nginx workers. Permit DNS traffic to that resolver and UDP traffic to every
+address/port returned by the SRV and address lookups. `ratelimitly_bind`, when
+set, chooses only the local UDP source address; it is not a server address.
 
-## Startup And Warmup
+Check discovery from the same network namespace as nginx:
 
-The first protected request may trigger DNS discovery and client warmup. During
-that window, fail-closed configurations can return `429` before a real
-RateLimitly decision has been received.
+```sh
+TENANT_DOMAIN='replace-with-tenant-domain'
+SRV_TARGET='replace-with-target-from-srv-answer'
+dig SRV "_ratelimitly._udp.${TENANT_DOMAIN}"
+dig A "${SRV_TARGET}"
+dig AAAA "${SRV_TARGET}"
+```
 
-For production rollouts:
+Do not treat a successful lookup from an administrator laptop or host namespace
+as proof that a containerized worker has the same resolver or egress path.
 
-- configure an unprotected health endpoint for nginx readiness,
-- send a protected warmup request before shifting traffic, or
-- use deployment health checks that verify `rn: result success=...` appears in
-  the nginx error log.
+### DNS failure and recovery
 
-The integration harness follows this pattern: `/health` checks nginx, then
-`/allow` warms the RateLimitly client before measured traffic starts.
+No SRV answer, an unresolvable target, and a resolver timeout all follow the
+configured failure policy. During initial discovery the first requests can log
+`async_start_failed ... rc=-5(dns)` while the worker has no usable cached
+target.
 
-## Failure Modes
+After DNS is repaired, nginx and the C client refresh their state and the same
+worker can recover without a reload. Wait through the configured positive or
+negative cache/timeout interval, retry a protected probe, and require a valid
+decision. The public suite proves same-worker recovery for missing SRV,
+unresolvable target, and DNS timeout cases under both failure policies. A reload
+is required when the nginx configuration itself is wrong, such as a missing or
+misaddressed `resolver`; remember that replacement workers start cold.
 
-`ratelimitly_fail` controls behavior when no valid RateLimitly decision is
-available.
+## Startup, reload, and warmup
+
+Use this sequence for a new deployment and every nginx reload:
+
+1. Run `nginx -t` with the exact configuration, module artifact, include files,
+   and runtime user intended for deployment.
+2. Start or reload nginx and verify an unprotected endpoint. This proves only
+   nginx process readiness.
+3. Send a low-impact request through a protected canary location. Retry while
+   DNS discovery is in progress.
+4. Require both the expected HTTP outcome and a new valid-decision log marker,
+   such as `rn: result success=... server_id=...`. A fail-open `2xx` or a
+   fail-closed `429` without that marker is not a successful warmup.
+5. Where the test tenant supports it, exercise one known-allow and one
+   known-deny request. Confirm the deny is a valid RateLimitly decision rather
+   than a fail-closed dependency error.
+6. Repeat until every nginx worker has processed a valid decision. Client and
+   DNS state are worker-local; one warmup request may reach only one worker.
+   Use the nginx PID prefix on each decision log line to distinguish workers.
+7. Shift traffic gradually while watching dependency errors, `429` rates,
+   upstream status, worker restarts, and latency.
+
+Keep a deliberately unprotected liveness/recovery endpoint available when the
+service must remain diagnosable during a RateLimitly outage. Do not expose
+sensitive state through that endpoint.
+
+## Failure-policy behavior
+
+Set the policy explicitly at `http` scope:
 
 ```nginx
 ratelimitly_fail open;
+# or
 ratelimitly_fail close;
 ```
 
-Common causes:
+| Event | Fail-open | Fail-close |
+| --- | --- | --- |
+| Valid allow | Continue nginx processing | Continue nginx processing |
+| Valid RateLimitly/guard/resource deny | `429` | `429` |
+| No usable DNS target | Continue nginx processing | `429` |
+| UDP send or response timeout | Continue nginx processing | `429` |
+| Invalid/authentication-failing/protocol response with no valid decision | Continue nginx processing | `429` |
+| Invalid dynamic rate/threshold, empty service, or C-client request-construction error | Continue nginx processing | `429` |
+| Internal nginx allocation/event failure | May return `500` | May return `500` |
 
-- missing or invalid DNS SRV records
-- SRV target address lookup failure
-- UDP egress blocked by host or network policy
-- timeout too short for the environment
-- invalid API key
-- incompatible client/server protocol versions
+Fail-open preserves availability but bypasses this enforcement layer during a
+dependency error. Confirm that the upstream can absorb the resulting traffic.
+Fail-close preserves the enforcement boundary but can deny all legitimate
+traffic on a protected location. Confirm that the service and incident process
+can tolerate that dependency. Test the chosen behavior under a forced outage
+before production rollout.
 
-With `ratelimitly_fail open`, nginx continues processing the request.
-With `ratelimitly_fail close`, nginx returns `429`.
+Do not increase `ratelimitly_timeout` merely to hide DNS or network failures.
+Measure normal and tail decision latency, leave an explicit operational margin,
+and keep the value within the application's request-latency budget.
 
-## Observability
+## Observability and log handling
 
-Enable module debug logs during integration:
+The module currently exposes log-based diagnostics, not Prometheus counters or
+a module-specific health endpoint. For a bounded integration or incident
+window, enable both the module flag and an nginx error-log level that records
+debug entries:
 
 ```nginx
 error_log /var/log/nginx/error.log debug;
 ratelimitly_debug on;
 ```
 
-Useful log markers:
+The nginx binary must support debug logging; verify `nginx -V` includes
+`--with-debug`. Module warnings can still appear at higher log levels, but the
+decision and discovery markers below use debug-level entries.
 
-```text
-rn: SRV target=...
-rn: addr=...
-rn: result success=1 server_id=...
-rn: result success=0 server_id=...
-rn: result error status=...
-rn: async_start_failed ...
-```
+Useful markers include:
 
-Interpretation:
+| Marker | Meaning and action |
+| --- | --- |
+| `rn: client cfg ...` | Worker-local client initialization. It includes tenant, key ID, and auth type, but not the full credential. |
+| `rn: SRV target=...` / `rn: addr=...` | Discovery produced a server target/address. This does not yet prove a valid response. |
+| `rn: async_start_failed ... rc=-5(dns)` | The request could not start because the worker had no usable discovered target. Check resolver answers/cache and retry after recovery. |
+| `rn: udp_send failed ...` | The local UDP send failed. Check bind address, routing, socket/resource pressure, and egress policy. |
+| `rn: result error status=-2` | No valid response completed before the request deadline. A dropped, malformed, wrong-request-ID, or otherwise unusable response can also end as a timeout. |
+| `rn: result success=1 server_id=...` | A valid response carried a positive success flag. Correlate it with HTTP/access logs because guard/resource checks and later nginx processing still determine the final status. |
+| `rn: result success=0 server_id=...` | A valid response carried a negative success flag and is rejected with `429`. |
+| `rn: response_cardinality_mismatch ...` | A validly decoded response had the wrong guard/resource count. Treat it as a protocol/compatibility error; the failure policy decides the request. |
+| `rn: bypass ... reason=no_resolver` | A protected request could not initialize because no nginx resolver was available in its configuration context. |
+| `rn: steering_feedback=0 (rebind pending)` | The server requested a deferred UDP source-port rebind. This is normal steering behavior, not an outage by itself. |
 
-- `success=1`: RateLimitly allowed the request.
-- `success=0`: RateLimitly denied the request.
-- `status=-2`: timeout from `rl-c-client`.
-- `status=-5` or `async_start_failed ... dns`: DNS/client discovery problem.
+Numeric C-client statuses are `-1` I/O, `-2` timeout, `-3` protocol, `-4`
+authentication, `-5` DNS, `-6` configuration, and `-7` allocation failure.
+The exact visible terminal status depends on where a failure occurs. For
+example, a malformed datagram can be discarded and ultimately appear as `-2`
+when no valid response arrives before the deadline.
 
-## Secret Handling
+Debug logging can be high-volume and includes request URIs through nginx log
+context, tenant names, key IDs, resolver targets, target addresses, server IDs,
+and hashed bucket/service identifiers. Restrict log access, retention, and
+support-bundle collection accordingly. Disable debug mode after the diagnostic
+window; normal access/error logging and external log-derived metrics should
+carry ongoing production monitoring.
 
-`ratelimitly_auth_key` is a credential. Treat it like an API key:
+## Credential handling
 
-- inject it through templating or secret management,
-- avoid committing real keys,
-- rotate keys if they appear in logs, tickets, or public files.
+`ratelimitly_auth_key` is loaded into each worker and must be treated as a
+production credential:
 
-## Rollout Checklist
+- render it from a secret manager into a root- or nginx-master-readable include
+  file outside the repository;
+- apply least-privilege ownership and mode to the file and its parent
+  directory;
+- remember that `nginx -T` prints included configuration, including the key;
+- do not pass the key on a command line, paste it into tickets, or store it in
+  general-purpose deployment logs;
+- protect core dumps and process-memory access according to the host threat
+  model;
+- rotate the key in the RateLimitly control plane after suspected exposure,
+  deploy the replacement, warm the new workers, and revoke the old key.
 
-Before putting traffic through the module:
+The optional internal full-stack harness writes a generated tenant key to its
+terminal/master log and tenant-registration log, then writes it into the nginx
+configuration under `integration-tests/artifacts/`. The harness uses a private
+umask and artifact-directory mode, but the directory is git-ignored rather than
+a durable secret store. Use only temporary test credentials, do not upload the
+directory as a CI artifact, and remove it after the investigation.
 
-1. Build against the nginx version you will run.
-2. Confirm nginx can load the module or start the statically built binary.
-3. Verify `_ratelimitly._udp.<tenant-domain>` returns usable SRV records.
-4. Verify SRV targets resolve to reachable IP addresses.
-5. Run a low-rate protected test route.
-6. Confirm both allow and deny decisions are visible in logs.
-7. Choose and document the desired `ratelimitly_fail` behavior.
+## Troubleshooting
 
-## Internal Full-Stack Test
+### Configuration does not load
 
-The required public integration suite is documented in the root README and
-does not need a RateLimitly server. Maintainers with access to the private
-`../rl` workspace can additionally start the Rust RateLimitly server, register
-a temporary tenant, serve local DNS, start nginx, and check allow/deny traffic:
+Run the real binary and configuration:
 
 ```sh
-./integration-tests/internal-full-stack.sh
+nginx -t -c /path/to/nginx.conf
 ```
 
-This internal harness is optional and intentionally does not use the obsolete
-Python server.
+Check directive scope, unresolved example placeholders, credential syntax,
+module loading, include-file permissions, and resolver syntax. Static invalid
+rates and thresholds are rejected at load time. A dynamically rendered invalid
+value is instead handled per request under the failure policy.
+
+### Protected traffic has no valid-decision marker
+
+1. Confirm the request actually enters a location with a `ratelimitly` rule.
+   Some content-handler configurations can bypass the access phase; the public
+   fixtures deliberately use `try_files`, not a direct `return 200`, on their
+   protected locations.
+2. Confirm `ratelimitly_debug on` and an effective debug error-log level.
+3. Look first for `bypass`, `async_start_failed`, `SRV target`, `addr`,
+   `udp_send failed`, and `result error` markers.
+4. Verify SRV and A/AAAA resolution from the worker network namespace.
+5. Verify UDP routing/firewall policy and the configured local bind address.
+6. Check tenant/key/server compatibility. A syntactically valid but wrong key
+   may lead to discarded responses and then a timeout.
+
+### Requests time out
+
+`status=-2` proves only that no valid decision completed before the deadline.
+Check whether the SRV target was discovered, whether a UDP send was logged,
+whether the target is reachable, and whether responses have the expected
+server ID, request ID, authentication, and protocol shape. Increase the timeout
+only after confirming the path is healthy but legitimately slower than the
+configured budget.
+
+### Unexpected `429`
+
+Correlate the request with module logs:
+
+- `result success=0` indicates a valid negative decision;
+- `result success=1` can still be rejected by guard/resource details;
+- `result error`, `async_start_failed`, or cardinality mismatch under
+  fail-close indicates a dependency/protocol failure rather than a quota deny;
+- no module marker may mean another nginx module or the upstream produced the
+  response.
+
+### Dependency recovered but traffic did not
+
+Retry after the DNS cache/timeout interval and look for a new valid result from
+the same worker. Verify that DNS now returns the current target and address and
+that UDP is bidirectionally reachable. Reload only when configuration or worker
+state actually requires it; after reload, warm every replacement worker again.
+
+## Rollout and rollback checklist
+
+Before shifting production traffic:
+
+1. Pin and verify the supported nginx and C-client revisions described in
+   [Compatibility](compatibility.md).
+2. Build the deployment artifact for the target nginx ABI and environment as
+   described in [Building and installing rl-nginx](build.md).
+3. Validate the exact configuration, credential include, trusted resolver, DNS
+   records, target addresses, UDP policy, and optional local bind.
+4. Choose and record the failure policy, timeout, monitoring thresholds,
+   incident owner, and rollback trigger.
+5. Test known allow, known deny, RateLimitly outage, and DNS failure/recovery in
+   staging under that policy.
+6. Canary the artifact/configuration, warm every worker, and verify valid
+   decisions before increasing traffic.
+7. Keep the previous module/package and configuration available. Roll back both
+   as one reviewed deployment unit, run `nginx -t`, reload, and verify the
+   replacement workers and unprotected health path.
+
+During an incident, preserve a bounded redacted log window, record whether the
+policy caused bypass or denial, verify worker survival, repair the dependency,
+and prove a valid decision after recovery. Do not publish raw configuration,
+`nginx -T` output, or internal-test artifacts.
+
+## Public and internal validation boundary
+
+The required public gate is:
+
+```sh
+make check BUILD_FLAGS="--clean"
+```
+
+It uses the locked public C-client test responder, strict local DNS fixture,
+pinned nginx source, and this module. It needs no RateLimitly server, tenant,
+credential, or private repository. It verifies lifecycle cleanup, exact
+allow/deny enforcement, fail-open/fail-close outages, DNS failure and
+same-worker recovery, timeouts, aborted clients, steering rebinds, guards,
+malformed responses, response cardinality, reload, and clean shutdown. The
+responder's `--listen` option exists only to bind that local UDP test fixture;
+it is not a RateLimitly server option or a deployable server-address feature.
+
+Run the sanitizer lifecycle gate separately when changing request ownership or
+asynchronous behavior:
+
+```sh
+make sanitizers
+```
+
+The optional full-stack gate is:
+
+```sh
+make test-internal
+```
+
+Its default local mode requires the private sibling `rl` workspace and tenant
+management tooling. Its external mode can target an existing test server and
+tenant. It is not required for public contributors or the public release gate,
+and its credential-bearing artifacts require the handling described above.
+See the [integration-test guide](../integration-tests/README.md) for exact
+commands, prerequisites, environment variables, and artifact locations.

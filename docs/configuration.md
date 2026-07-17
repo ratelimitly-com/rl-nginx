@@ -176,9 +176,9 @@ ratelimitly_fail close;
 The default is `ratelimitly_fail open`, but production configurations should
 set the policy explicitly:
 
-- `open` continues normal nginx processing when DNS, UDP, timeout, protocol,
-  rendered-value, or internal errors prevent a valid decision. It preserves
-  availability but can bypass rate-limit enforcement during an outage.
+- `open` continues normal nginx processing when DNS, UDP, timeout, protocol, or
+  rendered-value errors prevent a valid decision. It preserves availability
+  but can bypass rate-limit enforcement during an outage.
 - `close` returns `429 Too Many Requests` for those errors. It preserves the
   enforcement boundary but can deny legitimate traffic when RateLimitly or its
   dependencies are unavailable.
@@ -188,6 +188,10 @@ on a critical location merely as a substitute for monitoring. Do not use
 fail-close without validating that the application can tolerate an enforcement
 dependency outage. Keep health and recovery endpoints deliberately outside the
 protected location when they must remain available.
+
+Internal nginx failures such as request-pool allocation or event-registration
+failure can still return `500`; the failure policy does not replace every nginx
+error path. See [Operations](operations.md) for the executable behavior matrix.
 
 Dynamic rates and thresholds make this decision especially important: if raw
 client input can render an invalid value, an attacker may deliberately trigger
