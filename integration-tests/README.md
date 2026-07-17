@@ -108,6 +108,22 @@ requests send a post-response `latency_report` with the expected report count,
 and denied requests do not report latency. Each case still requires worker
 survival, a valid follow-up, reload, and clean shutdown.
 
+Run the malformed-protocol matrix separately while working on response parsing
+and fail-policy behavior:
+
+```sh
+./integration-tests/lifecycle-regressions.sh protocol-policy
+```
+
+The matrix runs invalid response authentication, truncated response packets, and
+wrong response request IDs under both `ratelimitly_fail close` and
+`ratelimitly_fail open`. Each case requires the configured fail-policy result
+without a transport error, verifies the C-client completed through an error
+callback instead of accepting the malformed response as valid, then verifies
+worker survival, recovery through a healthy responder, reload, and clean
+shutdown. Malformed guard/resource counts and empty success arrays are covered
+by the response-cardinality matrix below.
+
 Run the complete gate repeatedly with ASan and UBSan instrumentation in both
 the C client and nginx/module code:
 
