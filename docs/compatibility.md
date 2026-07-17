@@ -41,7 +41,9 @@ the fetch helper consume that lock and fail if the tag resolves elsewhere.
   do not imply compatibility with every distribution package layout or nginx
   vendor build.
 - Operators must reproduce the public behavioral tests with their production
-  nginx configure options before rollout.
+  nginx configure options before rollout. The required public entrypoint is
+  `./integration-tests/public.sh`; it needs no RateLimitly server, tenant,
+  credential, or private repository.
 
 ## Release validation gates
 

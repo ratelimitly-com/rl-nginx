@@ -1,14 +1,23 @@
-# rl-nginx integration test
+# rl-nginx integration tests
 
-This directory contains an end-to-end local integration test for the nginx
-Ratelimitly module. The test replaces the older manual flow of starting nginx,
-running `tests/burst-test.sh`, and inspecting rates by hand.
+This directory has two deliberately separate test paths: the required public
+suite backed by deterministic public fixtures, and an optional internal
+full-stack harness for maintainers with access to the private `rl` workspace.
 
 ## Public deterministic regressions
 
-`lifecycle-regressions.sh` uses only public dependencies: the locked
-`rl-c-client` test responder, the local DNS fixture, nginx, and this module. It
-does not start the private RateLimitly server or register a tenant.
+Run the complete required public suite from the repository root:
+
+```sh
+./integration-tests/public.sh
+```
+
+`public.sh` and its lower-level `lifecycle-regressions.sh` runner use only
+public dependencies: the locked `rl-c-client` test responder, the local DNS
+fixture, nginx, and this module. It does not start a RateLimitly server,
+register a tenant, read a credential, or access `../rl`. If the locked C-client
+checkout is absent, the public entrypoint fetches its released source through
+`tools/fetch-rl-c-client.sh`.
 
 Before running the socket-level cases, test the portable DNS, numeric, and
 SRV-record helpers directly:
@@ -95,7 +104,11 @@ Diagnostic artifacts are preserved under
 `integration-tests/artifacts/lifecycle/<case>/`; the commands above are the
 passing acceptance gate for lifecycle changes.
 
-The test builds and runs the real local components:
+## Internal full-stack harness (optional)
+
+`internal-full-stack.sh` is not part of the public contributor or release
+gate. Its local mode requires access to the private `rl` repository and tenant
+management tooling. The harness builds and runs these local components:
 
 - `rl-c-client`, used by the nginx module, from the locked `./_deps` checkout
   when present, with a sibling development checkout as a fallback.
@@ -110,19 +123,22 @@ The test builds and runs the real local components:
 Run from the `rl-nginx` repo root:
 
 ```sh
-./integration-tests/test.sh
+./integration-tests/internal-full-stack.sh
 ```
 
 If the default ports are already in use, override them:
 
 ```sh
-DNS_PORT=53536 RL_SERVER_PORT=39080 NGINX_PORT=18088 ./integration-tests/test.sh
+DNS_PORT=53536 \
+RL_SERVER_PORT=39080 \
+NGINX_PORT=18088 \
+./integration-tests/internal-full-stack.sh
 ```
 
 Show script help:
 
 ```sh
-./integration-tests/test.sh --help
+./integration-tests/internal-full-stack.sh --help
 ```
 
 ## External server run
@@ -134,7 +150,7 @@ published tenant SRV record instead of starting a local Rust server:
 EXTERNAL_SERVER=1 \
 DOMAIN=c-5107024729143590554.p0.ratelimitly.com \
 TENANT_KEY='<rl-aes-or-rl-cookie-key>' \
-./integration-tests/test.sh
+./integration-tests/internal-full-stack.sh
 ```
 
 External mode still builds `rl-c-client` and nginx locally, but skips local
@@ -175,8 +191,8 @@ Relative to `rl-nginx`, the Rust server source is expected at:
 Override paths with environment variables when needed:
 
 ```sh
-RL_ROOT=/path/to/rl ./integration-tests/test.sh
-RL_RUST_ROOT=/path/to/rl/implementations/rust ./integration-tests/test.sh
+RL_ROOT=/path/to/rl ./integration-tests/internal-full-stack.sh
+RL_RUST_ROOT=/path/to/rl/implementations/rust ./integration-tests/internal-full-stack.sh
 ```
 
 ## Prerequisites
@@ -205,8 +221,9 @@ The test also expects the tenant-management Elixir CLI source under
 
 ## What the script does
 
-The script is intentionally self-contained. It does not require an already
-running Ratelimitly server, nginx instance, or local DNS setup.
+The internal script orchestrates its required processes. It does not require
+an already running Ratelimitly server, nginx instance, or local DNS setup, but
+it does require the private source and tenant-management paths described above.
 
 1. Cleans previous integration-test artifact files.
 2. Builds `rl-c-client` with `make clean` and `make`.
@@ -355,7 +372,7 @@ The optional first positional argument overrides the shared Ratelimitly server
 secret:
 
 ```sh
-./integration-tests/test.sh rl-secret...
+./integration-tests/internal-full-stack.sh rl-secret...
 ```
 
 The same value can also be supplied with `SECRET`.
@@ -392,7 +409,10 @@ Artifacts are cleaned at the start of each run.
 Use different local ports:
 
 ```sh
-DNS_PORT=53536 RL_SERVER_PORT=39081 NGINX_PORT=18089 ./integration-tests/test.sh
+DNS_PORT=53536 \
+RL_SERVER_PORT=39081 \
+NGINX_PORT=18089 \
+./integration-tests/internal-full-stack.sh
 ```
 
 ### Missing `dig`
@@ -456,6 +476,8 @@ The `tests/` directory still contains lower-level manual helpers:
 - `tests/nginx.conf`
 - `tests/smoke-test.sh`
 
-The integration test reuses `tests/build-nginx.sh`, but generates its own
+The internal full-stack test reuses `tests/build-nginx.sh`, but generates its own
 nginx config, tenant key, DNS records, and runtime processes. Use
-`integration-tests/test.sh` when you want a reproducible local end-to-end check.
+`integration-tests/public.sh` for the required contributor gate and
+`integration-tests/internal-full-stack.sh` only for optional private full-stack
+validation.
