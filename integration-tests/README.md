@@ -94,6 +94,20 @@ worker before reload and clean shutdown. DNS timeout recovery waits longer than
 NXDOMAIN-style failures because nginx may keep the timed-out resolver state
 briefly before issuing a fresh query.
 
+Run the guard/latency matrix separately while working on guard decisions or
+post-response latency reporting:
+
+```sh
+./integration-tests/lifecycle-regressions.sh guard-latency
+```
+
+The matrix covers a passing guard, a denying guard, and two guards attached to
+one protected location. It verifies the public responder sees the expected
+guard/resource request shape, guard denial returns `429`, successful guarded
+requests send a post-response `latency_report` with the expected report count,
+and denied requests do not report latency. Each case still requires worker
+survival, a valid follow-up, reload, and clean shutdown.
+
 Run the complete gate repeatedly with ASan and UBSan instrumentation in both
 the C client and nginx/module code:
 
