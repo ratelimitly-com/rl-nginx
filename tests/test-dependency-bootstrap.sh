@@ -10,7 +10,7 @@ fail() {
   exit 1
 }
 
-for command in cp git grep mkdir mktemp rm; do
+for command in cp env git grep mkdir mktemp rm; do
   command -v "${command}" >/dev/null 2>&1 || fail "missing command: ${command}"
 done
 
@@ -125,7 +125,7 @@ grep -Fq "rl-c-client lock mismatch" "${TEST_ROOT}/wrong-commit.out" \
 # the exact lock. Explicit RCLIENT_DIR remains an intentional escape hatch.
 write_lock v1.2.3 "${LOCKED_COMMIT}"
 mkdir -p "${TEST_ROOT}/rl-c-client"
-RESOLVED_DEFAULT="$("${FIXTURE_ROOT}/tools/resolve-rl-c-client.sh" 2>/dev/null)"
+RESOLVED_DEFAULT="$(env -u RCLIENT_DIR "${FIXTURE_ROOT}/tools/resolve-rl-c-client.sh" 2>/dev/null)"
 [[ "${RESOLVED_DEFAULT}" == "${FIXTURE_ROOT}/_deps/rl-c-client" ]] \
   || fail "default resolver selected an implicit checkout: ${RESOLVED_DEFAULT}"
 [[ "$(git -C "${RESOLVED_DEFAULT}" rev-parse HEAD)" == "${LOCKED_COMMIT}" ]] \
