@@ -59,6 +59,10 @@ jobs:
             make build BUILD_FLAGS="--clean --debug"
           fi
 
+      - name: Dynamic module relocation test
+        if: matrix.module_mode == 'dynamic'
+        run: make dynamic-relocation-test
+
       - name: Configuration tests
         if: matrix.module_mode == 'static'
         run: make config-test

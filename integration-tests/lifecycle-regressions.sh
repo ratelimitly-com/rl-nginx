@@ -17,6 +17,7 @@ survival and a successful follow-up request.
 Environment overrides:
   RCLIENT_DIR       C-client checkout (default: locked ./_deps checkout)
   NGINX_SRC         nginx source tree (default: ./upstream-nginx)
+  NGINX_LOAD_MODULE absolute dynamic-module path to load (default: none)
   DNS_PORT          local DNS port (default: 15353)
   RESPONDER_PORT    UDP responder port (default: 19080)
   NGINX_PORT        nginx HTTP port (default: 18098)
@@ -53,6 +54,7 @@ esac
 RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/_deps/rl-c-client}"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_SRC}/objs/nginx}"
+NGINX_LOAD_MODULE="${NGINX_LOAD_MODULE:-}"
 RESPONDER_BIN="${RESPONDER_BIN:-${RCLIENT_DIR}/bin/r_test_responder}"
 DNS_SERVER="${DNS_SERVER:-127.0.0.1}"
 DNS_PORT="${DNS_PORT:-15353}"
@@ -193,6 +195,10 @@ prepare_binaries() {
 
   [[ -x "${RESPONDER_BIN}" ]] || fail "responder binary not found: ${RESPONDER_BIN}"
   [[ -x "${NGINX_BIN}" ]] || fail "nginx binary not found: ${NGINX_BIN}"
+  if [[ -n "${NGINX_LOAD_MODULE}" ]]; then
+    [[ -f "${NGINX_LOAD_MODULE}" ]] \
+      || fail "nginx dynamic module not found: ${NGINX_LOAD_MODULE}"
+  fi
 }
 
 run_all() {
@@ -439,6 +445,7 @@ synthetic_auth_key() {
 write_nginx_config() {
   local auth_key
   local guard_defs=""
+  local load_module_directive=""
   local ratelimitly_rule="ratelimitly zone=lifecycle_zone;"
   local zone_rate="10000r/s"
   auth_key="$(synthetic_auth_key)"
@@ -454,9 +461,13 @@ write_nginx_config() {
       ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard guard=lifecycle_guard_secondary;"
     fi
   fi
+  if [[ -n "${NGINX_LOAD_MODULE}" ]]; then
+    load_module_directive="load_module \"${NGINX_LOAD_MODULE}\";"
+  fi
   mkdir -p "${PREFIX}/logs"
 
   cat >"${NGINX_CONF}" <<EOF
+${load_module_directive}
 daemon off;
 master_process on;
 worker_processes 1;
