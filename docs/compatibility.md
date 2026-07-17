@@ -36,9 +36,9 @@ A37 validation on 2026-07-17 established the initial source-build matrix:
 | Stable | `release-1.30.2` | `a92a53786` | `make check NGINX_SRC=/tmp/rl-nginx-a37-nginx-1.30.2` passed |
 | Mainline | `release-1.31.1` | `d44205284` | `make check NGINX_SRC=/tmp/rl-nginx-a37-nginx-1.31.1` passed |
 
-This confirms static-source build plus public behavioral compatibility for the
-two nginx releases named above. Dynamic module mode, dynamic-module relocation,
-and sanitizer-per-matrix gates remain tracked separately in A38 through A40.
+This confirms source-build and public behavioral compatibility for the two
+nginx releases named above. Current required CI enforces static and dynamic
+builds, dynamic-module relocation, and the sanitizer lifecycle gate.
 
 ## Compatibility rules
 
@@ -74,6 +74,20 @@ clean checkout:
 The release notes must list the exact nginx release, C-client tag and SHA,
 operating system, architecture, compiler, and static/dynamic result used for
 the release decision.
+
+## Scheduled dependency drift detection
+
+The `dependency drift` GitHub Actions workflow runs weekly and can also be
+started manually. It probes the public `rl-c-client/main` branch against both
+supported nginx releases in static and dynamic modes, and probes nginx
+`master` against the locked C client in both modes. Each run records the exact
+floating revision it tested in the workflow summary.
+
+These probes are intentionally separate from required push and pull-request
+CI. A failure is an early incompatibility signal that maintainers must
+investigate; it does not change the supported matrix, the repository locks, or
+the result of an ordinary reproducible build. Support changes still require a
+reviewed lock and compatibility-document update with complete release evidence.
 
 ## Explicit non-goals for `0.1.x`
 

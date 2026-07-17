@@ -28,6 +28,7 @@ Run from the `rl-nginx` repo root:
 ```sh
 make syntax
 make dependency-bootstrap-test
+make dependency-drift-workflow-test
 make workflow-pin-test
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
 git diff --check

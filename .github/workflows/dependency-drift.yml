@@ -1,0 +1,137 @@
+name: dependency drift
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-drift
+  cancel-in-progress: true
+
+jobs:
+  c-client-main:
+    name: rl-c-client/main / nginx ${{ matrix.nginx.line }} / ${{ matrix.module_mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable-1.30.2
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline-1.31.1
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+        module_mode:
+          - static
+          - dynamic
+    env:
+      RCLIENT_DIR: ./_deps/rl-c-client-main
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Check out rl-c-client main
+        run: |
+          git clone --depth=1 --branch main https://github.com/ratelimitly-com/rl-c-client.git "$RCLIENT_DIR"
+          echo "rl-c-client/main commit: $(git -C "$RCLIENT_DIR" rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Unit tests against rl-c-client main
+        run: make unit
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
+      - name: Build against rl-c-client main
+        run: |
+          if [[ "${{ matrix.module_mode }}" == "dynamic" ]]; then
+            make build BUILD_FLAGS="--dynamic --compat --clean --debug"
+          else
+            make build BUILD_FLAGS="--clean --debug"
+          fi
+
+      - name: Dynamic module relocation test
+        if: matrix.module_mode == 'dynamic'
+        run: make dynamic-relocation-test
+
+      - name: Static configuration and public tests
+        if: matrix.module_mode == 'static'
+        run: |
+          make config-test
+          make public-test
+
+      - name: Check whitespace
+        run: make whitespace
+
+  nginx-master:
+    name: nginx/master / locked rl-c-client / ${{ matrix.module_mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        module_mode:
+          - static
+          - dynamic
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Unit tests against locked rl-c-client
+        run: make unit
+
+      - name: Select nginx master
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin master
+          git -C upstream-nginx checkout --detach FETCH_HEAD
+          echo "nginx/master commit: $(git -C upstream-nginx rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build against nginx master
+        run: |
+          if [[ "${{ matrix.module_mode }}" == "dynamic" ]]; then
+            make build BUILD_FLAGS="--dynamic --compat --clean --debug"
+          else
+            make build BUILD_FLAGS="--clean --debug"
+          fi
+
+      - name: Dynamic module relocation test
+        if: matrix.module_mode == 'dynamic'
+        run: make dynamic-relocation-test
+
+      - name: Static configuration and public tests
+        if: matrix.module_mode == 'static'
+        run: |
+          make config-test
+          make public-test
+
+      - name: Check whitespace
+        run: make whitespace

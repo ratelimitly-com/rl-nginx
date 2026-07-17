@@ -29,10 +29,11 @@ PY_SCRIPTS := \
 	integration-tests/abort_http_clients.py \
 	integration-tests/local_dns_server.py \
 	integration-tests/test_local_dns_server.py \
+	tests/test-dependency-drift-workflow.py \
 	tests/test-workflow-pins.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check fetch syntax dependency-bootstrap-test workflow-pin-test unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
+.PHONY: help check fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
@@ -40,6 +41,7 @@ help:
 		'  make check          required public-readiness gate' \
 		'  make build          resolve C client and build nginx/module' \
 		'  make dependency-bootstrap-test  deterministic dependency gate' \
+		'  make dependency-drift-workflow-test  scheduled-probe isolation gate' \
 		'  make workflow-pin-test  immutable GitHub Actions gate' \
 		'  make test           unit, config, and public integration tests' \
 		'  make dynamic-relocation-test  relocated dynamic-module gate' \
@@ -73,10 +75,13 @@ syntax:
 dependency-bootstrap-test:
 	./tests/test-dependency-bootstrap.sh
 
+dependency-drift-workflow-test:
+	python3 tests/test-dependency-drift-workflow.py
+
 workflow-pin-test:
 	python3 tests/test-workflow-pins.py
 
-unit: dependency-bootstrap-test workflow-pin-test
+unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test
 	python3 integration-tests/test_local_dns_server.py
 	./tests/test-numeric.sh
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-srv-records.sh
