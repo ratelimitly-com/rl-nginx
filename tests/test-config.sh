@@ -36,8 +36,7 @@ ${body}
 }
 EOF
 
-  if LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-      "${NGINX_BIN}" -t -p "${prefix}/" -c "${config}" >"${output}" 2>&1;
+  if "${NGINX_BIN}" -t -p "${prefix}/" -c "${config}" >"${output}" 2>&1;
   then
     status=0
   else

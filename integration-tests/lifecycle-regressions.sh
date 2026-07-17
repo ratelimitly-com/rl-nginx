@@ -138,8 +138,7 @@ stop_nginx() {
   local attempt
 
   if [[ -n "${NGINX_PID}" ]] && kill -0 "${NGINX_PID}" 2>/dev/null; then
-    LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-      "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s quit \
+    "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s quit \
       >/dev/null 2>&1 || true
     for (( attempt = 0; attempt < 30; attempt++ )); do
       if ! kill -0 "${NGINX_PID}" 2>/dev/null; then
@@ -519,14 +518,12 @@ start_nginx() {
   local attempt
   local code
 
-  LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-    "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -t \
+  "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -t \
     >"${NGINX_CONFIG_LOG}" 2>&1 \
     || fail "nginx configuration failed; see ${NGINX_CONFIG_LOG}"
 
   log "starting nginx on ${NGINX_HOST}:${NGINX_PORT}"
-  LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-    "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" \
+  "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" \
     >"${NGINX_STDOUT_LOG}" 2>&1 &
   NGINX_PID=$!
 
@@ -658,8 +655,7 @@ check_reload() {
   local old_worker="${ORIGINAL_WORKER_PID}"
   local new_worker=""
 
-  LD_LIBRARY_PATH="${RCLIENT_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
-    "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s reload \
+  "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s reload \
     >/dev/null 2>&1 \
     || {
       record_failure "nginx reload command failed"

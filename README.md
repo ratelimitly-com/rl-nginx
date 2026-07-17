@@ -60,8 +60,9 @@ checkout, such as while developing or packaging the C client.
 - The locked public `rl-c-client` source release, fetched with the repository
   helper, or an intentional `RCLIENT_DIR` override.
 - C compiler and standard nginx build dependencies.
-- OpenSSL development headers and libraries (`libcrypto`; the helper also links
-  `libssl` for compatibility with existing build environments).
+- OpenSSL development headers and libraries (`libcrypto`). The PIC
+  `librclient.a` archive is embedded in the nginx binary or dynamic module, so
+  `librclient.so` is not required at runtime.
 - PCRE2 and zlib development packages, as required by nginx.
 - A RateLimitly tenant domain with a working SRV record.
 - A valid RateLimitly API key for that tenant.

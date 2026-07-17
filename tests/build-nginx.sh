@@ -67,17 +67,16 @@ else
   NGX_ROOT="$(cd "$NGX_ROOT" && pwd)"
 fi
 
-FLAGS=(
-  "--with-cc-opt=-I${C_CLIENT}/include"
-  "--with-ld-opt=-L${C_CLIENT} -lrclient -lcrypto -lssl -Wl,-rpath,${C_CLIENT}"
-)
+FLAGS=()
 if [[ "$SANITIZE" == "--sanitize" ]]; then
   # nginx formats an empty query string by passing a null source and zero
   # length to ngx_cpymem(). GCC's nonnull-attribute check reports that upstream
   # idiom on every request, so disable only that UBSan category for nginx.
   SANITIZER_FLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize=nonnull-attribute -fno-omit-frame-pointer"
-  FLAGS[0]="--with-cc-opt=-I${C_CLIENT}/include ${SANITIZER_FLAGS}"
-  FLAGS[1]="--with-ld-opt=-L${C_CLIENT} -lrclient -lcrypto -lssl -Wl,-rpath,${C_CLIENT} -fsanitize=address,undefined"
+  FLAGS+=(
+    "--with-cc-opt=${SANITIZER_FLAGS}"
+    "--with-ld-opt=-fsanitize=address,undefined"
+  )
 fi
 if [[ "$DEBUG" == "--debug" ]]; then
   FLAGS+=("--with-debug")

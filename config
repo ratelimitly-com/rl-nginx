@@ -14,6 +14,13 @@ if [ ! -d "$RN_RCLIENT_DIR/include" ]; then
   echo "Run $ngx_addon_dir/tools/fetch-rl-c-client.sh or set RN_RCLIENT_DIR or RCLIENT_DIR." >&2
   exit 1
 fi
+RN_RCLIENT_DIR=$(cd "$RN_RCLIENT_DIR" && pwd)
+RN_RCLIENT_LIB="$RN_RCLIENT_DIR/librclient.a"
+if [ ! -f "$RN_RCLIENT_LIB" ]; then
+  echo "ngx_http_rn_module requires the rl-c-client static library: $RN_RCLIENT_LIB" >&2
+  echo "Build it with: make -C $RN_RCLIENT_DIR librclient.a" >&2
+  exit 1
+fi
 
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_rn_module
@@ -21,5 +28,6 @@ ngx_module_srcs="$ngx_addon_dir/src/ngx_http_ratelimitly_module.c \
                   $ngx_addon_dir/src/rn_numeric.c \
                   $ngx_addon_dir/src/rn_srv_records.c"
 ngx_module_incs="$RN_RCLIENT_DIR/include"
+ngx_module_libs="$RN_RCLIENT_LIB -lcrypto"
 
 . auto/module

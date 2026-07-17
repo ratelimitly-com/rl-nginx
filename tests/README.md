@@ -20,9 +20,7 @@ make -C "$RCLIENT_DIR"
 
 ```sh
 /path/to/nginx-src/auto/configure \
-  --add-module=. \
-  --with-cc-opt="-I${RCLIENT_DIR}/include" \
-  --with-ld-opt="-L${RCLIENT_DIR} -lrclient -lcrypto -lssl -Wl,-rpath,${RCLIENT_DIR}"
+  --add-module=.
 
 make -C /path/to/nginx-src -j
 sudo make -C /path/to/nginx-src install
@@ -32,9 +30,7 @@ sudo make -C /path/to/nginx-src install
 
 ```sh
 /path/to/nginx-src/auto/configure \
-  --add-dynamic-module=. \
-  --with-cc-opt="-I${RCLIENT_DIR}/include" \
-  --with-ld-opt="-L${RCLIENT_DIR} -lrclient -lcrypto -lssl -Wl,-rpath,${RCLIENT_DIR}"
+  --add-dynamic-module=.
 
 make -C /path/to/nginx-src modules
 ```
