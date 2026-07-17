@@ -79,6 +79,9 @@ make -C "${RCLIENT_DIR}" \
   all test-responder
 CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
+  "${RN_ROOT}/tests/test-numeric.sh"
+CFLAGS="${SANITIZER_CFLAGS}" \
+  LDFLAGS="${SANITIZER_LDFLAGS}" \
   RCLIENT_DIR="${RCLIENT_DIR}" \
   "${RN_ROOT}/tests/test-srv-records.sh"
 
