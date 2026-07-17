@@ -78,6 +78,22 @@ timeout path, requires fail-close to return `429` and fail-open to return
 `200`, rejects transport errors, and still verifies worker survival, recovery
 through a healthy responder, reload, and clean shutdown.
 
+Run the DNS-policy matrix separately while working on DNS refresh and recovery:
+
+```sh
+./integration-tests/lifecycle-regressions.sh dns-policy
+```
+
+The matrix runs missing SRV, unresolvable SRV target, and DNS timeout scenarios
+under both `ratelimitly_fail close` and `ratelimitly_fail open`. The local DNS
+fixture changes mode through a state file while nginx keeps running. Each case
+starts nginx with DNS in the selected failure mode, requires the configured
+fail-policy result without a transport error, restores normal DNS, waits past
+the test resolver refresh interval, and verifies recovery through the same nginx
+worker before reload and clean shutdown. DNS timeout recovery waits longer than
+NXDOMAIN-style failures because nginx may keep the timed-out resolver state
+briefly before issuing a fresh query.
+
 Run the complete gate repeatedly with ASan and UBSan instrumentation in both
 the C client and nginx/module code:
 

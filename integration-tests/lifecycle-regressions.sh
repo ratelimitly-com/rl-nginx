@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|outage-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|outage-policy|dns-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -21,6 +21,9 @@ Environment overrides:
   RESPONDER_PORT    UDP responder port (default: 19080)
   NGINX_PORT        nginx HTTP port (default: 18098)
   REQUEST_TIMEOUT   module timeout (default: 300ms)
+  DNS_REFRESH_SEC   wait after DNS mode changes (default: 1.2)
+  DNS_TIMEOUT_RECOVERY_SEC
+                    wait after restoring DNS from timeout mode (default: 6)
   ABORT_REQUESTS    aborted clients in the stress case (default: 20)
   FAIL_POLICY       generated nginx policy: close or open (default: close)
   SKIP_BUILD=1      reuse existing responder and nginx binaries
@@ -39,7 +42,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|outage-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|count-empty|count-short|count-extra) ;;
+  all|cardinality|outage-policy|dns-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -60,6 +63,8 @@ NGINX_PORT="${NGINX_PORT:-18098}"
 DOMAIN="${DOMAIN:-rn-test.local}"
 SERVER_ID="${SERVER_ID:-1}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300ms}"
+DNS_REFRESH_SEC="${DNS_REFRESH_SEC:-1.2}"
+DNS_TIMEOUT_RECOVERY_SEC="${DNS_TIMEOUT_RECOVERY_SEC:-6}"
 ABORT_REQUESTS="${ABORT_REQUESTS:-20}"
 FAIL_POLICY="${FAIL_POLICY:-close}"
 CLIENT_TIMEOUT_SEC="${CLIENT_TIMEOUT_SEC:-3}"
@@ -263,6 +268,33 @@ run_outage_policy() {
   log "all outage-policy regressions passed"
 }
 
+run_dns_policy() {
+  local failures=0
+  local policy
+  local scenario
+
+  prepare_binaries
+  for policy in close open; do
+    for scenario in dns-missing-srv dns-bad-target dns-timeout; do
+      if ARTIFACT_ROOT="${ARTIFACT_ROOT}/dns/${policy}" \
+          FAIL_POLICY="${policy}" \
+          SKIP_BUILD=1 \
+          "${SELF}" "${scenario}"; then
+        printf 'PASS %s/%s\n' "${policy}" "${scenario}"
+      else
+        printf 'FAIL %s/%s (see %s/dns/%s/%s)\n' \
+          "${policy}" "${scenario}" "${ARTIFACT_ROOT}" "${policy}" "${scenario}" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  done
+  if (( failures > 0 )); then
+    echo "${failures} dns-policy regression(s) failed" >&2
+    return 1
+  fi
+  log "all dns-policy regressions passed"
+}
+
 wait_for_log() {
   local pattern="$1"
   local file="$2"
@@ -280,10 +312,12 @@ wait_for_log() {
 
 start_dns() {
   log "starting DNS ${DNS_SERVER}:${DNS_PORT} -> ${SERVER_ID}:${RESPONDER_PORT}"
+  printf 'normal\n' >"${DNS_STATE_FILE}"
   python3 "${SCRIPT_DIR}/local_dns_server.py" \
     --listen-host "${DNS_SERVER}" \
     --port "${DNS_PORT}" \
     --domain "${DOMAIN}" \
+    --state-file "${DNS_STATE_FILE}" \
     --record "${SERVER_ID}:${RESPONDER_PORT}" \
     >"${DNS_LOG}" 2>&1 &
   DNS_PID=$!
@@ -294,6 +328,22 @@ start_dns() {
     "_ratelimitly._udp.${DOMAIN}" >"${DNS_CHECK_LOG}"
   grep -q "${RESPONDER_PORT}" "${DNS_CHECK_LOG}" \
     || fail "DNS fixture did not return responder port ${RESPONDER_PORT}"
+}
+
+set_dns_mode() {
+  local mode="$1"
+
+  printf '%s\n' "${mode}" >"${DNS_STATE_FILE}"
+  log "DNS mode set to ${mode}"
+}
+
+dns_failure_mode() {
+  case "${MODE}" in
+    dns-missing-srv) printf 'missing-srv\n' ;;
+    dns-bad-target) printf 'bad-target\n' ;;
+    dns-timeout) printf 'timeout\n' ;;
+    *) return 1 ;;
+  esac
 }
 
 start_responder() {
@@ -675,6 +725,42 @@ run_outage_case() {
   check_follow_up "outage fail-${FAIL_POLICY} decision"
 }
 
+run_dns_failure_case() {
+  local code
+  local dns_mode
+  local expected_code
+  local phase
+
+  dns_mode="$(dns_failure_mode)" || fail "unknown DNS failure mode: ${MODE}"
+  case "${dns_mode}" in
+    missing-srv) phase="missing SRV" ;;
+    bad-target) phase="unresolvable SRV target" ;;
+    timeout) phase="DNS timeout" ;;
+  esac
+
+  if [[ "${FAIL_POLICY}" == "open" ]]; then
+    expected_code="200"
+  else
+    expected_code="429"
+  fi
+
+  code="$(request_code)"
+  if [[ "${code}" == "000" ]]; then
+    record_failure "${phase} with fail-${FAIL_POLICY} caused a transport error"
+  elif [[ "${code}" != "${expected_code}" ]]; then
+    record_failure "${phase} with fail-${FAIL_POLICY} returned ${code}, expected ${expected_code}"
+  fi
+  check_worker_survival "${phase} fail-${FAIL_POLICY} decision"
+
+  set_dns_mode normal
+  if [[ "${dns_mode}" == "timeout" ]]; then
+    sleep "${DNS_TIMEOUT_RECOVERY_SEC}"
+  else
+    sleep "${DNS_REFRESH_SEC}"
+  fi
+  check_follow_up "${phase} fail-${FAIL_POLICY} recovery"
+}
+
 run_enforcement_boundary_case() {
   local code
   local event_count
@@ -758,6 +844,7 @@ run_one() {
   RESPONDER_ERROR_LOG=""
   DNS_LOG="${ARTIFACT_DIR}/dns.log"
   DNS_CHECK_LOG="${ARTIFACT_DIR}/dns-check.log"
+  DNS_STATE_FILE="${ARTIFACT_DIR}/dns-state"
 
   mkdir -p "${ARTIFACT_DIR}"
   find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 -type f -delete
@@ -765,16 +852,24 @@ run_one() {
 
   prepare_binaries
   start_dns
+  if dns_mode="$(dns_failure_mode 2>/dev/null)"; then
+    set_dns_mode "${dns_mode}"
+  fi
   start_responder allow keep 0
   write_nginx_config
   start_nginx
-  warm_client
+  if dns_failure_mode >/dev/null 2>&1; then
+    log "skipping healthy warm-up before ${MODE}; DNS starts in failure mode"
+  else
+    warm_client
+  fi
 
   case "${MODE}" in
     timeout) run_timeout_case ;;
     aborted-client) run_aborted_client_case ;;
     steering-rebind) run_steering_rebind_case ;;
     outage) run_outage_case ;;
+    dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
   esac
@@ -795,6 +890,8 @@ elif [[ "${MODE}" == "cardinality" ]]; then
   run_cardinality
 elif [[ "${MODE}" == "outage-policy" ]]; then
   run_outage_policy
+elif [[ "${MODE}" == "dns-policy" ]]; then
+  run_dns_policy
 else
   run_one
 fi

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import struct
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
@@ -65,6 +66,59 @@ class DnsServerTargetTests(unittest.TestCase):
 
     def test_plain_localhost_is_not_an_advertised_target(self) -> None:
         self.assertEqual(self.query_counts("localhost", TYPE_A), (3, 0))
+
+
+class DnsServerStateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.state = tempfile.NamedTemporaryFile("w+", encoding="ascii")
+        self.server = DnsServer(
+            "127.0.0.1",
+            15353,
+            "rn-test.local",
+            ["1:19080"],
+            self.state.name,
+        )
+
+    def tearDown(self) -> None:
+        self.state.close()
+
+    def set_mode(self, mode: str) -> None:
+        self.state.seek(0)
+        self.state.truncate()
+        self.state.write(mode)
+        self.state.flush()
+
+    def query_counts(self, name: str, qtype: int) -> tuple[int, int]:
+        response = self.server.handle_query(build_query(name, qtype))
+        self.assertIsNotNone(response)
+        return response_counts(response)
+
+    def test_missing_srv_returns_nxdomain_for_srv_owner(self) -> None:
+        self.set_mode("missing-srv")
+        self.assertEqual(
+            self.query_counts("_ratelimitly._udp.rn-test.local", TYPE_SRV),
+            (3, 0),
+        )
+
+    def test_bad_target_keeps_srv_but_makes_target_unresolvable(self) -> None:
+        self.set_mode("bad-target")
+        self.assertEqual(
+            self.query_counts("_ratelimitly._udp.rn-test.local", TYPE_SRV),
+            (0, 1),
+        )
+        self.assertEqual(self.query_counts("s-1.localhost", TYPE_A), (3, 0))
+
+    def test_normal_mode_can_be_restored_after_failure_mode(self) -> None:
+        self.set_mode("missing-srv")
+        self.assertEqual(
+            self.query_counts("_ratelimitly._udp.rn-test.local", TYPE_SRV),
+            (3, 0),
+        )
+        self.set_mode("normal")
+        self.assertEqual(
+            self.query_counts("_ratelimitly._udp.rn-test.local", TYPE_SRV),
+            (0, 1),
+        )
 
 
 if __name__ == "__main__":

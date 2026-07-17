@@ -203,10 +203,10 @@ Required public integration suite:
 This uses only the locked public C-client responder, local DNS fixture, pinned
 nginx source, and this module. It covers timeout, aborted-client,
 steering-rebind, an exact three-allow/two-deny enforcement boundary,
-fail-open/fail-close outage policy, and response-cardinality behavior. Each
-case requires the original nginx worker to survive and serve a successful
-follow-up request, validates a reload, and requires a clean worker shutdown.
-Artifacts are written under
+fail-open/fail-close outage policy, DNS failure and recovery, and
+response-cardinality behavior. Each case requires the original nginx worker to
+survive and serve a successful follow-up request, validates a reload, and
+requires a clean worker shutdown. Artifacts are written under
 `integration-tests/artifacts/lifecycle/`.
 
 Run the lifecycle and response-cardinality gates three times with ASan and
