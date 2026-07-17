@@ -69,7 +69,29 @@ EOF
   esac
 }
 
-VALID_AUTH='  ratelimitly_auth_key rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjmkmcwk6tqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqq0n6jux;'
+run_example_case() {
+  local source="$1"
+  local label="example-$(basename "${source}" .conf)"
+  local prefix="${TEST_ROOT}/${label}"
+  local config="${prefix}/nginx.conf"
+  local output="${prefix}/nginx-test.log"
+
+  mkdir -p "${prefix}/logs"
+  sed \
+    -e "s|tenant.example.invalid|c-1.d1.ratelimitly.com|g" \
+    -e "s|rl-aes1REPLACE_WITH_YOUR_KEY|${VALID_AUTH_KEY}|g" \
+    -e "s|listen 8080;|listen unix:${prefix}/nginx.sock;|g" \
+    "${source}" >"${config}"
+
+  if ! "${NGINX_BIN}" -t -p "${prefix}/" -c "${config}" >"${output}" 2>&1; then
+    cat "${output}" >&2
+    echo "FAIL [${label}] copyable example rejected after placeholder substitution" >&2
+    return 1
+  fi
+}
+
+VALID_AUTH_KEY='rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjmkmcwk6tqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqq0n6jux'
+VALID_AUTH="  ratelimitly_auth_key ${VALID_AUTH_KEY};"
 VALID_TENANT='  ratelimitly_tenant c-1.d1.ratelimitly.com;'
 VALID_ZONE='  ratelimitly_zone primary bucket="primary" rate=100r/s;'
 ENABLED_SERVER=$'  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }'
@@ -156,5 +178,8 @@ run_case invalid_fail_policy reject \
 run_case invalid_debug_flag reject \
   $'  ratelimitly_debug maybe;' \
   'invalid ratelimitly_debug value'
+
+run_example_case "${RN_ROOT}/examples/minimal.conf"
+run_example_case "${RN_ROOT}/examples/security-conscious.conf"
 
 echo "PASS configuration matrix"
