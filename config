@@ -4,10 +4,8 @@ if [ -n "${RN_RCLIENT_DIR:-}" ]; then
     :
 elif [ -n "${RCLIENT_DIR:-}" ]; then
     RN_RCLIENT_DIR="$RCLIENT_DIR"
-elif [ -d "$ngx_addon_dir/_deps/rl-c-client/include" ]; then
-    RN_RCLIENT_DIR="$ngx_addon_dir/_deps/rl-c-client"
 else
-    RN_RCLIENT_DIR="$ngx_addon_dir/../rl-c-client"
+    RN_RCLIENT_DIR=$("$ngx_addon_dir/tools/resolve-rl-c-client.sh") || exit 1
 fi
 if [ ! -d "$RN_RCLIENT_DIR/include" ]; then
   echo "ngx_http_rn_module requires rl-c-client headers." >&2

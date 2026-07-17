@@ -32,22 +32,7 @@ for arg in "${@:2}"; do
   esac
 done
 RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -n "${RCLIENT_DIR:-}" ]]; then
-  if [[ ! -d "$RCLIENT_DIR" ]]; then
-    echo "rl-c-client path not found: $RCLIENT_DIR" >&2
-    exit 1
-  fi
-  C_CLIENT="$(cd "$RCLIENT_DIR" && pwd)"
-elif [[ -d "$RN_DIR/_deps/rl-c-client" ]]; then
-  C_CLIENT="$(cd "$RN_DIR/_deps/rl-c-client" && pwd)"
-elif [[ -d "$RN_DIR/../rl-c-client" ]]; then
-  C_CLIENT="$(cd "$RN_DIR/../rl-c-client" && pwd)"
-else
-  echo "rl-c-client not found." >&2
-  echo "Fetch the locked release or set RCLIENT_DIR:" >&2
-  echo "  ./tools/fetch-rl-c-client.sh" >&2
-  exit 1
-fi
+C_CLIENT="$("$RN_DIR/tools/resolve-rl-c-client.sh")"
 
 if [[ ! -d "$NGX_SRC" ]]; then
   echo "nginx source not found: $NGX_SRC"

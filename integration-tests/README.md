@@ -183,7 +183,7 @@ gate. Its local mode requires access to the private `rl` repository and tenant
 management tooling. The harness builds and runs these local components:
 
 - `rl-c-client`, used by the nginx module, from the locked `./_deps` checkout
-  when present, with a sibling development checkout as a fallback.
+  or an explicit `RCLIENT_DIR` development override.
 - `rlnet`, from `../rl/xdp`, when the static library is not already built.
 - `ratelimitly-server`, from `../rl/implementations/rust` by default.
 - nginx, from the `upstream-nginx` submodule, with this repo's module added.
@@ -283,10 +283,9 @@ The nginx source submodule must be present and up to date:
 
 - `./upstream-nginx`
 
-Fetch the supported C client with `./tools/fetch-rl-c-client.sh`. The test uses
-`./_deps/rl-c-client` when present, falls back to `../rl-c-client` for existing
-development workspaces, and accepts `RCLIENT_DIR=/path/to/rl-c-client` as an
-explicit override.
+The test fetches or verifies the supported C client under
+`./_deps/rl-c-client`. It never selects an adjacent checkout implicitly; use
+`RCLIENT_DIR=/path/to/rl-c-client` for an intentional development override.
 
 The test also expects the tenant-management Elixir CLI source under
 `../rl/tenant_management/elixir`.
@@ -419,7 +418,7 @@ Common overrides:
 | `RL_ROOT` | `../rl` | Root of the `rl` repo. |
 | `RL_RUST_ROOT` | `$RL_ROOT/implementations/rust` | Rust server crate root. |
 | `RL_SERVER_BIN` | `$RL_RUST_ROOT/target/release/ratelimitly-server` | Server binary to run after build. |
-| `RCLIENT_DIR` | `./_deps/rl-c-client`, then `../rl-c-client` | C client checkout path. |
+| `RCLIENT_DIR` | locked `./_deps/rl-c-client` | Explicit C client override; the default is fetched or verified against the repository lock. |
 | `NGINX_SRC` | `./upstream-nginx` | nginx source submodule path. |
 | `NGINX_BIN` | `$NGINX_SRC/objs/nginx` | Built nginx binary. |
 | `EXTERNAL_SERVER` | `0` | Set to `1` to use an already-running server and existing tenant key. |

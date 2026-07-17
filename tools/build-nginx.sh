@@ -11,9 +11,9 @@ Environment:
   RCLIENT_DIR=/path/to/rl-c-client   C client checkout path.
 
 Defaults:
-  RCLIENT_DIR is auto-detected from the locked ./_deps checkout, then from a
-  sibling ../rl-c-client checkout. Run ./tools/fetch-rl-c-client.sh to create
-  the locked checkout.
+  Without RCLIENT_DIR, the exact release in dependencies/rl-c-client.env is
+  fetched or verified under ./_deps/rl-c-client. Adjacent development
+  checkouts are never selected implicitly.
 
 Sanitizers:
   --sanitize instruments nginx and the module. Use
@@ -59,28 +59,7 @@ for arg in "$@"; do
   esac
 done
 
-detect_rclient_dir() {
-  if [[ -n "${RCLIENT_DIR:-}" ]]; then
-    (cd "$RCLIENT_DIR" && pwd)
-    return 0
-  fi
-  if [[ -d "$RN_DIR/_deps/rl-c-client" ]]; then
-    (cd "$RN_DIR/_deps/rl-c-client" && pwd)
-    return 0
-  fi
-  if [[ -d "$RN_DIR/../rl-c-client" ]]; then
-    (cd "$RN_DIR/../rl-c-client" && pwd)
-    return 0
-  fi
-  return 1
-}
-
-RCLIENT_DIR="$(detect_rclient_dir || true)"
-if [[ -z "$RCLIENT_DIR" ]]; then
-  echo "C client not found. Fetch the locked release or set RCLIENT_DIR:" >&2
-  echo "  ./tools/fetch-rl-c-client.sh" >&2
-  exit 1
-fi
+RCLIENT_DIR="$("$RN_DIR/tools/resolve-rl-c-client.sh")"
 
 if [[ ! -d "$NGX_SRC" ]]; then
   echo "nginx source not found: $NGX_SRC" >&2

@@ -4,7 +4,8 @@ This guide shows how to build nginx with the rl-nginx module, run it with a test
 config, and validate traffic against a running Ratelimitly server.
 
 This requires the locked public `rl-c-client` release so nginx can link against
-the compiled C client library.
+the compiled C client library. Build and test helpers fetch or verify that
+release automatically when `RCLIENT_DIR` is not set.
 
 ## 1) Build rl-c-client
 

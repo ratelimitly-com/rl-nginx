@@ -12,6 +12,8 @@ By default nginx is built with debug support (`--with-debug`).
 Use `--no-debug` to disable it.
 
 Notes:
+- Without RCLIENT_DIR, the locked public C client is fetched or verified under
+  ./_deps/rl-c-client.
 - For dynamic module builds, ensure your config loads the module with an absolute path
   (e.g. /path/to/nginx/objs/ngx_http_rn_module.so).
 EOF
@@ -21,22 +23,6 @@ RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NGX_SRC="${NGX_SRC:-$RN_DIR/upstream-nginx}"
 CONF="${CONF:-$RN_DIR/tests/nginx.conf}"
 PREFIX="${NGINX_PREFIX:-$RN_DIR}"
-
-detect_rclient_dir() {
-  if [[ -n "${RCLIENT_DIR:-}" ]]; then
-    (cd "$RCLIENT_DIR" && pwd)
-    return 0
-  fi
-  if [[ -d "$RN_DIR/_deps/rl-c-client" ]]; then
-    (cd "$RN_DIR/_deps/rl-c-client" && pwd)
-    return 0
-  fi
-  if [[ -d "$RN_DIR/../rl-c-client" ]]; then
-    (cd "$RN_DIR/../rl-c-client" && pwd)
-    return 0
-  fi
-  return 1
-}
 
 BUILD_ARGS=()
 DEBUG_BUILD=1
@@ -87,13 +73,7 @@ if [[ ! -f "$CONF" ]]; then
   exit 1
 fi
 
-RCLIENT_DIR="$(detect_rclient_dir || true)"
-if [[ -z "$RCLIENT_DIR" ]]; then
-  echo "rl-c-client not found."
-  echo "Fetch the locked release or set RCLIENT_DIR:"
-  echo "  ./tools/fetch-rl-c-client.sh"
-  exit 1
-fi
+RCLIENT_DIR="$("$RN_DIR/tools/resolve-rl-c-client.sh")"
 
 make -C "$RCLIENT_DIR"
 RCLIENT_DIR="$RCLIENT_DIR" "$RN_DIR/tests/build-nginx.sh" "$NGX_SRC" "${BUILD_ARGS[@]}"

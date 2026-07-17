@@ -132,6 +132,8 @@ Optional:
   - Supported builds MUST use the tag and full SHA in
     `dependencies/rl-c-client.env`.
   - The fetch helper installs that revision at `./_deps/rl-c-client`.
+  - Supported build and test entrypoints MUST fetch or verify that default
+    checkout before use and MUST NOT select adjacent checkouts implicitly.
   - Development or packaging overrides MUST set
     `RCLIENT_DIR=/path/to/rl-c-client` explicitly.
 - Use `r_client_check_rate_limit_async_borrowed` for rate requests to avoid per-request copies.

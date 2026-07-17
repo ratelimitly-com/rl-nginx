@@ -32,7 +32,9 @@ rl-nginx/
 ```
 
 Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally building a
-different source checkout.
+different source checkout. Without that explicit override, supported entrypoints
+always fetch or verify the exact lock under `./_deps`; they do not auto-detect
+adjacent development checkouts.
 
 ## Build The C Client
 
@@ -59,6 +61,11 @@ Dynamic module:
 ```sh
 ./tools/build-nginx.sh /path/to/nginx-src --dynamic --compat --clean
 ```
+
+The helper materializes the locked default C client when necessary and rejects
+an existing default checkout whose HEAD differs from the locked full commit.
+An explicit `RCLIENT_DIR` remains available for intentional development and
+packaging builds.
 
 Useful flags:
 

@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/_deps/rl-c-client}"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_SRC}/objs/nginx}"
 NGINX_MODULE="${NGINX_MODULE:-${NGINX_SRC}/objs/ngx_http_rn_module.so}"
@@ -45,6 +44,8 @@ case "${KEEP_RELOCATION_RUNTIME}" in
     ;;
 esac
 
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
+
 fail() {
   echo "FAIL dynamic module relocation: $*" >&2
   exit 1
@@ -58,7 +59,6 @@ for command in env grep install ldd make mktemp readelf; do
   need_cmd "${command}"
 done
 
-[[ -d "${RCLIENT_DIR}" ]] || fail "C-client checkout not found: ${RCLIENT_DIR}"
 [[ -f "${NGINX_SRC}/objs/Makefile" ]] \
   || fail "nginx is not configured: ${NGINX_SRC}/objs/Makefile"
 [[ -f "${NGINX_MODULE}" ]] || fail "dynamic module not found: ${NGINX_MODULE}"

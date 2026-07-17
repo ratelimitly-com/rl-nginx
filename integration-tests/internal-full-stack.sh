@@ -29,7 +29,7 @@ uses the configured DNS resolver to resolve _ratelimitly._udp.\${DOMAIN}.
 Common environment overrides:
   RL_ROOT=${RN_ROOT}/../rl
   RL_RUST_ROOT=\${RL_ROOT}/implementations/rust
-  RCLIENT_DIR=${RN_ROOT}/_deps/rl-c-client (locked checkout when present)
+  RCLIENT_DIR=${RN_ROOT}/_deps/rl-c-client (locked default; override explicitly)
   RL_HOST=127.0.0.1 (address used by the harness to reach the server)
   DNS_PORT=53535
   NGINX_RESOLVER_OPTIONS=ipv6=off
@@ -83,13 +83,7 @@ RL_SERVER_BIN="${RL_SERVER_BIN:-${RL_RUST_ROOT}/target/release/ratelimitly-serve
 TENANT_CLI_DIR="${RL_ROOT}/tenant_management/elixir"
 LOCAL_DNS_SERVER="${SCRIPT_DIR}/local_dns_server.py"
 
-if [[ -z "${RCLIENT_DIR:-}" ]]; then
-  if [[ -d "${RN_ROOT}/_deps/rl-c-client" ]]; then
-    RCLIENT_DIR="${RN_ROOT}/_deps/rl-c-client"
-  else
-    RCLIENT_DIR="${RN_ROOT}/../rl-c-client"
-  fi
-fi
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 NGINX_BIN="${NGINX_BIN:-${NGINX_SRC}/objs/nginx}"
 

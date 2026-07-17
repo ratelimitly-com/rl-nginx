@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 RN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
-RCLIENT_DIR="${RCLIENT_DIR:-${RN_ROOT}/_deps/rl-c-client}"
 SANITIZER_RUNS="${SANITIZER_RUNS:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${RN_ROOT}/integration-tests/artifacts/lifecycle-sanitized}"
 SANITIZER_CFLAGS="-O1 -g -Wall -Wextra -std=c11 -fsanitize=address,undefined -fno-omit-frame-pointer"
@@ -44,6 +43,8 @@ if ! [[ "${SANITIZER_RUNS}" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
+RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
+
 restore_rclient() {
   local status=$?
 
@@ -62,14 +63,6 @@ restore_rclient() {
   exit "${status}"
 }
 trap restore_rclient EXIT
-
-if [[ ! -d "${RCLIENT_DIR}" ]]; then
-  if [[ "${RCLIENT_DIR}" != "${RN_ROOT}/_deps/rl-c-client" ]]; then
-    echo "C-client checkout not found: ${RCLIENT_DIR}" >&2
-    exit 1
-  fi
-  "${RN_ROOT}/tools/fetch-rl-c-client.sh"
-fi
 
 echo "[sanitizers] building rl-c-client and responder"
 make -C "${RCLIENT_DIR}" clean

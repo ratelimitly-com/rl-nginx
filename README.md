@@ -50,9 +50,11 @@ release into the default ignored dependency directory:
 ./tools/fetch-rl-c-client.sh
 ```
 
-This creates `./_deps/rl-c-client`. Set
+This creates `./_deps/rl-c-client`. The public build and test helpers perform
+the same fetch-or-verify operation automatically when no override is set. Set
 `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally building another
-checkout, such as while developing or packaging the C client.
+checkout, such as while developing or packaging the C client; no adjacent
+checkout is selected implicitly.
 
 ## Requirements
 
@@ -75,13 +77,14 @@ The first public release scope and validation matrix are documented in
 
 ## Build
 
-Fetch the locked `rl-c-client` release:
+Optionally fetch the locked `rl-c-client` release up front:
 
 ```sh
 ./tools/fetch-rl-c-client.sh
 ```
 
-Then build nginx with this module. The helper builds the C client first. The
+Then build nginx with this module. If the default checkout is absent, the helper
+materializes the exact locked release before building the C client. The
 simplest source build is a static module:
 
 ```sh
