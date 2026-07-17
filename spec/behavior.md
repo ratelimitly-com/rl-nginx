@@ -1,30 +1,137 @@
-# Behavior (Draft)
+# Request behavior
 
-## Request flow
+This document defines the observable request lifecycle and decision contract.
+Configuration syntax and wire-field construction are specified separately in
+[Configuration DSL](dsl.md) and [Wire mapping](mapping.md).
 
-1. Evaluate nginx location directives and build a `ratelimitly` rule.
-2. Resolve each configured zone to a `(bucket_id, window_size_ms, rate_limit, tokens_requested)` tuple by rendering zone templates for the request.
-3. Resolve each configured guard to a `(service_id, threshold_ms, ttl_ms, max_samples, buffer_size, min_sample_threshold)` tuple by rendering guard templates for the request.
-4. Build a Ratelimitly `rate_request` PDU with one ResourceBlock per resolved zone and one GuardBlock per resolved guard.
-5. If `ratelimitly_label` is set, add a `metrics_label` TLV with the rendered label.
-6. Send via UDP to **all** tenant DNS SRV targets and wait for response(s).
-7. For the selected response, evaluate all guard results and all resource results.
-8. Allow the request only if all guards pass and all resources have `deficit == 0`.
-9. Reject otherwise.
-10. If any response has `steering_feedback = 0`, mark the socket for rebinding and perform the rebind only after the current request finishes (all responses received or timed out).
-11. On request completion, if guards were used, measure end-to-end request latency in milliseconds, clamp to minimum `1ms`, and send a fire-and-forget `latency_report` PDU.
+## Activation and request construction
 
-## Failure handling
+The module runs in nginx's HTTP access phase. A request without an effective
+`ratelimitly` rule MUST continue through normal nginx processing without a
+RateLimitly request. A protected request MUST expand all effective rules into
+one combined rate-limit check containing:
 
-- Timeout or network error:
-  - `ratelimitly_fail open`: allow
-  - `ratelimitly_fail close`: reject
+- one resource for every referenced zone occurrence, including repeated zone
+  and group entries; and
+- one guard for every distinct referenced guard definition, in first-seen
+  order.
 
-## Response status
+The effective label, zone bucket/rate values, and guard service/threshold
+values are rendered for the request. Invalid dynamic values, an empty rendered
+guard service, or a C-client request-construction error MUST follow the
+configured failure policy. Internal nginx allocation or event-registration
+failures MAY return `500 Internal Server Error` instead.
 
-- Success: pass through to upstream.
-- Rejected: return 429 (Too Many Requests) by default.
+The worker-local UDP socket and C client are created lazily by the first
+protected request handled by that worker. A running nginx worker therefore
+proves process liveness, not that the worker has initialized RateLimitly
+enforcement or completed discovery.
 
-## Observability (future)
+## Discovery, dispatch, and selection
 
-- Export Prometheus counters (e.g., `rn_requests_allowed_total`, `rn_requests_denied_total`, `rn_requests_timeout_total`).
+Supported deployments MUST publish SRV records as required by
+[`ratelimitly_tenant`](dsl.md#ratelimitly_tenant). The locked C client resolves
+those records and their A/AAAA targets through the nginx asynchronous resolver.
+It sends the request to every currently usable discovered endpoint address.
+
+The module starts from the locked C-client request-policy defaults, overrides
+the attempt timeout with `ratelimitly_timeout`, and sets retry attempts to zero.
+For the currently locked revision this means one attempt, waiting until all
+targets have replied or the attempt deadline expires, with the client's
+best-by-reliability response selection. rl-nginx exposes no directives for
+wait, quorum, selection, retry, deduplication, or DNS-resynchronization policy.
+Changing the dependency lock in a way that changes this observable behavior
+MUST update this specification and its tests in the same change.
+
+The locked client contains a compatibility fallback that can resolve the
+tenant name directly and use UDP port `8080` when SRV discovery yields no
+endpoint. This fallback is not a supported rl-nginx deployment or a fixed
+server-address configuration mechanism. Public DNS failure tests MUST ensure a
+missing SRV record cannot be accidentally masked by this fallback.
+
+## Decision contract
+
+A valid result MUST contain exactly as many guard and resource results as the
+request sent. A mismatch is a protocol/compatibility failure and follows the
+configured failure policy; partial response arrays MUST NOT be treated as a
+decision.
+
+When status is successful and cardinality is exact, the module MUST continue
+normal nginx processing only if all of the following are true:
+
+- the response-level `success` value is true;
+- every guard result has `passed` set; and
+- every resource result has `tokens_deficit == 0`.
+
+Otherwise the module MUST return `429 Too Many Requests`. A valid RateLimitly
+deny returns `429` under both failure policies. Continuing nginx processing
+does not guarantee a successful final HTTP status: later nginx phases,
+upstreams, or content handlers still determine the response.
+
+## Failure policy
+
+`ratelimitly_fail` applies when the module cannot obtain a valid, complete
+decision:
+
+| Condition | `open` | `close` |
+| --- | --- | --- |
+| Valid allow | Continue nginx processing | Continue nginx processing |
+| Valid RateLimitly, guard, or resource deny | Return `429` | Return `429` |
+| No usable discovery target | Continue nginx processing | Return `429` |
+| UDP send failure or response timeout | Continue nginx processing | Return `429` |
+| Authentication/protocol failure with no valid decision | Continue nginx processing | Return `429` |
+| Response cardinality mismatch | Continue nginx processing | Return `429` |
+| Invalid dynamic request value or request-construction failure | Continue nginx processing | Return `429` |
+| Internal nginx allocation/event failure | MAY return `500` | MAY return `500` |
+
+Invalid or irrelevant datagrams can be discarded by the C client. If no valid
+response then arrives, the visible terminal result can be a timeout rather
+than the error associated with the discarded packet.
+
+## Asynchronous ownership and cleanup
+
+Rate checks MUST NOT block an nginx worker. The module starts an asynchronous
+borrowed-input C-client request, arms an nginx timer to the client deadline,
+and resumes HTTP phase processing from the completion callback.
+
+The request-pool resources, guards, label, and callback context MUST remain
+valid until completion or cancellation. Client disconnect and nginx request
+cleanup MUST cancel the C-client request, remove the timer, and release the
+nginx and worker in-flight accounting exactly once. A synchronous callback
+from timeout handling can release the request pool; timeout code MUST NOT
+access the request context afterwards.
+
+Worker shutdown MUST cancel outstanding resolver activity, close the worker
+socket, and destroy the worker C client. Reload and shutdown MUST leave no
+active request timer, resolver context, or UDP connection owned by an exited
+worker.
+
+## Steering feedback
+
+Rate and latency-report request headers set `steering_feedback` to zero. If a
+valid response carries `steering_feedback = 0`, the locked client asks the
+module to replace the worker's UDP source port. The module MUST mark the rebind
+pending and defer it until the worker has no in-flight RateLimitly requests.
+It MUST NOT close or replace the socket from inside its active UDP read
+callback. A zero-delay nginx event performs the rebind once both conditions
+are safe.
+
+## Latency reporting
+
+For a main request that used at least one distinct guard and was not denied by
+the module, the nginx log-phase handler MUST attempt one fire-and-forget
+latency report. A module-denied `429` MUST NOT produce a latency report.
+
+The observed duration starts at the nginx request timestamp and ends when the
+log-phase handler runs. It is clamped to the inclusive unsigned 32-bit range
+`1..4294967295` milliseconds. The report contains one entry per distinct
+applied guard, using the same service identifier and sampling settings as the
+rate request. Report construction or send failure MUST NOT change the HTTP
+result.
+
+## Observability
+
+The implemented observability surface is nginx access/error logging plus the
+documented module log markers. The module does not expose Prometheus counters,
+histograms, or a health endpoint. Exact marker interpretation and sensitive-log
+handling are defined in the [operations guide](../docs/operations.md).
