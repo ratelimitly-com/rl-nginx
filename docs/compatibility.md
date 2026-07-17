@@ -27,6 +27,19 @@ and full SHA live in
 [`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env); public CI and
 the fetch helper consume that lock and fail if the tag resolves elsewhere.
 
+## Initial nginx matrix validation
+
+A37 validation on 2026-07-17 established the initial source-build matrix:
+
+| nginx line | Official tag | Commit | Result |
+| --- | --- | --- | --- |
+| Stable | `release-1.30.2` | `a92a53786` | `make check NGINX_SRC=/tmp/rl-nginx-a37-nginx-1.30.2` passed |
+| Mainline | `release-1.31.1` | `d44205284` | `make check NGINX_SRC=/tmp/rl-nginx-a37-nginx-1.31.1` passed |
+
+This confirms static-source build plus public behavioral compatibility for the
+two nginx releases named above. Dynamic module mode, dynamic-module relocation,
+and sanitizer-per-matrix gates remain tracked separately in A38 through A40.
+
 ## Compatibility rules
 
 - Static-module users must build and deploy the resulting nginx binary as one

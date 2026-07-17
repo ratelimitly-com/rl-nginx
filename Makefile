@@ -2,6 +2,7 @@ SHELL := /bin/bash
 
 RCLIENT_DIR ?= ./_deps/rl-c-client
 NGINX_SRC ?= ./upstream-nginx
+NGINX_BIN ?= $(NGINX_SRC)/objs/nginx
 BUILD_FLAGS ?= --clean --debug
 SANITIZER_RUNS ?= 3
 KEEP_SANITIZED_BUILD ?= 0
@@ -41,6 +42,7 @@ help:
 		'Variables:' \
 		'  RCLIENT_DIR=./_deps/rl-c-client' \
 		'  NGINX_SRC=./upstream-nginx' \
+		'  NGINX_BIN=$$(NGINX_SRC)/objs/nginx' \
 		'  BUILD_FLAGS="--clean --debug"' \
 		'  SANITIZER_RUNS=3 KEEP_SANITIZED_BUILD=0'
 
@@ -65,7 +67,7 @@ build: fetch
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tools/build-nginx.sh "$(NGINX_SRC)" $(BUILD_FLAGS)
 
 config-test:
-	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-config.sh
+	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_BIN="$(NGINX_BIN)" ./tests/test-config.sh
 
 public-test: fetch
 	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" ./integration-tests/public.sh
