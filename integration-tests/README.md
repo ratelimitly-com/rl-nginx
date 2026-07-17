@@ -242,8 +242,10 @@ it does require the private source and tenant-management paths described above.
    ./tests/build-nginx.sh ./upstream-nginx --clean --debug
    ```
 
-6. Starts `ratelimitly-server` on localhost with `RLNET_DISABLE_XDP=1`.
-7. Waits until the server prints its `server_id` and readiness marker.
+6. Starts `ratelimitly-server` on the configured port with
+   `RLNET_DISABLE_XDP=1`. The server has no host-address CLI option.
+7. Waits until the server reports its `server_id`, the expected port, and its
+   XDP-ready marker.
 8. Registers a temporary tenant through the Elixir tenant-management CLI.
 9. Starts `local_dns_server.py` on localhost.
 10. Verifies DNS with a SRV lookup for `_ratelimitly._udp.<domain>`.
@@ -353,7 +355,7 @@ Common overrides:
 | `DNS_SERVER` | `127.0.0.1` | Local DNS bind address. |
 | `DNS_PORT` | `53535` | Local DNS UDP port. |
 | `NGINX_RESOLVER_OPTIONS` | `ipv6=off` | Extra nginx resolver options in the generated test config. |
-| `RL_HOST` | `127.0.0.1` | Ratelimitly server bind address. |
+| `RL_HOST` | `127.0.0.1` | Address used by tenant registration to reach the local server; this is not passed to the server as a bind option. |
 | `RL_SERVER_PORT` | `39080` | Ratelimitly server UDP port. |
 | `RL_NODE_ID` | `11` | Server node id passed to `ratelimitly-server`. |
 | `NGINX_HOST` | `127.0.0.1` | nginx listen address. |

@@ -30,6 +30,7 @@ Common environment overrides:
   RL_ROOT=${RN_ROOT}/../rl
   RL_RUST_ROOT=\${RL_ROOT}/implementations/rust
   RCLIENT_DIR=${RN_ROOT}/_deps/rl-c-client (locked checkout when present)
+  RL_HOST=127.0.0.1 (address used by the harness to reach the server)
   DNS_PORT=53535
   NGINX_RESOLVER_OPTIONS=ipv6=off
   RL_SERVER_PORT=39080
@@ -241,6 +242,8 @@ wait_for_server_ready() {
   local attempt
   local server_id_line=""
   local ready_line=""
+  local server_id=""
+  local started_port=""
 
   for (( attempt = 0; attempt < max_attempts; attempt++ )); do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -250,7 +253,17 @@ wait_for_server_ready() {
     server_id_line="$(grep -m1 'RateLimitly server starting: server_id=' "${logfile}" || true)"
     ready_line="$(grep -m1 'XDP datapath started successfully - server ready for requests' "${logfile}" || true)"
     if [[ -n "${server_id_line}" ]] && [[ -n "${ready_line}" ]]; then
-      sed -n 's/.*server_id=\([0-9][0-9]*\).*/\1/p' <<< "${server_id_line}"
+      server_id="$(sed -n 's/.*server_id=\([0-9][0-9]*\) port=.*/\1/p' <<< "${server_id_line}")"
+      started_port="$(sed -n 's/.* port=\([0-9][0-9]*\).*/\1/p' <<< "${server_id_line}")"
+      if [[ -z "${server_id}" ]]; then
+        echo "could not parse ratelimitly-server id from readiness log" >&2
+        return 1
+      fi
+      if [[ "${started_port}" != "${RL_SERVER_PORT}" ]]; then
+        echo "ratelimitly-server reported port ${started_port}, expected ${RL_SERVER_PORT}" >&2
+        return 1
+      fi
+      printf '%s\n' "${server_id}"
       return 0
     fi
     sleep 0.5
@@ -262,7 +275,7 @@ wait_for_server_ready() {
 
 start_rl_server() {
   local logfile="${ARTIFACT_DIR}/rl-server.log"
-  log "Starting ratelimitly-server on ${RL_HOST}:${RL_SERVER_PORT}"
+  log "Starting ratelimitly-server on port ${RL_SERVER_PORT}"
   (
     cd "${RL_ROOT}"
     RLNET_DISABLE_XDP=1 \
@@ -271,7 +284,6 @@ start_rl_server() {
     RUST_LOG=debug \
     exec "${RL_SERVER_BIN}" \
       --port "${RL_SERVER_PORT}" \
-      --host "${RL_HOST}" \
       --key "${SECRET}" \
       --node-id "${RL_NODE_ID}" \
       --verbose
