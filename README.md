@@ -178,7 +178,7 @@ Operational guidance is in [docs/operations.md](docs/operations.md).
 Syntax and development build checks:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-config.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
   bash -n "$script"
 done
 python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
@@ -186,6 +186,7 @@ sh -n config
 ./tests/test-numeric.sh
 RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
+RCLIENT_DIR=./_deps/rl-c-client ./tests/test-config.sh
 ```
 
 The numeric unit checks every 32-bit wire boundary before a value can be
