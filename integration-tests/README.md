@@ -543,12 +543,13 @@ server id printed by the local `ratelimitly-server`.
 
 ## Relationship to `tests/`
 
-The `tests/` directory still contains lower-level manual helpers:
+The `tests/` directory still contains lower-level manual helpers and
+diagnostics:
 
 - `tests/build-nginx.sh`
-- `tests/burst-test.sh`
+- `tests/burst-test.sh` (manual diagnostic; not a required pass/fail test)
 - `tests/nginx.conf`
-- `tests/smoke-test.sh`
+- `tests/smoke-test.sh` (manual diagnostic; not a required pass/fail test)
 
 The internal full-stack test reuses `tests/build-nginx.sh`, but generates its own
 nginx config, tenant key, DNS records, and runtime processes. Use

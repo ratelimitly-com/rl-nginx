@@ -4,6 +4,11 @@ set -euo pipefail
 URL="${1:-http://127.0.0.1:8088/api/static/test}"
 NGINX_ERR_LOG="${2:-/usr/local/nginx/logs/error.log}"
 
+echo "Diagnostic helper: this script samples one request and recent rn: log lines."
+echo "It is not a required pass/fail test; use integration-tests/public.sh for the"
+echo "public readiness gate."
+echo
+
 if [[ ! -f "$NGINX_ERR_LOG" ]]; then
   echo "nginx error log not found: $NGINX_ERR_LOG"
   exit 1
