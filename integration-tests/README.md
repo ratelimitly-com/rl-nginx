@@ -65,6 +65,19 @@ requests containing one resource, worker survival, a successful follow-up,
 reload, and clean shutdown. The responder process owns the test counter, so no
 wall-clock refill or burst scheduling can change the boundary.
 
+Run the outage-policy matrix separately while working on fail-policy behavior:
+
+```sh
+./integration-tests/lifecycle-regressions.sh outage-policy
+```
+
+The matrix runs the `outage` case under both `ratelimitly_fail close` and
+`ratelimitly_fail open`. Each case establishes a successful baseline, switches
+to the responder's `drop` scenario so the module must complete through its
+timeout path, requires fail-close to return `429` and fail-open to return
+`200`, rejects transport errors, and still verifies worker survival, recovery
+through a healthy responder, reload, and clean shutdown.
+
 Run the complete gate repeatedly with ASan and UBSan instrumentation in both
 the C client and nginx/module code:
 
