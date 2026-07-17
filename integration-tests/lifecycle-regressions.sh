@@ -7,12 +7,12 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|enforcement-boundary|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra]
 
-Runs the public lifecycle and response-cardinality regressions against the
-locked rl-c-client test responder. Every case pins the original nginx worker
-PID, triggers its target path, and requires both worker survival and a
-successful follow-up request.
+Runs the public lifecycle, enforcement-boundary, and response-cardinality
+regressions against the locked rl-c-client test responder. Every case pins the
+original nginx worker PID, triggers its target path, and requires both worker
+survival and a successful follow-up request.
 
 Environment overrides:
   RCLIENT_DIR       C-client checkout (default: locked ./_deps checkout)
@@ -39,7 +39,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra) ;;
+  all|cardinality|enforcement-boundary|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -66,6 +66,8 @@ CLIENT_TIMEOUT_SEC="${CLIENT_TIMEOUT_SEC:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${SCRIPT_DIR}/artifacts/lifecycle}"
 ABORT_CLIENT_HELPER="${SCRIPT_DIR}/abort_http_clients.py"
 UDP_PORT_HELPER="${SCRIPT_DIR}/worker_udp_port.py"
+ENFORCEMENT_ALLOW_COUNT=3
+ENFORCEMENT_TOTAL_REQUESTS=5
 
 RESPONDER_PID=""
 DNS_PID=""
@@ -274,6 +276,7 @@ start_responder() {
   local scenario="$1"
   local steering="${2:-keep}"
   local delay_ms="${3:-0}"
+  local allow_count="${4:-1}"
 
   stop_responder
   RESPONDER_RUN=$((RESPONDER_RUN + 1))
@@ -288,6 +291,7 @@ start_responder() {
     "--server-id=${SERVER_ID}" \
     "--steering=${steering}" \
     "--delay-ms=${delay_ms}" \
+    "--allow-count=${allow_count}" \
     >"${RESPONDER_LOG}" 2>"${RESPONDER_ERROR_LOG}" &
   RESPONDER_PID=$!
 
@@ -304,8 +308,12 @@ synthetic_auth_key() {
 
 write_nginx_config() {
   local auth_key
+  local zone_rate="10000r/s"
   auth_key="$(synthetic_auth_key)"
   [[ -n "${auth_key}" ]] || fail "could not obtain the responder's synthetic nginx key"
+  if [[ "${MODE}" == "enforcement-boundary" ]]; then
+    zone_rate="${ENFORCEMENT_ALLOW_COUNT}r/h"
+  fi
   mkdir -p "${PREFIX}/logs"
 
   cat >"${NGINX_CONF}" <<EOF
@@ -330,7 +338,7 @@ http {
   ratelimitly_fail ${FAIL_POLICY};
   ratelimitly_debug on;
 
-  ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=10000r/s;
+  ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=${zone_rate};
 
   server {
     listen ${NGINX_HOST}:${NGINX_PORT};
@@ -612,6 +620,46 @@ run_steering_rebind_case() {
   check_follow_up "steering rebind"
 }
 
+run_enforcement_boundary_case() {
+  local code
+  local event_count
+  local request_number
+  local expected_code
+
+  start_responder quota keep 0 "${ENFORCEMENT_ALLOW_COUNT}"
+  for (( request_number = 1; request_number <= ENFORCEMENT_TOTAL_REQUESTS;
+      request_number++ )); do
+    if (( request_number <= ENFORCEMENT_ALLOW_COUNT )); then
+      expected_code="200"
+    else
+      expected_code="429"
+    fi
+    code="$(request_code)"
+    if [[ "${code}" != "${expected_code}" ]]; then
+      record_failure "request ${request_number}/${ENFORCEMENT_TOTAL_REQUESTS} returned ${code}, expected ${expected_code}"
+    fi
+  done
+
+  event_count="$(grep -c '"event":"rate_request"' "${RESPONDER_LOG}" || true)"
+  if [[ "${event_count}" != "${ENFORCEMENT_TOTAL_REQUESTS}" ]]; then
+    record_failure "quota responder observed ${event_count} rate requests, expected ${ENFORCEMENT_TOTAL_REQUESTS}"
+  fi
+  if ! awk -v expected="${ENFORCEMENT_TOTAL_REQUESTS}" '
+      /"event":"rate_request"/ {
+        count++
+        if (index($0, "\"sequence\":" count) == 0) bad = 1
+        if (index($0, "\"guards\":0,\"resources\":1,") == 0) bad = 1
+      }
+      END { exit count == expected && !bad ? 0 : 1 }
+    ' "${RESPONDER_LOG}"; then
+    record_failure "quota responder events were not the exact ordered one-resource sequence"
+  fi
+
+  log "exact boundary passed: ${ENFORCEMENT_ALLOW_COUNT} allow, $((ENFORCEMENT_TOTAL_REQUESTS - ENFORCEMENT_ALLOW_COUNT)) deny"
+  check_worker_survival "exact enforcement boundary"
+  check_follow_up "exact enforcement boundary"
+}
+
 run_count_mismatch_case() {
   local code
   local error_log_start
@@ -671,6 +719,7 @@ run_one() {
     timeout) run_timeout_case ;;
     aborted-client) run_aborted_client_case ;;
     steering-rebind) run_steering_rebind_case ;;
+    enforcement-boundary) run_enforcement_boundary_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
   esac
 

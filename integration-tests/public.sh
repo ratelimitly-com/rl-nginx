@@ -61,6 +61,12 @@ RCLIENT_DIR="${RCLIENT_DIR}" \
   SKIP_BUILD=0 \
   "${SCRIPT_DIR}/lifecycle-regressions.sh" all
 
+echo "[public-suite] running the exact enforcement boundary"
+RCLIENT_DIR="${RCLIENT_DIR}" \
+  NGINX_SRC="${NGINX_SRC}" \
+  SKIP_BUILD=1 \
+  "${SCRIPT_DIR}/lifecycle-regressions.sh" enforcement-boundary
+
 echo "[public-suite] running response-cardinality regressions"
 RCLIENT_DIR="${RCLIENT_DIR}" \
   NGINX_SRC="${NGINX_SRC}" \

@@ -52,6 +52,19 @@ Run one case while developing a fix:
 ./integration-tests/lifecycle-regressions.sh steering-rebind
 ```
 
+Run the exact enforcement boundary alone:
+
+```sh
+./integration-tests/lifecycle-regressions.sh enforcement-boundary
+```
+
+That case configures one stable bucket at `3r/h`, starts a fresh deterministic
+quota responder with allowance 3, and requires the sequential result
+`200, 200, 200, 429, 429`. It also requires exactly five ordered authenticated
+requests containing one resource, worker survival, a successful follow-up,
+reload, and clean shutdown. The responder process owns the test counter, so no
+wall-clock refill or burst scheduling can change the boundary.
+
 Run the complete gate repeatedly with ASan and UBSan instrumentation in both
 the C client and nginx/module code:
 
