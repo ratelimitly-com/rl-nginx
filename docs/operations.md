@@ -142,6 +142,13 @@ Do not increase `ratelimitly_timeout` merely to hide DNS or network failures.
 Measure normal and tail decision latency, leave an explicit operational margin,
 and keep the value within the application's request-latency budget.
 
+The locked C client contains a legacy compatibility fallback that may resolve
+the tenant name directly on UDP port `8080` after SRV discovery produces no
+endpoint. rl-nginx does not treat that as a supported deployment path or a
+server-address option: supported tenants publish SRV records. The strict public
+DNS fixture deliberately prevents the fallback from hiding a missing SRV
+record.
+
 ## Observability and log handling
 
 The module currently exposes log-based diagnostics, not Prometheus counters or

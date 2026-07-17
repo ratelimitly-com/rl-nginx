@@ -1,143 +1,137 @@
-# Implementation Spec
+# Implementation constraints
 
-This document defines the required implementation behavior for the rl-nginx
-module.
+This document defines conformance boundaries for the nginx-module and
+`rl-c-client` integration. It records implemented constraints, not proposed
+architecture.
 
-## A) Core behavior
+## nginx phase integration
 
-- Parse DSL directives: `ratelimitly_tenant`, `ratelimitly_auth_key`,
-  `ratelimitly_timeout`, `ratelimitly_fail`, `ratelimitly_zone`, `ratelimitly_guard`,
-  `ratelimitly_group`, `ratelimitly`, `ratelimitly_label`.
-- For each nginx request, build one Ratelimitly `rate_request` PDU with:
-  - one ResourceBlock per resolved zone
-  - one GuardBlock per resolved guard
-- Parse full response guard/resource arrays and decide only after all entries are evaluated.
-- Deny the request if any GuardBlock fails or any ResourceBlock returns `deficit > 0`.
-- On timeout/network error: obey `ratelimitly_fail` (`open` or `close`).
-- If `ratelimitly_label` is set, emit a `metrics_label` TLV.
-- After request completion, if guards were applied, send one fire-and-forget
-  `latency_report` PDU with one ServiceLatencyBlock per applied guard.
+The module MUST register:
 
-## B) Request selection
+- an HTTP access-phase handler for protected-request checks; and
+- an HTTP log-phase handler for post-response guard latency reports.
 
-- Only locations/servers that include `ratelimitly ...;` participate.
-- Multiple `ratelimitly` directives in a location are combined into a single rate_request.
-- `ratelimitly` may reference zones/groups and optional guards.
-- Guards referenced by `ratelimitly` are resolved and attached to the same request.
+The access handler MUST return `NGX_DECLINED` for unprotected locations and for
+a fail-open runtime failure, `NGX_AGAIN` while an asynchronous check owns the
+request, `429` for a valid deny or fail-close runtime failure, and `500` for
+the internal nginx failures identified in [Request behavior](behavior.md).
 
-## C) Resource and guard construction
+Configuration definitions, credentials, timeout, failure policy, bind address,
+and debug flag live in HTTP main configuration. Effective rules and labels
+live in location configuration and follow the inheritance contract in
+[Configuration DSL](dsl.md).
 
-For each `ratelimitly_zone`:
+## Worker lifecycle and non-blocking I/O
 
-- Render `bucket` template (e.g. `"const:$uri:$cookie"`) via nginx variable expansion.
-- Render `rate` expression via nginx variable expansion.
-- `bucket_id` = BLAKE2s-128(bucket string).
-- Parse `window_size_ms`, `rate_limit` from rendered `rate` (`<N>r/<period_or_duration>`).
-- `tokens_requested` = 1.
+Each nginx worker owns at most one module C client and UDP socket. They are
+created lazily on that worker's first protected request and destroyed on worker
+exit. The UDP socket uses an ephemeral source port and the configured local
+address, if any.
 
-For each `ratelimitly_guard`:
+UDP send/receive, timers, source-port rebinds, and DNS resolution MUST use nginx
+event-loop facilities. Blocking socket or resolver calls are forbidden on the
+request path. DNS SRV and address callbacks MUST release their temporary nginx
+resolver contexts and allocation buffers on success, failure, and cancellation.
 
-- Render `service` template via nginx variable expansion.
-- Render `threshold` expression and parse as duration in milliseconds.
-- `service_id` = BLAKE2s-128(service string).
-- Copy `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold`.
-- Set request `current_latency` field to `0`.
+The resolver adapter MUST preserve SRV target port, server-ID association, and
+TTL information when converting nginx resolver answers into C-client records.
+The C client owns endpoint caching, refresh scheduling, supported SRV
+discovery, and its explicitly unsupported compatibility fallback described in
+[Request behavior](behavior.md#discovery-dispatch-and-selection).
 
-## D) Latency measurement and reporting
+## C-client dependency boundary
 
-- Measure request end-to-end latency in milliseconds:
-  - start: nginx request start timestamp
-  - end: request completion timestamp (response finished).
-- Clamp measured latency to minimum `1ms` before writing `observed_latency`.
-- Reporting trigger: only when at least one guard was applied in the request.
-- Build one `latency_report` PDU with one ServiceLatencyBlock per applied guard:
-  - `service_id` from the guard mapping
-  - `observed_latency` from measured end-to-end latency
-  - `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold` copied from guard config
-- Send report as fire-and-forget using `r_client_report_latency`.
-- Latency report send failures MUST NOT alter the HTTP response outcome.
+Supported builds MUST use the repository, tag, and full commit recorded in
+`dependencies/rl-c-client.env`. Default build and test entrypoints MUST fetch
+or verify that revision under `./_deps/rl-c-client`; they MUST NOT select an
+adjacent checkout implicitly. An intentional development or packaging override
+MUST set `RCLIENT_DIR=/path/to/rl-c-client` explicitly.
 
-## E) Networking & discovery
+The module MUST use the C client as the owner of protocol encoding, encryption,
+authentication, request IDs, DNS policy, multi-endpoint dispatch, response
+selection, and decoding. It MUST NOT duplicate those implementations.
 
-- Use nginx resolver for SRV `_ratelimitly._udp.<tenant>`.
-- Resolve A/AAAA only for the SRV target hostnames returned by that lookup.
-- Maintain a per-worker cached server list; refresh interval MUST NOT exceed the
-  minimum DNS TTL (SRV records).
-- Multi-target send is allowed only when HA commit safety is preserved:
-  - strongly consistent shared token state, or
-  - exactly one effective commit authority for the request.
-- If neither condition is guaranteed, route mutating requests to a single deterministic commit target.
+For rate checks, the module MUST use
+`r_client_check_rate_limit_async_borrowed`. The module MUST start from
+`r_client_default_request_policy`, set `attempt_timeout_ms` from
+`ratelimitly_timeout`, and set `retry.retry_attempts = 0`. Any change to other
+locked policy behavior is a dependency-lock change requiring corresponding
+specification and test review.
 
-## F) Async request flow (non-blocking)
+For post-response reports, the module MUST use `r_client_report_latency` and
+MUST treat its result as observability only.
 
-Blocking waits are not allowed. The module MUST use nginx's event loop and timers.
+## Request ownership
 
-- Allocate per-request context in nginx pool:
-  state, deadline, socket, server list, PDU buffer, attempts, timer.
-- Steps:
-  1) Build and send `rate_request` PDU (non-blocking UDP).
-  2) Register read event + timer.
-  3) On read: parse full response (all guards/resources), then decide allow/deny; finalize request.
-  4) On timeout: fail open/close; finalize request.
-  5) On request completion/log phase: emit optional fire-and-forget `latency_report`.
+Arrays and strings passed to the borrowed C-client API are owned by the nginx
+request pool. A per-request context MUST retain the owning nginx request,
+C-client request handle, deadline timer, expected response cardinality, latency
+report inputs, and exactly-once accounting flags.
 
-Steering feedback:
-- The request always sets `steering_feedback = 0`.
-- The server response controls port steering:
-  - `steering_feedback = 0` => mark for rebind; perform rebind after the request completes (do not close the socket mid-flight).
-  - `steering_feedback = 1` => keep the current socket.
+Once the asynchronous request starts, the module MUST increment both nginx main
+request accounting and worker in-flight accounting. Completion, cancellation,
+or cleanup MUST use one teardown path that:
 
-## G) Auth
+1. verifies callback ownership when completing normally;
+2. removes the active timer;
+3. cancels the C-client request when required;
+4. clears the request handle;
+5. decrements each accounting value at most once; and
+6. schedules a pending safe source-port rebind.
 
-- Accept one Bech32 auth key via `ratelimitly_auth_key`.
-- Supported HRPs: `rl-cookie`, `rl-aes`.
-- Derive tenant id from embedded Bech32 `key_id`.
-- Validate embedded payload length at config load:
-  - `rl-cookie`: 32 bytes
-  - `rl-aes`: 32 bytes
+The timeout path MUST honor a later C-client deadline when reported. With
+retries disabled, `r_client_on_timeout` can synchronously invoke the completion
+callback and release the nginx request pool, so that call MUST be the last
+access through the request context.
 
-## H) Observability
+An aborted HTTP client MUST execute the cleanup path without a later timeout
+callback, double decrement, use-after-free, or worker loss.
 
-Expose Prometheus counters:
+## Response and phase resumption
 
-- `rn_requests_allowed_total`
-- `rn_requests_denied_total`
-- `rn_requests_timeout_total`
-- `rn_latency_reports_sent_total`
-- `rn_latency_reports_failed_total`
+The callback MUST reject a result whose guard/resource cardinality differs from
+the request. It MUST inspect the complete exact-cardinality arrays before
+deciding. Callback-owned result arrays MUST NOT be retained after the callback.
 
-Optional:
-- latency histogram for RL round-trip
-- histogram for end-to-end observed request latency sent in reports
+After recording the decision, the callback MUST resume nginx phase processing
+through `ngx_http_core_run_phases`. It MUST preserve content handlers installed
+by directives such as `proxy_pass` and MUST NOT finalize an allow in a way that
+clears them.
 
-## I) Error handling
+## Steering safety
 
-- Invalid config (unknown zone/guard, invalid static rate/threshold, bad auth
-  settings) -> nginx config error.
-- An invalid rate or threshold rendered from nginx variables at request time ->
-  use fail-open/fail-close behavior.
-- Runtime errors (DNS failure, network errors) -> use fail-open/fail-close behavior.
-- Runtime latency-report send errors are logged/debugged but do not affect request decision.
+The C-client steering callback MAY only mark the worker rebind pending and
+schedule it. The rebind handler MUST require worker in-flight count zero and
+MUST defer again while the UDP read callback is active. Socket replacement
+inside the read callback or while another RateLimitly request is active is
+forbidden.
 
-## J) Performance constraints
+## Error and logging boundary
 
-- Avoid blocking calls; use non-blocking UDP + nginx timers.
-- Minimize allocations; prefer caller-owned buffers (borrowed API) where possible.
-- Avoid string building except for bucket/service template rendering and label.
-- Keep latency reporting off the critical path (fire-and-forget).
+Configuration errors MUST fail `nginx -t`/configuration loading. Runtime
+decision failures MUST follow `ratelimitly_fail`, except that internal nginx
+allocation and event errors MAY return `500`. Latency-report failure MUST NOT
+change the request status.
 
-## K) rl-c-client integration assumptions
+Normal operational observability is log-based. Debug decision/discovery output
+requires both `ratelimitly_debug on` and an nginx build/log configuration that
+records debug messages. Logs MUST NOT include the full authentication secret.
+The module does not implement a metrics exporter or health endpoint.
 
-- Use the standalone `rl-c-client` repo as the protocol engine.
-  - Supported builds MUST use the tag and full SHA in
-    `dependencies/rl-c-client.env`.
-  - The fetch helper installs that revision at `./_deps/rl-c-client`.
-  - Supported build and test entrypoints MUST fetch or verify that default
-    checkout before use and MUST NOT select adjacent checkouts implicitly.
-  - Development or packaging overrides MUST set
-    `RCLIENT_DIR=/path/to/rl-c-client` explicitly.
-- Use `r_client_check_rate_limit_async_borrowed` for rate requests to avoid per-request copies.
-- Use `r_client_report_latency` for post-response latency telemetry.
-- nginx MUST override the r-client default policy:
-  - `attempt_timeout_ms` from `ratelimitly_timeout` (default 20ms).
-  - `retry_attempts = 0` unless explicitly configured later.
+## Conformance tests
+
+The required public gate MUST cover at least:
+
+- directive parsing, defaults, inheritance, and invalid configuration;
+- dependency bootstrap, lock verification, and immutable workflow pins;
+- SRV target conversion and strict public DNS fixture behavior;
+- allow/deny, outage policy, malformed response, and exact-cardinality cases;
+- guard decisions and post-response latency-report suppression after denial;
+- timeout, aborted client, source-port steering, reload, and shutdown lifecycle;
+- missing SRV, invalid SRV target, DNS timeout, and same-worker recovery;
+- dynamic-module relocation; and
+- whitespace and script syntax.
+
+ASan/UBSan lifecycle runs MUST additionally exercise repeated timeout,
+cancellation, steering, reload, and shutdown behavior. Optional internal
+full-stack validation is not part of the public conformance boundary.

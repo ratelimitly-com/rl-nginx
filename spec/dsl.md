@@ -1,181 +1,244 @@
-# Configuration DSL (Draft)
+# Configuration DSL
 
-## Goals
+This document defines the implemented nginx configuration contract. Security
+guidance for selecting variables and constructing identities is normative here
+and explained with examples in
+[Configuring rl-nginx](../docs/configuration.md).
 
-- Minimal nginx-native directives.
-- Deterministic mapping to Ratelimitly resource blocks.
-- Safe defaults for timeouts and failure mode.
+## Scope and activation
+
+The following directives are valid only in the nginx `http` context:
+
+- `ratelimitly_tenant`
+- `ratelimitly_auth_key`
+- `ratelimitly_timeout`
+- `ratelimitly_fail`
+- `ratelimitly_bind`
+- `ratelimitly_debug`
+- `ratelimitly_zone`
+- `ratelimitly_guard`
+- `ratelimitly_group`
+
+`ratelimitly` and `ratelimitly_label` are valid in `server` and `location`
+contexts. The module is enabled only when at least one effective `ratelimitly`
+rule exists. When enabled anywhere in `http`, `ratelimitly_tenant` and
+`ratelimitly_auth_key` MUST both be present or nginx configuration loading
+fails.
+
+Zones, guards, and groups MUST be defined before a rule references them. Zones
+MUST be defined before a group references them. Names are case-sensitive.
 
 ## Directives
 
-### ratelimitly_tenant
+### `ratelimitly_tenant`
 
-```
-ratelimitly_tenant <tenant_dns_name>;
-```
-
-### ratelimitly_auth_key
-
-```
-ratelimitly_auth_key <bech32_api_key>;
+```nginx
+ratelimitly_tenant <tenant-dns-name>;
 ```
 
-Notes:
-- Required.
-- Must be one of:
-  - `rl-cookie...` (payload is 32-byte cookie hash)
-  - `rl-aes...` (payload is 32-byte AES key)
-- The embedded `key_id` is used as tenant id automatically.
+The value supplies the tenant DNS name to the locked C client. Supported
+deployments MUST publish `_ratelimitly._udp.<tenant-dns-name>` SRV records.
+This is not a fixed server-address directive. A second occurrence is a
+configuration error.
 
-### ratelimitly_timeout
+### `ratelimitly_auth_key`
 
+```nginx
+ratelimitly_auth_key <bech32-api-key>;
 ```
+
+The key MUST decode through the locked C-client parser as either an
+`rl-cookie...` credential with a 32-byte cookie secret or an `rl-aes...`
+credential with a 32-byte AES key. Its embedded key ID becomes the tenant key
+ID used on the wire. A malformed value or second occurrence is a configuration
+error.
+
+The credential is sensitive and MUST NOT be committed or placed in copyable
+examples. See the configuration and operations guides for include-file,
+`nginx -T`, rotation, and log-handling requirements.
+
+### `ratelimitly_timeout`
+
+```nginx
 ratelimitly_timeout <duration>;
 ```
 
-### ratelimitly_fail
+The value MUST be a duration accepted by nginx's millisecond-mode time parser.
+It becomes the C-client attempt timeout. The module sets retry attempts to zero,
+so the timeout bounds the only attempt. If repeated, the later value is
+effective; configurations SHOULD define it once.
 
-```
+### `ratelimitly_fail`
+
+```nginx
 ratelimitly_fail open;
 ratelimitly_fail close;
 ```
 
-### ratelimitly_bind
+`open` continues normal nginx processing when no valid RateLimitly decision is
+available. `close` returns `429 Too Many Requests`. Valid RateLimitly denies
+return `429` under both policies. Internal nginx allocation/event errors can
+return `500` under both policies. If repeated, the later value is effective;
+configurations SHOULD define it once.
 
-```
-ratelimitly_bind <ip>;
-```
+### `ratelimitly_bind`
 
-Notes:
-- Optional. Bind the UDP client socket to a specific local IP (IPv4 or IPv6).
-- If omitted, the module binds to an ephemeral local address/port.
-
-### ratelimitly_debug
-
-```
-ratelimitly_debug on|off;
+```nginx
+ratelimitly_bind <local-ip>;
 ```
 
-Notes:
-- Optional. Enables extra debug logging for UDP send/recv and callback decisions.
-- When enabled, logs SRV resolution targets and response unique_ids.
+The value selects the local IPv4 or IPv6 address for the worker UDP socket. The
+port is always ephemeral. It does not select a RateLimitly server. The address
+is parsed and bound when a worker handles its first protected request; an
+invalid or unavailable address makes worker-client initialization follow the
+failure policy. When omitted, the kernel selects the local address. A second
+occurrence is a configuration error.
 
-### ratelimitly_zone
+### `ratelimitly_debug`
 
-```
-ratelimitly_zone <name> bucket="<template>" rate=<rate_expr>;
-```
-
-Notes:
-- `<name>` is a positional first argument.
-- `bucket` is a string template evaluated per request using nginx variables
-  (for example, `"v1|scope=low-throughput|ip=$remote_addr"`). Direct request
-  arguments, headers, cookies, and raw paths MUST NOT be treated as trusted
-  identity. Variable components MUST be canonical and bounded so clients cannot
-  create arbitrary buckets or ambiguous field boundaries.
-- `$binary_remote_addr` MUST NOT be used with the current text hash interface;
-  embedded NUL bytes can truncate it. Use textual `$remote_addr` and configure
-  real-IP/proxy-protocol trust before relying on it.
-- `rate` is evaluated per request using nginx complex values.
-  - Static example: `rate=600r/m`
-  - Dynamic example: `rate=$rl_dynamic_rate`
-- A static `rate` MUST be validated at configuration load time. A `rate`
-  containing nginx variables MUST be validated after rendering it for a
-  request.
-- Rendered `rate` must match `N r / period` without spaces (e.g. `10r/s`, `100r/2s`, `500r/1h`).
-- `<period>` unit supports `s`, `m`, `h` (seconds, minutes, hours).
-- `N` MUST be in `1..4294967295`.
-- The period converted to milliseconds MUST be in `1..4294967295`. With the
-  supported whole-unit syntax, the largest accepted period values are
-  `4294967s`, `71582m`, and `1193h`.
-- An implementation MUST reject decimal accumulation or unit multiplication
-  that would overflow the corresponding 32-bit wire field.
-
-### ratelimitly_guard
-
-```
-ratelimitly_guard <name> service="<service_expr>" threshold=<duration_or_expr> [ttl=<duration>] [max_samples=<uint>] [buffer_size=<uint>] [min_sample_threshold=<uint>];
+```nginx
+ratelimitly_debug on;
+ratelimitly_debug off;
 ```
 
-Notes:
-- Defines a reusable latency guard for load shedding.
-- `<name>` is a positional first argument.
-- `service` is rendered per request using nginx variables, then hashed with BLAKE2s-128 to produce `service_id`.
-  - Example: `service="v1|service=public-api"`
-  - Service values SHOULD be fixed or selected from a finite operator-controlled
-    map. Raw host, URI, argument, header, cookie, or user values MUST NOT create
-    attacker-controlled service cardinality.
-- `threshold` is rendered per request and parsed as duration in milliseconds.
-  - Static example: `threshold=80ms`
-  - Dynamic example: `threshold=$rl_guard_threshold`
-- A static `threshold` MUST be validated at configuration load time. A
-  `threshold` containing nginx variables MUST be validated after rendering it
-  for a request.
-- Optional parameters map to guard tuning fields in the wire protocol:
-  - `ttl` -> `ttl_ms`
-  - `max_samples` -> `max_samples`
-  - `buffer_size` -> `buffer_size`
-  - `min_sample_threshold` -> `min_sample_threshold`
-- Parsed threshold and TTL milliseconds and all three tuning integers MUST fit
-  an unsigned 32-bit wire field. `max_samples` and `buffer_size` MUST be
-  nonzero.
-- `min_sample_threshold=0` MUST be accepted and MUST disable only the
-  insertion-rate sufficiency gate. A retained, non-expired sample is still
-  required for a minimum latency to be available. A positive value requires
-  the estimated insertion rate to reach that value before retained samples are
-  used by the guard.
-- Guards referenced by `ratelimitly ... guard=<name>` must be defined before use.
+The default is `off`. `on` enables additional module decision, DNS, UDP,
+identifier, latency-report, and steering messages. Debug-level messages also
+require an nginx binary built with `--with-debug` and an effective debug error
+log. Debug output MUST be treated as sensitive operational data and SHOULD be
+enabled only for a bounded diagnostic window.
 
-### ratelimitly_group
+### `ratelimitly_zone`
 
-```
-ratelimitly_group <name> zone=<zone1> zone=<zone2> ...;
+```nginx
+ratelimitly_zone <name> bucket="<template>" rate=<rate-expression>;
 ```
 
-Notes:
-- Groups are expanded at config load time.
-- Group zones are appended in the order listed.
-- Zones referenced by a group must be defined before the group.
+The directive takes exactly one positional name plus one nonempty `bucket=` and
+one nonempty `rate=` argument. The two named arguments MAY appear in either
+order. A name containing `=` or a duplicate zone name is a configuration error.
 
-### ratelimitly
+`bucket` is an nginx complex value rendered per request. The rendered text is
+hashed as specified in [Wire mapping](mapping.md). Components MUST be canonical
+and bounded and MUST NOT treat request arguments, headers, cookies, or raw
+paths as authenticated identity. `$binary_remote_addr` MUST NOT be used: the
+current text hash boundary is NUL-terminated and embedded NUL bytes can truncate
+the identity. Use textual `$remote_addr` with correctly configured real-IP or
+proxy-protocol trust.
 
+`rate` is also an nginx complex value. A static value is validated during
+configuration loading; a value containing variables is rendered and validated
+for each request. A per-request failure follows `ratelimitly_fail`.
+
+The accepted rate grammar is:
+
+```text
+<rate>r/<period><unit>
 ```
-ratelimitly zone=<name> [guard=<guard1>] [guard=<guard2>] ...;
-ratelimitly group=<name> [guard=<guard1>] [guard=<guard2>] ...;
+
+- `<rate>` is decimal `1..4294967295`.
+- `<period>` is an optional decimal integer; omitted or zero means one unit.
+- `<unit>` is exactly `s`, `m`, or `h`.
+- No spaces, signs, suffixes, or fractional values are accepted.
+- The period converted to milliseconds MUST fit `1..4294967295`. The largest
+  accepted whole-unit values are `4294967s`, `71582m`, and `1193h`.
+
+Canonical configurations SHOULD use an omitted period for one unit (`10r/s`)
+and a positive explicit period otherwise (`100r/2s`), rather than the accepted
+but redundant `0` form.
+
+### `ratelimitly_guard`
+
+```nginx
+ratelimitly_guard <name>
+  service="<template>"
+  threshold=<duration-or-template>
+  [ttl=<duration>]
+  [max_samples=<uint32>]
+  [buffer_size=<uint32>]
+  [min_sample_threshold=<uint32>];
 ```
 
-Notes:
-- Multiple `ratelimitly` directives are allowed in a single `location`/`server`.
-- All resolved zones are combined into one Ratelimitly request with multiple ResourceBlocks.
-- All referenced guards are combined into the same request as GuardBlocks.
-- All guards must pass (`current_latency < threshold`) for the request to be granted.
-- Zones and groups must be defined before they are referenced.
-- Guards must be defined before they are referenced.
+The positional name, nonempty `service=`, and nonempty `threshold=` are
+required. A name containing `=` or a duplicate guard name is a configuration
+error. Unknown named arguments are rejected.
 
-### ratelimitly_label
+`service` is rendered per request and hashed as specified in
+[Wire mapping](mapping.md). It SHOULD be fixed or selected from a finite,
+operator-controlled map. An empty rendered service follows the failure policy.
+Raw host, URI, argument, header, cookie, or user values MUST NOT create service
+cardinality.
 
+`threshold` is an nginx complex value parsed as milliseconds. A static value is
+validated at configuration load; a value containing variables is validated per
+request and follows the failure policy on error. `ttl` and all sample fields
+are static and validated at configuration load.
+
+Threshold and TTL milliseconds and all sample fields MUST fit an unsigned
+32-bit wire field. `max_samples` and `buffer_size` MUST be nonzero.
+`min_sample_threshold=0` is valid and disables only the insertion-rate
+sufficiency gate; it does not synthesize a retained latency sample.
+
+### `ratelimitly_group`
+
+```nginx
+ratelimitly_group <name> zone=<zone1> [zone=<zone2> ...];
 ```
+
+At least one zone is required. Every argument after the name MUST be `zone=`
+and MUST reference a previously defined zone. A duplicate group name is a
+configuration error. A group preserves listed order and does not deduplicate
+repeated zone references; each occurrence maps to a ResourceBlock.
+
+### `ratelimitly`
+
+```nginx
+ratelimitly zone=<name> [guard=<guard1> ...];
+ratelimitly group=<name> [guard=<guard1> ...];
+```
+
+Each directive MUST contain exactly one `zone=` or `group=` reference and MAY
+contain zero or more `guard=` references. Every reference MUST already exist.
+Unknown arguments and a rule containing both or neither resource reference are
+configuration errors.
+
+Multiple rules in one effective context are combined into one RateLimitly
+request. Zones, including repeated references, remain separate ResourceBlocks.
+Repeated references to the same guard definition are deduplicated; distinct
+guards remain in first-seen rule order.
+
+Rules are inherited from `server` to nested `location` contexts, and through
+nested locations, only when the child has no rule of its own. Once a child
+declares a `ratelimitly` rule, its rule list replaces rather than appends to the
+inherited list.
+
+### `ratelimitly_label`
+
+```nginx
 ratelimitly_label "<template>";
 ```
 
-Notes:
-- Optional. When set, the template is rendered per request (nginx variables
-  expanded) and sent as the `metrics_label` TLV.
-- Labels MUST be bounded and non-sensitive. Raw paths, arguments, headers,
-  cookies, credentials, session tokens, user identifiers, email addresses, and
-  source addresses MUST NOT be used as label values.
+The effective label is rendered once per protected request and supplied with
+the combined rule. An empty rendered value omits the metrics-label TLV. A child
+inherits its parent's label unless it declares its own; a later label in the
+same context is effective.
 
-## Defaults
+Labels MUST be bounded and non-sensitive. Raw paths, arguments, headers,
+cookies, credentials, session tokens, user identifiers, email addresses, and
+source addresses MUST NOT be used as label values.
 
-- `ratelimitly_timeout`: 20ms
-- `ratelimitly_fail`: open. Production configurations SHOULD set this
-  explicitly after assessing enforcement bypass under fail-open and legitimate
-  traffic denial under fail-close.
-- `ratelimitly_guard ttl`: 30s
-- `ratelimitly_guard max_samples`: 128
-- `ratelimitly_guard buffer_size`: 128
-- `ratelimitly_guard min_sample_threshold`: 8
+## Executable defaults
 
-## Non-goals (initial MVP)
+| Setting | Default |
+| --- | --- |
+| `ratelimitly_timeout` | `20ms` |
+| `ratelimitly_fail` | `open` |
+| `ratelimitly_bind` | kernel-selected local address, ephemeral port |
+| `ratelimitly_debug` | `off` |
+| `ratelimitly_guard ttl` | `30s` |
+| `ratelimitly_guard max_samples` | `128` |
+| `ratelimitly_guard buffer_size` | `128` |
+| `ratelimitly_guard min_sample_threshold` | `8` |
 
-- Dynamic rule updates beyond per-request rules
+Production configurations SHOULD set timeout and failure policy explicitly
+after assessing enforcement bypass, dependency denial, and request-latency
+budgets.
