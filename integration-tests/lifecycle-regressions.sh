@@ -7,11 +7,12 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|timeout|aborted-client|steering-rebind]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra]
 
-Runs the public A13 lifecycle regressions against the locked rl-c-client test
-responder. Every case pins the original nginx worker PID, triggers the lifecycle
-path, and requires both worker survival and a successful follow-up request.
+Runs the public lifecycle and response-cardinality regressions against the
+locked rl-c-client test responder. Every case pins the original nginx worker
+PID, triggers its target path, and requires both worker survival and a
+successful follow-up request.
 
 Environment overrides:
   RCLIENT_DIR       C-client checkout (default: locked ./_deps checkout)
@@ -21,6 +22,7 @@ Environment overrides:
   NGINX_PORT        nginx HTTP port (default: 18098)
   REQUEST_TIMEOUT   module timeout (default: 300ms)
   ABORT_REQUESTS    aborted clients in the stress case (default: 20)
+  FAIL_POLICY       generated nginx policy: close or open (default: close)
   SKIP_BUILD=1      reuse existing responder and nginx binaries
 
 Artifacts are written under integration-tests/artifacts/lifecycle/.
@@ -37,7 +39,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|timeout|aborted-client|steering-rebind) ;;
+  all|cardinality|timeout|aborted-client|steering-rebind|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -59,6 +61,7 @@ DOMAIN="${DOMAIN:-rn-test.local}"
 SERVER_ID="${SERVER_ID:-1}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300ms}"
 ABORT_REQUESTS="${ABORT_REQUESTS:-20}"
+FAIL_POLICY="${FAIL_POLICY:-close}"
 CLIENT_TIMEOUT_SEC="${CLIENT_TIMEOUT_SEC:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${SCRIPT_DIR}/artifacts/lifecycle}"
 ABORT_CLIENT_HELPER="${SCRIPT_DIR}/abort_http_clients.py"
@@ -70,6 +73,15 @@ NGINX_PID=""
 ORIGINAL_WORKER_PID=""
 CASE_FAILED=0
 RESPONDER_RUN=0
+
+case "${FAIL_POLICY}" in
+  close|open) ;;
+  *) fail_policy_error="FAIL_POLICY must be close or open, got: ${FAIL_POLICY}" ;;
+esac
+if [[ -n "${fail_policy_error:-}" ]]; then
+  echo "${fail_policy_error}" >&2
+  exit 2
+fi
 
 log() {
   printf '[lifecycle:%s] %s\n' "${MODE}" "$*"
@@ -198,6 +210,33 @@ run_all() {
   log "all lifecycle regressions passed"
 }
 
+run_cardinality() {
+  local failures=0
+  local policy
+  local scenario
+
+  prepare_binaries
+  for policy in close open; do
+    for scenario in count-empty count-short count-extra; do
+      if ARTIFACT_ROOT="${ARTIFACT_ROOT}/cardinality/${policy}" \
+          FAIL_POLICY="${policy}" \
+          SKIP_BUILD=1 \
+          "${SELF}" "${scenario}"; then
+        printf 'PASS %s/%s\n' "${policy}" "${scenario}"
+      else
+        printf 'FAIL %s/%s (see %s/cardinality/%s/%s)\n' \
+          "${policy}" "${scenario}" "${ARTIFACT_ROOT}" "${policy}" "${scenario}" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  done
+  if (( failures > 0 )); then
+    echo "${failures} response-cardinality regression(s) failed" >&2
+    return 1
+  fi
+  log "all response-cardinality regressions passed"
+}
+
 wait_for_log() {
   local pattern="$1"
   local file="$2"
@@ -288,7 +327,7 @@ http {
   ratelimitly_tenant ${DOMAIN};
   ratelimitly_auth_key ${auth_key};
   ratelimitly_timeout ${REQUEST_TIMEOUT};
-  ratelimitly_fail close;
+  ratelimitly_fail ${FAIL_POLICY};
   ratelimitly_debug on;
 
   ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=10000r/s;
@@ -371,9 +410,8 @@ warm_client() {
 
   for (( attempt = 0; attempt < 100; attempt++ )); do
     code="$(request_code)"
-    if [[ "${code}" == "200" ]]; then
-      wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
-        || fail "warmup returned 200 without a responder request record"
+    if [[ "${code}" == "200" ]] \
+        && wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20; then
       log "baseline allow succeeded"
       return 0
     fi
@@ -404,17 +442,20 @@ check_follow_up() {
   local phase="$1"
   local attempt
   local code="000"
+  local observed=0
 
   start_responder allow keep 0
   for (( attempt = 0; attempt < 40; attempt++ )); do
     code="$(request_code)"
-    if [[ "${code}" == "200" ]]; then
+    if [[ "${code}" == "200" ]] \
+        && wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20; then
+      observed=1
       break
     fi
     sleep 0.05
   done
-  if [[ "${code}" != "200" ]]; then
-    record_failure "follow-up request after ${phase} returned ${code}, expected 200"
+  if [[ "${code}" != "200" || "${observed}" != "1" ]]; then
+    record_failure "follow-up request after ${phase} did not complete through the responder (last HTTP ${code})"
   else
     log "follow-up request after ${phase} succeeded"
   fi
@@ -571,6 +612,38 @@ run_steering_rebind_case() {
   check_follow_up "steering rebind"
 }
 
+run_count_mismatch_case() {
+  local code
+  local error_log_start
+  local expected_code
+
+  if [[ "${FAIL_POLICY}" == "open" ]]; then
+    expected_code="200"
+  else
+    expected_code="429"
+  fi
+
+  error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
+  start_responder "${MODE}" keep 0
+  code="$(request_code)"
+  if [[ "${code}" != "${expected_code}" ]]; then
+    record_failure "${MODE} with fail-${FAIL_POLICY} returned ${code}, expected ${expected_code}"
+  fi
+  wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
+    || record_failure "${MODE} responder did not observe the request"
+  tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
+    >"${ARTIFACT_DIR}/${MODE}-trigger.log"
+  if ! grep -q 'rn: response_cardinality_mismatch' \
+      "${ARTIFACT_DIR}/${MODE}-trigger.log"; then
+    record_failure "${MODE} did not record a response-cardinality mismatch"
+  fi
+  if grep -q 'rn: result success=' "${ARTIFACT_DIR}/${MODE}-trigger.log"; then
+    record_failure "${MODE} logged the mismatched response as a valid result"
+  fi
+  check_worker_survival "${MODE} fail-${FAIL_POLICY} decision"
+  check_follow_up "${MODE} fail-${FAIL_POLICY} decision"
+}
+
 run_one() {
   ARTIFACT_DIR="${ARTIFACT_ROOT}/${MODE}"
   PREFIX="${ARTIFACT_DIR}/nginx-prefix"
@@ -598,6 +671,7 @@ run_one() {
     timeout) run_timeout_case ;;
     aborted-client) run_aborted_client_case ;;
     steering-rebind) run_steering_rebind_case ;;
+    count-empty|count-short|count-extra) run_count_mismatch_case ;;
   esac
 
   check_reload
@@ -612,6 +686,8 @@ run_one() {
 
 if [[ "${MODE}" == "all" ]]; then
   run_all
+elif [[ "${MODE}" == "cardinality" ]]; then
+  run_cardinality
 else
   run_one
 fi

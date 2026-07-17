@@ -109,6 +109,8 @@ typedef struct {
     r_client_req_t *req;
     r_service_latency_report_t *lat_reports;
     size_t lat_report_count;
+    size_t expected_guard_count;
+    size_t expected_resource_count;
     ngx_event_t timer;
     ngx_int_t decision;
     ngx_flag_t waiting;
@@ -538,6 +540,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     ctx->timer.log = worker->log;
     ctx->lat_reports = lat_reports;
     ctx->lat_report_count = guard_idx;
+    ctx->expected_guard_count = guard_idx;
+    ctx->expected_resource_count = idx;
     ctx->waiting = 0;
     ctx->done = 0;
     ctx->decision = NGX_DECLINED;
@@ -2446,7 +2450,22 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     rn_request_teardown(ctx, req, 0);
 
     ngx_int_t rc;
-    if (status == RCLIENT_OK && result) {
+    ngx_flag_t cardinality_mismatch = 0;
+    if (status == RCLIENT_OK && result
+        && (result->guard_count != ctx->expected_guard_count
+            || result->resource_count != ctx->expected_resource_count))
+    {
+        cardinality_mismatch = 1;
+        ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+            "rn: response_cardinality_mismatch expected_guards=%uz "
+            "actual_guards=%uz expected_resources=%uz actual_resources=%uz "
+            "fail_open=%d",
+            ctx->expected_guard_count, result->guard_count,
+            ctx->expected_resource_count, result->resource_count,
+            (int) (mcf && mcf->fail_open));
+        rc = (mcf && mcf->fail_open) ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+
+    } else if (status == RCLIENT_OK && result) {
         ngx_flag_t allow = result->success ? 1 : 0;
         size_t i;
 
@@ -2470,7 +2489,7 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     } else {
         rc = (mcf && mcf->fail_open) ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
     }
-    if (worker->debug) {
+    if (worker->debug && !cardinality_mismatch) {
         if (status == RCLIENT_OK && result) {
             ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
                 "rn: result success=%d server_id=%uL",

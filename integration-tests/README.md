@@ -4,7 +4,7 @@ This directory contains an end-to-end local integration test for the nginx
 Ratelimitly module. The test replaces the older manual flow of starting nginx,
 running `tests/burst-test.sh`, and inspecting rates by hand.
 
-## Public lifecycle regressions
+## Public deterministic regressions
 
 `lifecycle-regressions.sh` uses only public dependencies: the locked
 `rl-c-client` test responder, the local DNS fixture, nginx, and this module. It
@@ -58,6 +58,19 @@ failed:
   timer while balancing the nginx and worker request counts;
 - `steering-rebind`: source-port replacement must run in a deferred worker
   event after the UDP read callback unwinds.
+
+Run the response-cardinality matrix separately while working on result
+validation:
+
+```sh
+./integration-tests/lifecycle-regressions.sh cardinality
+```
+
+The matrix sends authenticated successful responses with empty, short, and
+extra result arrays. Each scenario runs under both configured failure policies:
+fail-close must return 429 and fail-open must return 200. Every mismatch must be
+logged before any returned guard or resource entry is evaluated, and every case
+still requires worker survival, a valid follow-up, reload, and clean shutdown.
 
 Diagnostic artifacts are preserved under
 `integration-tests/artifacts/lifecycle/<case>/`; the commands above are the
