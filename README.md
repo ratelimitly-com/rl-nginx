@@ -175,19 +175,24 @@ Operational guidance is in [docs/operations.md](docs/operations.md).
 
 ## Test
 
-Syntax and development build checks:
+Required public-readiness gate:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-config.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/public.sh integration-tests/lifecycle-regressions.sh integration-tests/internal-full-stack.sh; do
-  bash -n "$script"
-done
-python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/local_dns_server.py"), pathlib.Path("integration-tests/test_local_dns_server.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
-sh -n config
-python3 integration-tests/test_local_dns_server.py
-./tests/test-numeric.sh
-RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
-./tools/build-nginx.sh ./upstream-nginx --clean --debug
-RCLIENT_DIR=./_deps/rl-c-client ./tests/test-config.sh
+make check
+```
+
+This fetches the locked public C-client release, runs shell/Python/config syntax
+checks, unit tests, nginx/module build, configuration tests, the public
+integration suite, and the whitespace check.
+
+The same steps are also available as narrower root targets:
+
+```sh
+make syntax
+make unit
+make build
+make config-test
+make public-test
 ```
 
 The numeric unit checks every 32-bit wire boundary before a value can be
@@ -197,7 +202,7 @@ requires the adapter to return no partial records and retain no allocations.
 Required public integration suite:
 
 ```sh
-./integration-tests/public.sh
+make public-test
 ```
 
 This uses only the locked public C-client responder, local DNS fixture, pinned
@@ -218,7 +223,7 @@ Run the lifecycle and response-cardinality gates three times with ASan and
 UBSan instrumentation in nginx, this module, and the C client:
 
 ```sh
-./tools/sanitized-lifecycle.sh
+make sanitizers
 ```
 
 Optional internal full-stack test with the private Rust RateLimitly server:

@@ -24,33 +24,25 @@ jobs:
           sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
 
       - name: Script syntax
-        run: |
-          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-config.sh tests/test-numeric.sh tests/test-srv-records.sh start-nginx.sh integration-tests/public.sh integration-tests/lifecycle-regressions.sh integration-tests/internal-full-stack.sh; do
-            bash -n "$script"
-          done
-          python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/local_dns_server.py"), pathlib.Path("integration-tests/test_local_dns_server.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
-          sh -n config
+        run: make syntax
 
       - name: Fetch locked rl-c-client release
-        run: ./tools/fetch-rl-c-client.sh
+        run: make fetch
 
       - name: Unit tests
-        run: |
-          python3 integration-tests/test_local_dns_server.py
-          ./tests/test-numeric.sh
-          RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
+        run: make unit
 
       - name: Build nginx module
-        run: RCLIENT_DIR=./_deps/rl-c-client ./tools/build-nginx.sh ./upstream-nginx --clean --debug
+        run: make build
 
       - name: Configuration tests
-        run: RCLIENT_DIR=./_deps/rl-c-client ./tests/test-config.sh
+        run: make config-test
 
       - name: Public integration suite
-        run: RCLIENT_DIR=./_deps/rl-c-client ./integration-tests/public.sh
+        run: make public-test
 
       - name: Check whitespace
-        run: git diff --check
+        run: make whitespace
 
   sanitizers:
     runs-on: ubuntu-latest
@@ -68,7 +60,7 @@ jobs:
           sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
 
       - name: Fetch locked rl-c-client release
-        run: ./tools/fetch-rl-c-client.sh
+        run: make fetch
 
       - name: Run sanitized lifecycle gate
-        run: SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 ./tools/sanitized-lifecycle.sh
+        run: SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 make sanitizers
