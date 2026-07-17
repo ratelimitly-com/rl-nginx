@@ -4,6 +4,7 @@
 #include <ngx_resolver.h>
 
 #include "r_client.h"
+#include "rn_srv_records.h"
 
 #include <errno.h>
 #include <sys/socket.h>
@@ -1664,6 +1665,18 @@ typedef struct {
 static void rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx);
 static void rn_resolve_addr_handler(ngx_resolver_ctx_t *ctx);
 
+static void *
+rn_srv_ngx_alloc(size_t size, void *ctx) {
+    rn_worker_ctx_t *worker = ctx;
+    return ngx_alloc(size, worker->log);
+}
+
+static void
+rn_srv_ngx_free(void *ptr, void *ctx) {
+    (void) ctx;
+    ngx_free(ptr);
+}
+
 static int
 rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_srv_cb cb, void *user) {
     rn_worker_ctx_t *worker = ctx;
@@ -1941,43 +1954,46 @@ rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx) {
     if (ctx->state != 0 || ctx->nsrvs == 0) {
         req->srv_cb(req->user, -1, NULL, 0);
     } else {
-        r_srv_record_t *records = ngx_alloc(ctx->nsrvs * sizeof(r_srv_record_t), req->worker->log);
-        if (records == NULL) {
+        rn_srv_source_t *sources;
+        rn_srv_records_t result;
+
+        ngx_memzero(&result, sizeof(result));
+        if (ctx->nsrvs > SIZE_MAX / sizeof(rn_srv_source_t)) {
             req->srv_cb(req->user, -1, NULL, 0);
         } else {
-            ngx_memzero(records, ctx->nsrvs * sizeof(r_srv_record_t));
-            char **targets = ngx_alloc(ctx->nsrvs * sizeof(char *), req->worker->log);
-            if (targets == NULL) {
-                ngx_free(records);
+            sources = ngx_alloc(ctx->nsrvs * sizeof(rn_srv_source_t),
+                req->worker->log);
+            if (sources == NULL) {
                 req->srv_cb(req->user, -1, NULL, 0);
             } else {
                 for (ngx_uint_t i = 0; i < ctx->nsrvs; i++) {
                     ngx_resolver_srv_name_t *srv = &ctx->srvs[i];
-                    size_t len = srv->name.len;
-                    targets[i] = ngx_alloc(len + 1, req->worker->log);
-                    if (targets[i]) {
-                        ngx_memcpy(targets[i], srv->name.data, len);
-                        targets[i][len] = '\0';
-                    }
-                    records[i].target = targets[i];
-                    records[i].port = (uint16_t) srv->port;
-                    records[i].priority = (uint16_t) srv->priority;
-                    records[i].weight = (uint16_t) srv->weight;
-                    records[i].ttl_ms = (uint32_t) (ctx->valid * 1000);
-                    if (req->worker->debug && targets[i]) {
-                        ngx_log_error(NGX_LOG_DEBUG, req->worker->log, 0,
-                            "rn: SRV target=%s port=%ui ttl=%uD",
-                            targets[i], records[i].port, records[i].ttl_ms);
-                    }
+                    sources[i].target = srv->name.data;
+                    sources[i].target_len = srv->name.len;
+                    sources[i].port = (uint16_t) srv->port;
+                    sources[i].priority = (uint16_t) srv->priority;
+                    sources[i].weight = (uint16_t) srv->weight;
+                    sources[i].ttl_ms = (uint32_t) (ctx->valid * 1000);
                 }
-                req->srv_cb(req->user, 0, records, ctx->nsrvs);
-                for (ngx_uint_t i = 0; i < ctx->nsrvs; i++) {
-                    if (targets[i]) {
-                        ngx_free(targets[i]);
+                if (rn_srv_records_build(sources, ctx->nsrvs,
+                        rn_srv_ngx_alloc, rn_srv_ngx_free, req->worker,
+                        &result) != 0)
+                {
+                    req->srv_cb(req->user, -1, NULL, 0);
+                } else {
+                    if (req->worker->debug) {
+                        for (size_t i = 0; i < result.count; i++) {
+                            ngx_log_error(NGX_LOG_DEBUG, req->worker->log, 0,
+                                "rn: SRV target=%s port=%ui ttl=%uD",
+                                result.records[i].target,
+                                result.records[i].port,
+                                result.records[i].ttl_ms);
+                        }
                     }
+                    req->srv_cb(req->user, 0, result.records, result.count);
                 }
-                ngx_free(targets);
-                ngx_free(records);
+                rn_srv_records_free(&result, rn_srv_ngx_free, req->worker);
+                ngx_free(sources);
             }
         }
     }

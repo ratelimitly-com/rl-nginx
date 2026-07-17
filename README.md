@@ -178,13 +178,17 @@ Operational guidance is in [docs/operations.md](docs/operations.md).
 Syntax and development build checks:
 
 ```sh
-for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
+for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-srv-records.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
   bash -n "$script"
 done
 python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
 sh -n config
+RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
 ./tools/build-nginx.sh ./upstream-nginx --clean --debug
 ```
+
+The SRV-record unit test injects a failure at every allocation point and
+requires the adapter to return no partial records and retain no allocations.
 
 Public timeout, aborted-client, and steering-rebind lifecycle regressions:
 
@@ -193,11 +197,15 @@ Public timeout, aborted-client, and steering-rebind lifecycle regressions:
 ```
 
 Each case requires the original nginx worker to survive and serve a successful
-follow-up request. On the current implementation all three commands return
-nonzero after proving the timeout post-completion access, armed timer after
-client resets, or in-callback UDP rebind respectively. These failures are the
-intended reproductions until the corresponding lifecycle fixes land; artifacts
-are written under `integration-tests/artifacts/lifecycle/`.
+follow-up request, validates a reload, and requires a clean worker shutdown.
+Artifacts are written under `integration-tests/artifacts/lifecycle/`.
+
+Run the lifecycle and response-cardinality gates three times with ASan and
+UBSan instrumentation in nginx, this module, and the C client:
+
+```sh
+./tools/sanitized-lifecycle.sh
+```
 
 Full integration test with the local Rust RateLimitly server:
 

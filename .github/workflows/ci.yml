@@ -25,7 +25,7 @@ jobs:
 
       - name: Script syntax
         run: |
-          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
+          for script in tools/fetch-rl-c-client.sh tools/build-nginx.sh tools/sanitized-lifecycle.sh tests/build-nginx.sh tests/test-srv-records.sh start-nginx.sh integration-tests/test.sh integration-tests/lifecycle-regressions.sh; do
             bash -n "$script"
           done
           python3 -c 'import ast, pathlib; paths = [pathlib.Path("integration-tests/abort_http_clients.py"), pathlib.Path("integration-tests/worker_udp_port.py")]; [ast.parse(path.read_text(), filename=str(path)) for path in paths]'
@@ -33,6 +33,9 @@ jobs:
 
       - name: Fetch locked rl-c-client release
         run: ./tools/fetch-rl-c-client.sh
+
+      - name: Unit tests
+        run: RCLIENT_DIR=./_deps/rl-c-client ./tests/test-srv-records.sh
 
       - name: Build nginx module
         run: RCLIENT_DIR=./_deps/rl-c-client ./tools/build-nginx.sh ./upstream-nginx --clean --debug

@@ -77,6 +77,10 @@ make -C "${RCLIENT_DIR}" \
   CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   all test-responder
+CFLAGS="${SANITIZER_CFLAGS}" \
+  LDFLAGS="${SANITIZER_LDFLAGS}" \
+  RCLIENT_DIR="${RCLIENT_DIR}" \
+  "${RN_ROOT}/tests/test-srv-records.sh"
 
 echo "[sanitizers] building nginx and rl-nginx"
 RCLIENT_DIR="${RCLIENT_DIR}" \
