@@ -16,8 +16,9 @@ Usage: tools/sanitized-lifecycle.sh
 
 Builds the locked rl-c-client, public responder, nginx, and rl-nginx with
 AddressSanitizer and UndefinedBehaviorSanitizer, then runs every lifecycle,
-enforcement-boundary, outage-policy, DNS-policy, and response-cardinality case
-repeatedly. The ordinary C-client build is restored before exit.
+enforcement-boundary, outage-policy, DNS-policy, guard/latency, and
+response-cardinality case repeatedly. The ordinary C-client build is restored
+before exit.
 
 Environment overrides:
   RCLIENT_DIR          locked C-client checkout (default: ./_deps/rl-c-client)
@@ -115,6 +116,10 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
   RCLIENT_DIR="${RCLIENT_DIR}" \
     ARTIFACT_ROOT="${run_artifacts}" \
     SKIP_BUILD=1 \
+    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" guard-latency
+  RCLIENT_DIR="${RCLIENT_DIR}" \
+    ARTIFACT_ROOT="${run_artifacts}" \
+    SKIP_BUILD=1 \
     "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" cardinality
 
   if grep -R -E \
@@ -125,5 +130,5 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
   fi
 done
 
-echo "[sanitizers] ${SANITIZER_RUNS} complete lifecycle/enforcement/outage/dns/cardinality run(s) passed"
+echo "[sanitizers] ${SANITIZER_RUNS} complete lifecycle/enforcement/outage/dns/guard/cardinality run(s) passed"
 echo "[sanitizers] artifacts: ${ARTIFACT_ROOT}"

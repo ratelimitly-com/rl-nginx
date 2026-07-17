@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|outage-policy|dns-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -42,7 +42,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|outage-policy|dns-policy|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|count-empty|count-short|count-extra) ;;
+  all|cardinality|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -295,6 +295,29 @@ run_dns_policy() {
   log "all dns-policy regressions passed"
 }
 
+run_guard_latency() {
+  local failures=0
+  local scenario
+
+  prepare_binaries
+  for scenario in guard-pass guard-deny guard-multiple; do
+    if ARTIFACT_ROOT="${ARTIFACT_ROOT}/guard" \
+        SKIP_BUILD=1 \
+        "${SELF}" "${scenario}"; then
+      printf 'PASS %s\n' "${scenario}"
+    else
+      printf 'FAIL %s (see %s/guard/%s)\n' \
+        "${scenario}" "${ARTIFACT_ROOT}" "${scenario}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if (( failures > 0 )); then
+    echo "${failures} guard-latency regression(s) failed" >&2
+    return 1
+  fi
+  log "all guard-latency regressions passed"
+}
+
 wait_for_log() {
   local pattern="$1"
   local file="$2"
@@ -346,6 +369,13 @@ dns_failure_mode() {
   esac
 }
 
+is_guard_case() {
+  case "${MODE}" in
+    guard-pass|guard-deny|guard-multiple) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 start_responder() {
   local scenario="$1"
   local steering="${2:-keep}"
@@ -382,11 +412,21 @@ synthetic_auth_key() {
 
 write_nginx_config() {
   local auth_key
+  local guard_defs=""
+  local ratelimitly_rule="ratelimitly zone=lifecycle_zone;"
   local zone_rate="10000r/s"
   auth_key="$(synthetic_auth_key)"
   [[ -n "${auth_key}" ]] || fail "could not obtain the responder's synthetic nginx key"
   if [[ "${MODE}" == "enforcement-boundary" ]]; then
     zone_rate="${ENFORCEMENT_ALLOW_COUNT}r/h"
+  fi
+  if is_guard_case; then
+    guard_defs='  ratelimitly_guard lifecycle_guard service="svc:lifecycle:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+    ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard;"
+    if [[ "${MODE}" == "guard-multiple" ]]; then
+      guard_defs="${guard_defs}"$'\n''  ratelimitly_guard lifecycle_guard_secondary service="svc:lifecycle:secondary:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard guard=lifecycle_guard_secondary;"
+    fi
   fi
   mkdir -p "${PREFIX}/logs"
 
@@ -413,6 +453,7 @@ http {
   ratelimitly_debug on;
 
   ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=${zone_rate};
+${guard_defs}
 
   server {
     listen ${NGINX_HOST}:${NGINX_PORT};
@@ -423,7 +464,7 @@ http {
 
     location = /limited {
       ratelimitly_label "LIFECYCLE:\$uri";
-      ratelimitly zone=lifecycle_zone;
+      ${ratelimitly_rule}
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
     }
@@ -761,6 +802,74 @@ run_dns_failure_case() {
   check_follow_up "${phase} fail-${FAIL_POLICY} recovery"
 }
 
+run_guard_case() {
+  local code
+  local expected_code
+  local expected_guards
+  local expected_reports
+  local scenario
+
+  expected_code="200"
+  expected_guards=1
+  expected_reports=1
+  scenario="${MODE}"
+
+  case "${MODE}" in
+    guard-pass)
+      scenario="guard-pass"
+      ;;
+    guard-deny)
+      scenario="guard-deny"
+      expected_code="429"
+      expected_reports=0
+      ;;
+    guard-multiple)
+      scenario="guard-pass"
+      expected_guards=2
+      expected_reports=2
+      ;;
+  esac
+
+  start_responder "${scenario}" keep 0
+  code="$(request_code)"
+  if [[ "${code}" != "${expected_code}" ]]; then
+    record_failure "${MODE} returned ${code}, expected ${expected_code}"
+  fi
+  wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
+    || record_failure "${MODE} responder did not observe the rate request"
+  if ! awk -v guards="${expected_guards}" '
+      /"event":"rate_request"/ {
+        count++
+        if (index($0, "\"guards\":" guards ",\"resources\":1,") == 0) bad = 1
+      }
+      END { exit count == 1 && !bad ? 0 : 1 }
+    ' "${RESPONDER_LOG}"; then
+    record_failure "${MODE} did not send the expected guard/resource request shape"
+  fi
+
+  if (( expected_reports > 0 )); then
+    wait_for_log '"event":"latency_report"' "${RESPONDER_LOG}" 40 \
+      || record_failure "${MODE} did not send a post-response latency report"
+    if ! awk -v reports="${expected_reports}" '
+        /"event":"latency_report"/ {
+          count++
+          if (index($0, "\"reports\":" reports) == 0) bad = 1
+        }
+        END { exit count == 1 && !bad ? 0 : 1 }
+      ' "${RESPONDER_LOG}"; then
+      record_failure "${MODE} latency report did not contain the expected report count"
+    fi
+  else
+    sleep 0.2
+    if grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
+      record_failure "${MODE} sent a latency report after a denied request"
+    fi
+  fi
+
+  check_worker_survival "${MODE} decision"
+  check_follow_up "${MODE} decision"
+}
+
 run_enforcement_boundary_case() {
   local code
   local event_count
@@ -870,6 +979,7 @@ run_one() {
     steering-rebind) run_steering_rebind_case ;;
     outage) run_outage_case ;;
     dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;
+    guard-pass|guard-deny|guard-multiple) run_guard_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
   esac
@@ -892,6 +1002,8 @@ elif [[ "${MODE}" == "outage-policy" ]]; then
   run_outage_policy
 elif [[ "${MODE}" == "dns-policy" ]]; then
   run_dns_policy
+elif [[ "${MODE}" == "guard-latency" ]]; then
+  run_guard_latency
 else
   run_one
 fi
