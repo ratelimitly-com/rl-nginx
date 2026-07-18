@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -27,6 +27,7 @@ Environment overrides:
                     wait after restoring DNS from timeout mode (default: 6)
   ABORT_REQUESTS    aborted clients in the stress case (default: 20)
   FAIL_POLICY       generated nginx policy: close or open (default: close)
+  FAULT_POINT       test-only fault selected by the fault-injection group
   SKIP_BUILD=1      reuse existing responder and nginx binaries
 
 Artifacts are written under integration-tests/artifacts/lifecycle/.
@@ -43,7 +44,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -70,6 +71,7 @@ DNS_REFRESH_SEC="${DNS_REFRESH_SEC:-1.2}"
 DNS_TIMEOUT_RECOVERY_SEC="${DNS_TIMEOUT_RECOVERY_SEC:-6}"
 ABORT_REQUESTS="${ABORT_REQUESTS:-20}"
 FAIL_POLICY="${FAIL_POLICY:-close}"
+FAULT_POINT="${FAULT_POINT:-}"
 CLIENT_TIMEOUT_SEC="${CLIENT_TIMEOUT_SEC:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${SCRIPT_DIR}/artifacts/lifecycle}"
 ABORT_CLIENT_HELPER="${SCRIPT_DIR}/abort_http_clients.py"
@@ -344,6 +346,45 @@ run_guard_latency() {
   log "all guard-latency regressions passed"
 }
 
+run_fault_injection() {
+  local failures=0
+  local fault
+  local fault_points=(
+    worker-tenant
+    worker-secret
+    client-create
+    post-client-create
+    resolver-srv-request
+    resolver-srv-name
+    resolver-srv-service
+    resolver-srv-domain
+    resolver-srv-start
+    resolver-addr-request
+    resolver-addr-name
+    resolver-addr-start
+    rebind-open
+  )
+
+  prepare_binaries
+  for fault in "${fault_points[@]}"; do
+    if ARTIFACT_ROOT="${ARTIFACT_ROOT}/fault-injection/${fault}" \
+        FAULT_POINT="${fault}" \
+        SKIP_BUILD=1 \
+        "${SELF}" fault; then
+      printf 'PASS fault/%s\n' "${fault}"
+    else
+      printf 'FAIL fault/%s (see %s/fault-injection/%s)\n' \
+        "${fault}" "${ARTIFACT_ROOT}" "${fault}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if (( failures > 0 )); then
+    echo "${failures} fault-injection regression(s) failed" >&2
+    return 1
+  fi
+  log "all resolver, worker-init, and rebind fault injections passed"
+}
+
 wait_for_log() {
   local pattern="$1"
   local file="$2"
@@ -438,6 +479,7 @@ synthetic_auth_key() {
 
 write_nginx_config() {
   local auth_key
+  local fault_directive=""
   local guard_defs=""
   local load_module_directive=""
   local ratelimitly_rule="ratelimitly zone=lifecycle_zone;"
@@ -457,6 +499,9 @@ write_nginx_config() {
   fi
   if [[ -n "${NGINX_LOAD_MODULE}" ]]; then
     load_module_directive="load_module \"${NGINX_LOAD_MODULE}\";"
+  fi
+  if [[ -n "${FAULT_POINT}" ]]; then
+    fault_directive="  ratelimitly_test_fault ${FAULT_POINT};"
   fi
   mkdir -p "${PREFIX}/logs"
 
@@ -482,6 +527,7 @@ http {
   ratelimitly_timeout ${REQUEST_TIMEOUT};
   ratelimitly_fail ${FAIL_POLICY};
   ratelimitly_debug on;
+${fault_directive}
 
   ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=${zone_rate};
 ${guard_defs}
@@ -517,6 +563,10 @@ replacement_worker_pid() {
 
 worker_udp_port() {
   python3 "${UDP_PORT_HELPER}" "${ORIGINAL_WORKER_PID}"
+}
+
+worker_udp_socket_count() {
+  python3 "${UDP_PORT_HELPER}" --count "${ORIGINAL_WORKER_PID}"
 }
 
 start_nginx() {
@@ -1004,6 +1054,63 @@ run_count_mismatch_case() {
   check_follow_up "${MODE} fail-${FAIL_POLICY} decision"
 }
 
+run_fault_case() {
+  local attempt
+  local code
+  local count
+  local expected_count=1
+  local port_before
+  local port_after
+
+  [[ -n "${FAULT_POINT}" ]] || fail "fault mode requires FAULT_POINT"
+
+  if [[ "${FAULT_POINT}" == "rebind-open" ]]; then
+    port_before="$(worker_udp_port)" \
+      || fail "could not determine the UDP port before failed rebind"
+    start_responder allow rebind 0
+    code="$(request_code)"
+    if [[ "${code}" != "200" ]]; then
+      record_failure "failed-rebind trigger returned ${code}, expected 200"
+    fi
+    wait_for_log 'UDP socket rebind failed; retaining current endpoint' \
+      "${NGINX_ERROR_LOG}" 40 \
+      || record_failure "failed rebind did not report endpoint retention"
+    sleep 1.2
+    if (( $(grep -c 'UDP socket rebind failed; retaining current endpoint' \
+        "${NGINX_ERROR_LOG}" || true) < 2 )); then
+      record_failure "failed rebind did not execute its bounded retry"
+    fi
+    port_after="$(worker_udp_port)" \
+      || fail "could not determine the UDP port after failed rebind"
+    if [[ "${port_after}" != "${port_before}" ]]; then
+      record_failure "failed rebind replaced the live endpoint: ${port_before} -> ${port_after}"
+    else
+      log "failed rebind retained UDP source port ${port_before}"
+    fi
+    check_follow_up "failed transactional rebind"
+  else
+    case "${FAULT_POINT}" in
+      worker-tenant|worker-secret|client-create|post-client-create) expected_count=0 ;;
+    esac
+
+    for (( attempt = 1; attempt <= 8; attempt++ )); do
+      code="$(request_code)"
+      if [[ "${code}" == "000" ]]; then
+        record_failure "${FAULT_POINT} attempt ${attempt} caused a transport error"
+      fi
+      check_worker_survival "${FAULT_POINT} attempt ${attempt}"
+      count="$(worker_udp_socket_count)" \
+        || fail "could not count worker UDP sockets after ${FAULT_POINT}"
+      if [[ "${count}" != "${expected_count}" ]]; then
+        record_failure "${FAULT_POINT} attempt ${attempt} left ${count} module UDP sockets, expected ${expected_count}"
+      fi
+    done
+  fi
+
+  wait_for_log "test fault injected: ${FAULT_POINT}" "${NGINX_ERROR_LOG}" 40 \
+    || record_failure "fault hook ${FAULT_POINT} was not exercised"
+}
+
 run_one() {
   ARTIFACT_DIR="${ARTIFACT_ROOT}/${MODE}"
   PREFIX="${ARTIFACT_DIR}/nginx-prefix"
@@ -1029,7 +1136,9 @@ run_one() {
   start_responder allow keep 0
   write_nginx_config
   start_nginx
-  if dns_failure_mode >/dev/null 2>&1; then
+  if [[ "${MODE}" == "fault" && "${FAULT_POINT}" != "rebind-open" ]]; then
+    log "skipping healthy warm-up before fault injection ${FAULT_POINT}"
+  elif dns_failure_mode >/dev/null 2>&1; then
     log "skipping healthy warm-up before ${MODE}; DNS starts in failure mode"
   else
     warm_client
@@ -1045,9 +1154,12 @@ run_one() {
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
+    fault) run_fault_case ;;
   esac
 
-  check_reload
+  if [[ "${MODE}" != "fault" ]]; then
+    check_reload
+  fi
   check_clean_nginx_shutdown
 
   if (( CASE_FAILED > 0 )); then
@@ -1069,6 +1181,8 @@ elif [[ "${MODE}" == "dns-policy" ]]; then
   run_dns_policy
 elif [[ "${MODE}" == "guard-latency" ]]; then
   run_guard_latency
+elif [[ "${MODE}" == "fault-injection" ]]; then
+  run_fault_injection
 else
   run_one
 fi

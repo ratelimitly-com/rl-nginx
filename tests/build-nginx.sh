@@ -53,15 +53,25 @@ else
 fi
 
 FLAGS=()
+CC_OPT=()
 if [[ "$SANITIZE" == "--sanitize" ]]; then
   # nginx formats an empty query string by passing a null source and zero
   # length to ngx_cpymem(). GCC's nonnull-attribute check reports that upstream
   # idiom on every request, so disable only that UBSan category for nginx.
-  SANITIZER_FLAGS="-O1 -g -fsanitize=address,undefined -fno-sanitize=nonnull-attribute -fno-omit-frame-pointer"
-  FLAGS+=(
-    "--with-cc-opt=${SANITIZER_FLAGS}"
-    "--with-ld-opt=-fsanitize=address,undefined"
+  CC_OPT+=(
+    -O1
+    -g
+    -fsanitize=address,undefined
+    -fno-sanitize=nonnull-attribute
+    -fno-omit-frame-pointer
   )
+  FLAGS+=("--with-ld-opt=-fsanitize=address,undefined")
+fi
+if [[ "${RN_TEST_FAULT_INJECTION:-0}" == "1" ]]; then
+  CC_OPT+=(-DRN_TEST_FAULT_INJECTION=1)
+fi
+if (( ${#CC_OPT[@]} > 0 )); then
+  FLAGS+=("--with-cc-opt=${CC_OPT[*]}")
 fi
 if [[ "$DEBUG" == "--debug" ]]; then
   FLAGS+=("--with-debug")

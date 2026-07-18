@@ -14,6 +14,7 @@ SH_SCRIPTS := \
 	tools/sanitized-lifecycle.sh \
 	tests/build-nginx.sh \
 	tests/test-config.sh \
+	tests/test-async-state.sh \
 	tests/test-numeric.sh \
 	tests/test-dependency-bootstrap.sh \
 	tests/test-srv-records.sh \
@@ -93,6 +94,7 @@ spec-consistency-test:
 
 unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test spec-consistency-test
 	python3 integration-tests/test_local_dns_server.py
+	./tests/test-async-state.sh
 	./tests/test-numeric.sh
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-srv-records.sh
 

@@ -1,13 +1,24 @@
 # Changelog
 
-All notable changes to `rl-nginx` will be documented here. Until a tagged
-release is published, `main` is development code and must not be treated as a
-released or ABI-stable version.
+All notable changes to `rl-nginx` will be documented here. Release candidates
+remain preview software and must not be treated as ABI-stable versions.
 
-## Unreleased — public-readiness work
+## Unreleased — next release candidate
 
-This repository is preparing the first planned `0.1.x` source-only public
-preview. No `rl-nginx` release has been published yet.
+Changes since `v0.1.0-rc.1`:
+
+- fixed nginx resolver-context ownership across allocation failures,
+  synchronous completion, start failure, cancellation, and worker shutdown;
+- made partial worker initialization transactional, including destruction of a
+  successfully created C client when a later initialization step fails;
+- made steering rebinds transactional: the current UDP endpoint stays active
+  until its replacement is registered, and failed replacements retry later;
+- added test-only resolver, worker-initialization, and rebind fault injection to
+  the ASan/UBSan lifecycle gate.
+
+## 0.1.0-rc.1 — 2026-07-17
+
+The first source-only public preview:
 
 - pinned the public `rl-c-client` `v0.2.0` release by tag and full commit;
 - added deterministic public dependency bootstrap and a local responder
@@ -23,4 +34,3 @@ The planned preview scope and supported matrix are maintained in
 [`docs/compatibility.md`](docs/compatibility.md). Release notes will record the
 exact source revisions, platform, compiler, and validation evidence when a
 tagged release is made.
-

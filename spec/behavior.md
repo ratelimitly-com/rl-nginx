@@ -101,10 +101,10 @@ nginx and worker in-flight accounting exactly once. A synchronous callback
 from timeout handling can release the request pool; timeout code MUST NOT
 access the request context afterwards.
 
-Worker shutdown MUST cancel outstanding resolver activity, close the worker
-socket, and destroy the worker C client. Reload and shutdown MUST leave no
-active request timer, resolver context, or UDP connection owned by an exited
-worker.
+Worker shutdown MUST destroy the worker C client while its resolver adapter is
+still live, allowing outstanding resolver activity to be cancelled, and then
+close the worker socket. Reload and shutdown MUST leave no active request
+timer, resolver context, or UDP connection owned by an exited worker.
 
 ## Steering feedback
 
@@ -114,7 +114,10 @@ module to replace the worker's UDP source port. The module MUST mark the rebind
 pending and defer it until the worker has no in-flight RateLimitly requests.
 It MUST NOT close or replace the socket from inside its active UDP read
 callback. A zero-delay nginx event performs the rebind once both conditions
-are safe.
+are safe. The event MUST register the replacement socket before retiring the
+current socket. If replacement setup fails, the current socket remains active
+and the module retries later; a failed steering rebind by itself MUST NOT turn
+a usable worker into an outage.
 
 ## Latency reporting
 

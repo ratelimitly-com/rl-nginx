@@ -4,12 +4,15 @@
 #include <ngx_resolver.h>
 
 #include "r_client.h"
+#include "rn_async_state.h"
 #include "rn_numeric.h"
 #include "rn_srv_records.h"
 
 #include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+
+#define RN_REBIND_RETRY_MS 1000
 
 typedef struct {
     ngx_str_t name;
@@ -54,6 +57,9 @@ typedef struct {
 
     ngx_str_t bind_addr;
     ngx_flag_t debug;
+#if (RN_TEST_FAULT_INJECTION)
+    ngx_str_t test_fault;
+#endif
 } rn_main_conf_t;
 
 typedef enum {
@@ -101,8 +107,12 @@ typedef struct rn_worker_ctx {
     ngx_event_t rebind_event;
     /* Diagnostic invariant: socket replacement must observe this as false. */
     ngx_flag_t udp_read_active;
-    ngx_str_t bind_addr;
+    struct sockaddr_storage bind_sockaddr;
+    socklen_t bind_socklen;
     ngx_flag_t debug;
+#if (RN_TEST_FAULT_INJECTION)
+    ngx_str_t test_fault;
+#endif
 } rn_worker_ctx_t;
 
 typedef struct {
@@ -150,7 +160,9 @@ static rn_guard_t *rn_find_guard(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_group_t *rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name);
 static ngx_int_t rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver);
 static ngx_int_t rn_rebind_socket(rn_worker_ctx_t *worker);
+static void rn_worker_cleanup(rn_worker_ctx_t *worker);
 static void rn_schedule_rebind(rn_worker_ctx_t *worker);
+static void rn_schedule_rebind_after(rn_worker_ctx_t *worker, ngx_msec_t delay);
 static void rn_rebind_handler(ngx_event_t *ev);
 static void rn_udp_read_handler(ngx_event_t *ev);
 static void rn_request_timeout_handler(ngx_event_t *ev);
@@ -231,6 +243,15 @@ static ngx_command_t ngx_http_rn_commands[] = {
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
       NULL },
+
+#if (RN_TEST_FAULT_INJECTION)
+    { ngx_string("ratelimitly_test_fault"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      offsetof(rn_main_conf_t, test_fault),
+      NULL },
+#endif
 
     { ngx_string("ratelimitly_zone"),
       NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE3,
@@ -1587,6 +1608,27 @@ rn_on_steering_feedback(void *ctx, bool keep_port) {
     rn_schedule_rebind(worker);
 }
 
+#if (RN_TEST_FAULT_INJECTION)
+static ngx_flag_t
+rn_test_fault_active(rn_worker_ctx_t *worker, const char *name)
+{
+    size_t name_len;
+
+    if (worker == NULL || name == NULL || worker->test_fault.len == 0) {
+        return 0;
+    }
+    name_len = ngx_strlen(name);
+    if (worker->test_fault.len != name_len
+        || ngx_strncmp(worker->test_fault.data, name, name_len) != 0)
+    {
+        return 0;
+    }
+    ngx_log_error(NGX_LOG_NOTICE, worker->log, 0,
+        "rn: test fault injected: %s", name);
+    return 1;
+}
+#endif
+
 typedef struct {
     rn_worker_ctx_t *worker;
     r_dns_srv_cb srv_cb;
@@ -1596,11 +1638,70 @@ typedef struct {
     size_t name_len;
     u_char *service_buf;
     size_t service_len;
-    ngx_resolver_ctx_t *resolver_ctx;
+    rn_async_state_t start_state;
 } rn_dns_req_t;
 
 static void rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx);
 static void rn_resolve_addr_handler(ngx_resolver_ctx_t *ctx);
+
+static void
+rn_dns_req_release(rn_dns_req_t *req)
+{
+    if (req == NULL) {
+        return;
+    }
+    if (req->name_buf != NULL) {
+        ngx_free(req->name_buf);
+        req->name_buf = NULL;
+    }
+    if (req->service_buf != NULL) {
+        ngx_free(req->service_buf);
+        req->service_buf = NULL;
+    }
+    ngx_free(req);
+}
+
+static void
+rn_dns_discard_unstarted(ngx_resolver_ctx_t *rctx, rn_dns_req_t *req)
+{
+    if (rctx != NULL) {
+        rctx->data = NULL;
+        ngx_resolve_name_done(rctx);
+    }
+    rn_dns_req_release(req);
+}
+
+static void *
+rn_dns_alloc(rn_worker_ctx_t *worker, size_t size, const char *fault)
+{
+#if (RN_TEST_FAULT_INJECTION)
+    if (rn_test_fault_active(worker, fault)) {
+        return NULL;
+    }
+#else
+    (void) fault;
+#endif
+    return ngx_alloc(size, worker->log);
+}
+
+static ngx_int_t
+rn_resolve_name_start(rn_worker_ctx_t *worker, ngx_resolver_ctx_t *rctx,
+    const char *fault)
+{
+#if (RN_TEST_FAULT_INJECTION)
+    if (rn_test_fault_active(worker, fault)) {
+        /* Model ngx_resolve_name()'s NGX_ERROR ownership contract: the
+         * resolver context is no longer live when the call returns. */
+        rctx->data = NULL;
+        ngx_resolve_name_done(rctx);
+        return NGX_ERROR;
+    }
+#else
+    (void) worker;
+    (void) fault;
+#endif
+    return ngx_resolve_name(rctx);
+}
 
 static void *
 rn_srv_ngx_alloc(size_t size, void *ctx) {
@@ -1617,11 +1718,20 @@ rn_srv_ngx_free(void *ptr, void *ctx) {
 static int
 rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_srv_cb cb, void *user) {
     rn_worker_ctx_t *worker = ctx;
-    if (worker == NULL || worker->resolver == NULL || name == NULL || cb == NULL) {
+    ngx_resolver_ctx_t *rctx;
+    rn_dns_req_t *req;
+    ngx_int_t resolve_rc;
+
+    if (out_req_id != NULL) {
+        *out_req_id = 0;
+    }
+    if (worker == NULL || worker->resolver == NULL || name == NULL
+        || out_req_id == NULL || cb == NULL)
+    {
         return -1;
     }
 
-    ngx_resolver_ctx_t *rctx = ngx_resolve_start(worker->resolver, NULL);
+    rctx = ngx_resolve_start(worker->resolver, NULL);
     if (rctx == NULL || rctx == (ngx_resolver_ctx_t *) NGX_NO_RESOLVER) {
         if (worker->debug) {
             ngx_log_error(NGX_LOG_WARN, worker->log, 0,
@@ -1630,8 +1740,10 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
         return -1;
     }
 
-    rn_dns_req_t *req = ngx_alloc(sizeof(rn_dns_req_t), worker->log);
+    req = rn_dns_alloc(worker, sizeof(rn_dns_req_t),
+        "resolver-srv-request");
     if (req == NULL) {
+        rn_dns_discard_unstarted(rctx, NULL);
         return -1;
     }
     ngx_memzero(req, sizeof(*req));
@@ -1639,9 +1751,10 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
     req->srv_cb = cb;
     req->user = user;
     req->name_len = ngx_strlen(name);
-    req->name_buf = ngx_alloc(req->name_len + 1, worker->log);
+    req->name_buf = rn_dns_alloc(worker, req->name_len + 1,
+        "resolver-srv-name");
     if (req->name_buf == NULL) {
-        ngx_free(req);
+        rn_dns_discard_unstarted(rctx, req);
         return -1;
     }
     ngx_memcpy(req->name_buf, name, req->name_len);
@@ -1655,20 +1768,19 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
     }
     if (second) {
         req->service_len = (size_t)(second - req->name_buf);
-        req->service_buf = ngx_alloc(req->service_len, worker->log);
+        req->service_buf = rn_dns_alloc(worker, req->service_len,
+            "resolver-srv-service");
         if (req->service_buf == NULL) {
-            ngx_free(req->name_buf);
-            ngx_free(req);
+            rn_dns_discard_unstarted(rctx, req);
             return -1;
         }
         ngx_memcpy(req->service_buf, req->name_buf, req->service_len);
 
         size_t domain_len = (size_t)((req->name_buf + req->name_len) - (second + 1));
-        u_char *domain_buf = ngx_alloc(domain_len + 1, worker->log);
+        u_char *domain_buf = rn_dns_alloc(worker, domain_len + 1,
+            "resolver-srv-domain");
         if (domain_buf == NULL) {
-            ngx_free(req->service_buf);
-            ngx_free(req->name_buf);
-            ngx_free(req);
+            rn_dns_discard_unstarted(rctx, req);
             return -1;
         }
         ngx_memcpy(domain_buf, second + 1, domain_len);
@@ -1689,23 +1801,37 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
     }
     rctx->handler = rn_resolve_srv_handler;
     rctx->data = req;
-    req->resolver_ctx = rctx;
 
-    (void) ngx_resolve_name(rctx);
-    if (out_req_id) {
-        *out_req_id = (r_dns_req_id_t)(uintptr_t) rctx;
+    rn_async_state_begin(&req->start_state);
+    resolve_rc = rn_resolve_name_start(worker, rctx, "resolver-srv-start");
+    if (!rn_async_state_finish(&req->start_state, resolve_rc == NGX_OK)) {
+        /* The handler completed synchronous success; nginx freed rctx on
+         * NGX_ERROR. In both cases only module allocations remain. */
+        rn_dns_req_release(req);
+        return resolve_rc == NGX_OK ? 0 : -1;
     }
+
+    *out_req_id = (r_dns_req_id_t)(uintptr_t) rctx;
     return 0;
 }
 
 static int
 rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_addr_cb cb, void *user) {
     rn_worker_ctx_t *worker = ctx;
-    if (worker == NULL || worker->resolver == NULL || name == NULL || cb == NULL) {
+    ngx_resolver_ctx_t *rctx;
+    rn_dns_req_t *req;
+    ngx_int_t resolve_rc;
+
+    if (out_req_id != NULL) {
+        *out_req_id = 0;
+    }
+    if (worker == NULL || worker->resolver == NULL || name == NULL
+        || out_req_id == NULL || cb == NULL)
+    {
         return -1;
     }
 
-    ngx_resolver_ctx_t *rctx = ngx_resolve_start(worker->resolver, NULL);
+    rctx = ngx_resolve_start(worker->resolver, NULL);
     if (rctx == NULL || rctx == (ngx_resolver_ctx_t *) NGX_NO_RESOLVER) {
         if (worker->debug) {
             ngx_log_error(NGX_LOG_WARN, worker->log, 0,
@@ -1714,8 +1840,10 @@ rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_
         return -1;
     }
 
-    rn_dns_req_t *req = ngx_alloc(sizeof(rn_dns_req_t), worker->log);
+    req = rn_dns_alloc(worker, sizeof(rn_dns_req_t),
+        "resolver-addr-request");
     if (req == NULL) {
+        rn_dns_discard_unstarted(rctx, NULL);
         return -1;
     }
     ngx_memzero(req, sizeof(*req));
@@ -1723,9 +1851,10 @@ rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_
     req->addr_cb = cb;
     req->user = user;
     req->name_len = ngx_strlen(name);
-    req->name_buf = ngx_alloc(req->name_len + 1, worker->log);
+    req->name_buf = rn_dns_alloc(worker, req->name_len + 1,
+        "resolver-addr-name");
     if (req->name_buf == NULL) {
-        ngx_free(req);
+        rn_dns_discard_unstarted(rctx, req);
         return -1;
     }
     ngx_memcpy(req->name_buf, name, req->name_len);
@@ -1735,12 +1864,17 @@ rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_
     rctx->name.data = req->name_buf;
     rctx->handler = rn_resolve_addr_handler;
     rctx->data = req;
-    req->resolver_ctx = rctx;
 
-    (void) ngx_resolve_name(rctx);
-    if (out_req_id) {
-        *out_req_id = (r_dns_req_id_t)(uintptr_t) rctx;
+    rn_async_state_begin(&req->start_state);
+    resolve_rc = rn_resolve_name_start(worker, rctx, "resolver-addr-start");
+    if (!rn_async_state_finish(&req->start_state, resolve_rc == NGX_OK)) {
+        /* The handler completed synchronous success; nginx freed rctx on
+         * NGX_ERROR. In both cases only module allocations remain. */
+        rn_dns_req_release(req);
+        return resolve_rc == NGX_OK ? 0 : -1;
     }
+
+    *out_req_id = (r_dns_req_id_t)(uintptr_t) rctx;
     return 0;
 }
 
@@ -1748,61 +1882,84 @@ static void
 rn_resolve_cancel(void *ctx, r_dns_req_id_t req_id) {
     rn_worker_ctx_t *worker = ctx;
     ngx_resolver_ctx_t *rctx = (ngx_resolver_ctx_t *)(uintptr_t) req_id;
+    rn_dns_req_t *req;
+    r_dns_srv_cb srv_cb;
+    r_dns_addr_cb addr_cb;
+    void *user;
+
     if (worker == NULL || rctx == NULL) {
         return;
     }
-    rn_dns_req_t *req = rctx->data;
-    if (req) {
-        if (req->name_buf) {
-            ngx_free(req->name_buf);
-        }
-        if (req->service_buf) {
-            ngx_free(req->service_buf);
-        }
-        ngx_free(req);
-        rctx->data = NULL;
+
+    req = rctx->data;
+    if (req == NULL) {
+        return;
     }
+
+    srv_cb = req->srv_cb;
+    addr_cb = req->addr_cb;
+    user = req->user;
+    rctx->data = NULL;
+    rn_async_state_complete(&req->start_state);
     ngx_resolve_name_done(rctx);
+    rn_dns_req_release(req);
+
+    /* The C client permits late callbacks after cancellation.  Completing the
+     * cancelled lookup here lets it retire its lookup state immediately. */
+    if (srv_cb != NULL) {
+        srv_cb(user, RCLIENT_ERR_DNS, NULL, 0);
+    } else if (addr_cb != NULL) {
+        addr_cb(user, RCLIENT_ERR_DNS, NULL, 0);
+    }
+}
+
+static void
+rn_close_udp_endpoint(ngx_connection_t *conn, ngx_socket_t fd)
+{
+    if (conn != NULL) {
+        ngx_close_connection(conn);
+    } else if (fd != (ngx_socket_t) -1) {
+        ngx_close_socket(fd);
+    }
 }
 
 static ngx_int_t
-rn_open_socket(rn_worker_ctx_t *worker) {
-    if (worker == NULL) {
+rn_open_socket_candidate(rn_worker_ctx_t *worker, ngx_socket_t *out_fd,
+    int *out_family, ngx_connection_t **out_conn)
+{
+    struct sockaddr_storage ss;
+    socklen_t slen;
+    ngx_socket_t s;
+    ngx_connection_t *conn;
+    int family;
+
+    if (worker == NULL || out_fd == NULL || out_family == NULL
+        || out_conn == NULL)
+    {
         return NGX_ERROR;
     }
+    *out_fd = (ngx_socket_t) -1;
+    *out_family = AF_UNSPEC;
+    *out_conn = NULL;
 
-    struct sockaddr_storage ss;
-    socklen_t slen = 0;
-    int preferred_family = AF_UNSPEC;
-    ngx_addr_t addr;
     ngx_memzero(&ss, sizeof(ss));
-    ngx_memzero(&addr, sizeof(addr));
-
-    if (worker->bind_addr.len != 0) {
-        if (ngx_parse_addr(ngx_cycle->pool, &addr, worker->bind_addr.data, worker->bind_addr.len) != NGX_OK) {
-            return NGX_ERROR;
-        }
-        ngx_memcpy(&ss, addr.sockaddr, addr.socklen);
-        slen = addr.socklen;
-        preferred_family = addr.sockaddr->sa_family;
-    }
-
-    ngx_socket_t s;
-    int family;
-    if (preferred_family == AF_INET) {
-        family = AF_INET;
-        s = ngx_socket(AF_INET, SOCK_DGRAM, 0);
+    slen = worker->bind_socklen;
+    if (slen != 0) {
+        ngx_memcpy(&ss, &worker->bind_sockaddr, slen);
+        family = ss.ss_family;
     } else {
         family = AF_INET6;
-        s = ngx_socket(AF_INET6, SOCK_DGRAM, 0);
-        if (s != (ngx_socket_t) -1) {
-            int v6only = 0;
-            (void) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
-        }
-        if (s == (ngx_socket_t) -1) {
-            family = AF_INET;
-            s = ngx_socket(AF_INET, SOCK_DGRAM, 0);
-        }
+    }
+
+    s = ngx_socket(family, SOCK_DGRAM, 0);
+    if (s != (ngx_socket_t) -1 && family == AF_INET6) {
+        int v6only = 0;
+        (void) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &v6only,
+            sizeof(v6only));
+    }
+    if (s == (ngx_socket_t) -1 && slen == 0 && family == AF_INET6) {
+        family = AF_INET;
+        s = ngx_socket(family, SOCK_DGRAM, 0);
     }
     if (s == (ngx_socket_t) -1) {
         return NGX_ERROR;
@@ -1810,13 +1967,6 @@ rn_open_socket(rn_worker_ctx_t *worker) {
     if (ngx_nonblocking(s) == -1) {
         ngx_close_socket(s);
         return NGX_ERROR;
-    }
-
-    if (worker->bind_addr.len == 0) {
-        if (worker->udp_conn && worker->udp_conn->sockaddr) {
-            ngx_memcpy(&ss, worker->udp_conn->sockaddr, worker->udp_conn->socklen);
-            slen = worker->udp_conn->socklen;
-        }
     }
 
     if (slen == 0) {
@@ -1833,48 +1983,48 @@ rn_open_socket(rn_worker_ctx_t *worker) {
             sin6->sin6_addr = in6addr_any;
             slen = sizeof(*sin6);
         }
+    } else if (ss.ss_family == AF_INET) {
+        ((struct sockaddr_in *) &ss)->sin_port = htons(0);
+    } else {
+        ((struct sockaddr_in6 *) &ss)->sin6_port = htons(0);
     }
 
-    if (ss.ss_family == AF_INET) {
-        ((struct sockaddr_in *)&ss)->sin_port = htons(0);
-    } else if (ss.ss_family == AF_INET6) {
-        ((struct sockaddr_in6 *)&ss)->sin6_port = htons(0);
-    }
-
-    if (bind(s, (struct sockaddr *)&ss, slen) != 0) {
+    if (bind(s, (struct sockaddr *) &ss, slen) != 0) {
         if (worker->debug) {
-            ngx_log_error(NGX_LOG_WARN, worker->log, ngx_socket_errno, "rn: bind failed");
+            ngx_log_error(NGX_LOG_WARN, worker->log, ngx_socket_errno,
+                "rn: bind failed");
         }
         ngx_close_socket(s);
         return NGX_ERROR;
     }
-    worker->udp_fd = s;
-    worker->udp_family = family;
 
-    worker->udp_conn = ngx_get_connection(s, worker->log);
-    if (worker->udp_conn == NULL) {
+    conn = ngx_get_connection(s, worker->log);
+    if (conn == NULL) {
         if (worker->debug) {
-            ngx_log_error(NGX_LOG_WARN, worker->log, 0, "rn: ngx_get_connection failed");
+            ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+                "rn: ngx_get_connection failed");
         }
         ngx_close_socket(s);
-        worker->udp_fd = (ngx_socket_t) -1;
         return NGX_ERROR;
     }
-    worker->udp_conn->data = worker;
-    worker->udp_conn->read->log = worker->log;
-    worker->udp_conn->write->log = worker->log;
-    worker->udp_conn->read->data = worker->udp_conn;
-    worker->udp_conn->write->data = worker->udp_conn;
-    worker->udp_conn->read->handler = rn_udp_read_handler;
-    if (ngx_add_event(worker->udp_conn->read, NGX_READ_EVENT, 0) != NGX_OK) {
+    conn->data = worker;
+    conn->read->log = worker->log;
+    conn->write->log = worker->log;
+    conn->read->data = conn;
+    conn->write->data = conn;
+    conn->read->handler = rn_udp_read_handler;
+    if (ngx_add_event(conn->read, NGX_READ_EVENT, 0) != NGX_OK) {
         if (worker->debug) {
-            ngx_log_error(NGX_LOG_WARN, worker->log, 0, "rn: ngx_add_event failed");
+            ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+                "rn: ngx_add_event failed");
         }
-        ngx_close_connection(worker->udp_conn);
-        worker->udp_conn = NULL;
-        worker->udp_fd = (ngx_socket_t) -1;
+        ngx_close_connection(conn);
         return NGX_ERROR;
     }
+
+    *out_fd = s;
+    *out_family = family;
+    *out_conn = conn;
     return NGX_OK;
 }
 
@@ -1887,6 +2037,9 @@ rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx) {
         }
         return;
     }
+
+    ctx->data = NULL;
+    rn_async_state_complete(&req->start_state);
 
     if (ctx->state != 0 || ctx->nsrvs == 0) {
         req->srv_cb(req->user, -1, NULL, 0);
@@ -1944,13 +2097,9 @@ rn_resolve_srv_handler(ngx_resolver_ctx_t *ctx) {
     }
 
     ngx_resolve_name_done(ctx);
-    if (req->name_buf) {
-        ngx_free(req->name_buf);
+    if (!rn_async_state_is_starting(&req->start_state)) {
+        rn_dns_req_release(req);
     }
-    if (req->service_buf) {
-        ngx_free(req->service_buf);
-    }
-    ngx_free(req);
 }
 
 static void
@@ -1962,6 +2111,9 @@ rn_resolve_addr_handler(ngx_resolver_ctx_t *ctx) {
         }
         return;
     }
+
+    ctx->data = NULL;
+    rn_async_state_complete(&req->start_state);
 
     if (ctx->state != 0 || ctx->naddrs == 0) {
         req->addr_cb(req->user, -1, NULL, 0);
@@ -1995,38 +2147,101 @@ rn_resolve_addr_handler(ngx_resolver_ctx_t *ctx) {
     }
 
     ngx_resolve_name_done(ctx);
-    if (req->name_buf) {
-        ngx_free(req->name_buf);
+    if (!rn_async_state_is_starting(&req->start_state)) {
+        rn_dns_req_release(req);
     }
-    if (req->service_buf) {
-        ngx_free(req->service_buf);
-    }
-    ngx_free(req);
 }
 
 static ngx_int_t
 rn_rebind_socket(rn_worker_ctx_t *worker) {
+    ngx_socket_t new_fd;
+    ngx_socket_t old_fd;
+    ngx_connection_t *new_conn;
+    ngx_connection_t *old_conn;
+    int new_family;
+
     if (worker == NULL) {
         return NGX_ERROR;
     }
+#if (RN_TEST_FAULT_INJECTION)
+    if (rn_test_fault_active(worker, "rebind-open")) {
+        return NGX_ERROR;
+    }
+#endif
     if (worker->debug) {
         ngx_log_error(NGX_LOG_DEBUG, ngx_cycle->log, 0,
             "rn: rebind_socket udp_read_active=%d", (int) worker->udp_read_active);
     }
-    if (worker->udp_conn) {
-        ngx_del_event(worker->udp_conn->read, NGX_READ_EVENT, 0);
-        ngx_close_connection(worker->udp_conn);
-        worker->udp_conn = NULL;
-    } else if (worker->udp_fd != (ngx_socket_t) -1) {
-        ngx_close_socket(worker->udp_fd);
+
+    if (rn_open_socket_candidate(worker, &new_fd, &new_family, &new_conn)
+        != NGX_OK)
+    {
+        return NGX_ERROR;
     }
-    worker->udp_fd = (ngx_socket_t) -1;
+
+    old_fd = worker->udp_fd;
+    old_conn = worker->udp_conn;
+    worker->udp_fd = new_fd;
+    worker->udp_family = new_family;
+    worker->udp_conn = new_conn;
     worker->rebind_pending = 0;
-    return rn_open_socket(worker);
+    rn_close_udp_endpoint(old_conn, old_fd);
+    return NGX_OK;
+}
+
+static void
+rn_worker_cleanup(rn_worker_ctx_t *worker)
+{
+    if (worker == NULL) {
+        return;
+    }
+    if (worker->rebind_event.timer_set) {
+        ngx_del_timer(&worker->rebind_event);
+    }
+    worker->rebind_scheduled = 0;
+    worker->rebind_pending = 0;
+
+    /* Destroy the client while its resolver and UDP adapter context is live. */
+    if (worker->client != NULL) {
+        r_client_destroy(worker->client);
+        worker->client = NULL;
+    }
+    rn_close_udp_endpoint(worker->udp_conn, worker->udp_fd);
+    worker->udp_conn = NULL;
+    worker->udp_fd = (ngx_socket_t) -1;
+    worker->udp_family = AF_UNSPEC;
+    worker->inflight = 0;
+}
+
+static void
+rn_worker_release_config_buffers(rn_worker_ctx_t *worker, char *dns,
+    char *secret, size_t secret_len)
+{
+    if (worker != NULL) {
+        worker->client_cfg.tenant.dns_name = NULL;
+        worker->client_cfg.tenant.auth.secret = NULL;
+        worker->client_cfg.tenant.auth.secret_len = 0;
+    }
+    if (secret != NULL) {
+        ngx_explicit_memzero(secret, secret_len);
+        ngx_free(secret);
+    }
+    if (dns != NULL) {
+        ngx_free(dns);
+    }
 }
 
 static ngx_int_t
 rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
+    rn_worker_ctx_t *worker;
+    ngx_addr_t addr;
+    ngx_socket_t udp_fd;
+    ngx_connection_t *udp_conn;
+    int udp_family;
+    char *dns;
+    char *secret;
+    int rc;
+
     if (mcf == NULL) {
         return NGX_ERROR;
     }
@@ -2034,23 +2249,39 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
         return NGX_OK;
     }
 
-    rn_worker_ctx_t *worker = ngx_pcalloc(ngx_cycle->pool, sizeof(rn_worker_ctx_t));
+    worker = ngx_alloc(sizeof(rn_worker_ctx_t), ngx_cycle->log);
     if (worker == NULL) {
         return NGX_ERROR;
     }
+    ngx_memzero(worker, sizeof(*worker));
     worker->udp_fd = (ngx_socket_t) -1;
     worker->udp_family = AF_UNSPEC;
     worker->log = ngx_cycle->log;
     worker->resolver = resolver;
-    worker->bind_addr = mcf->bind_addr;
     worker->debug = mcf->debug;
+#if (RN_TEST_FAULT_INJECTION)
+    worker->test_fault = mcf->test_fault;
+#endif
     worker->rebind_event.handler = rn_rebind_handler;
     worker->rebind_event.data = worker;
     worker->rebind_event.log = worker->log;
     worker->rebind_event.cancelable = 1;
 
-    if (rn_open_socket(worker) != NGX_OK) {
-        return NGX_ERROR;
+    if (mcf->bind_addr.len != 0) {
+        ngx_memzero(&addr, sizeof(addr));
+        if (ngx_parse_addr(ngx_cycle->pool, &addr, mcf->bind_addr.data,
+                mcf->bind_addr.len) != NGX_OK
+            || (addr.sockaddr->sa_family != AF_INET
+                && addr.sockaddr->sa_family != AF_INET6)
+            || addr.socklen > sizeof(worker->bind_sockaddr))
+        {
+            ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+                "rn: invalid ratelimitly_bind address: %V", &mcf->bind_addr);
+            ngx_free(worker);
+            return NGX_ERROR;
+        }
+        ngx_memcpy(&worker->bind_sockaddr, addr.sockaddr, addr.socklen);
+        worker->bind_socklen = addr.socklen;
     }
 
     worker->io_ops.ctx = worker;
@@ -2065,9 +2296,12 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
     worker->resolver_ops.cancel = rn_resolve_cancel;
 
     ngx_memzero(&worker->client_cfg, sizeof(worker->client_cfg));
-    char *dns = (char *)ngx_pnalloc(ngx_cycle->pool, mcf->tenant_dns.len + 1);
+    dns = NULL;
+    secret = NULL;
+    dns = rn_dns_alloc(worker, mcf->tenant_dns.len + 1,
+        "worker-tenant");
     if (dns == NULL) {
-        return NGX_ERROR;
+        goto failed;
     }
     ngx_memcpy(dns, mcf->tenant_dns.data, mcf->tenant_dns.len);
     dns[mcf->tenant_dns.len] = '\0';
@@ -2076,9 +2310,10 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
 
     worker->client_cfg.tenant.auth.type = mcf->auth_type;
     if (mcf->auth_key.len > 0) {
-        char *secret = (char *)ngx_pnalloc(ngx_cycle->pool, mcf->auth_key.len + 1);
+        secret = rn_dns_alloc(worker, mcf->auth_key.len + 1,
+            "worker-secret");
         if (secret == NULL) {
-            return NGX_ERROR;
+            goto failed;
         }
         ngx_memcpy(secret, mcf->auth_key.data, mcf->auth_key.len);
         secret[mcf->auth_key.len] = '\0';
@@ -2101,17 +2336,48 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
             &mcf->tenant_dns);
     }
 
-    int rc = r_client_create(&worker->client_cfg, &worker->io_ops, &worker->resolver_ops, &worker->client);
+    if (rn_open_socket_candidate(worker, &udp_fd, &udp_family, &udp_conn)
+        != NGX_OK)
+    {
+        goto failed;
+    }
+    worker->udp_fd = udp_fd;
+    worker->udp_family = udp_family;
+    worker->udp_conn = udp_conn;
+
+#if (RN_TEST_FAULT_INJECTION)
+    if (rn_test_fault_active(worker, "client-create")) {
+        rc = RCLIENT_ERR_CONFIG;
+    } else
+#endif
+    {
+        rc = r_client_create(&worker->client_cfg, &worker->io_ops,
+            &worker->resolver_ops, &worker->client);
+    }
     if (rc != RCLIENT_OK) {
         ngx_log_error(NGX_LOG_WARN, worker->log, 0,
             "rn: r_client_create failed rc=%d tenant=%V key_id=%uL auth=%s",
             rc, &mcf->tenant_dns, (unsigned long) mcf->key_id,
             rn_auth_type_name(mcf->auth_type));
-        return NGX_ERROR;
+        goto failed;
     }
+#if (RN_TEST_FAULT_INJECTION)
+    if (rn_test_fault_active(worker, "post-client-create")) {
+        goto failed;
+    }
+#endif
 
+    rn_worker_release_config_buffers(worker, dns, secret,
+        mcf->auth_key.len + (secret != NULL ? 1 : 0));
     mcf->worker = worker;
     return NGX_OK;
+
+failed:
+    rn_worker_release_config_buffers(worker, dns, secret,
+        mcf->auth_key.len + (secret != NULL ? 1 : 0));
+    rn_worker_cleanup(worker);
+    ngx_free(worker);
+    return NGX_ERROR;
 }
 
 static void
@@ -2124,31 +2390,18 @@ rn_exit_process(ngx_cycle_t *cycle) {
         return;
     }
     worker = mcf->worker;
-
-    if (worker->rebind_event.timer_set) {
-        ngx_del_timer(&worker->rebind_event);
-    }
-    worker->rebind_scheduled = 0;
-    worker->rebind_pending = 0;
-
-    if (worker->udp_conn != NULL) {
-        ngx_close_connection(worker->udp_conn);
-        worker->udp_conn = NULL;
-    } else if (worker->udp_fd != (ngx_socket_t) -1) {
-        ngx_close_socket(worker->udp_fd);
-    }
-    worker->udp_fd = (ngx_socket_t) -1;
-
-    if (worker->client != NULL) {
-        r_client_destroy(worker->client);
-        worker->client = NULL;
-    }
-    worker->inflight = 0;
     mcf->worker = NULL;
+    rn_worker_cleanup(worker);
+    ngx_free(worker);
 }
 
 static void
 rn_schedule_rebind(rn_worker_ctx_t *worker) {
+    rn_schedule_rebind_after(worker, 0);
+}
+
+static void
+rn_schedule_rebind_after(rn_worker_ctx_t *worker, ngx_msec_t delay) {
     if (worker == NULL || !worker->rebind_pending || worker->inflight != 0
         || worker->rebind_scheduled)
     {
@@ -2156,7 +2409,7 @@ rn_schedule_rebind(rn_worker_ctx_t *worker) {
     }
 
     worker->rebind_scheduled = 1;
-    ngx_add_timer(&worker->rebind_event, 0);
+    ngx_add_timer(&worker->rebind_event, delay);
 }
 
 static void
@@ -2173,12 +2426,15 @@ rn_rebind_handler(ngx_event_t *ev) {
         return;
     }
     if (worker->udp_read_active) {
-        worker->rebind_scheduled = 1;
-        ngx_add_timer(&worker->rebind_event, 1);
+        rn_schedule_rebind_after(worker, 1);
         return;
     }
 
-    (void) rn_rebind_socket(worker);
+    if (rn_rebind_socket(worker) != NGX_OK) {
+        ngx_log_error(NGX_LOG_WARN, worker->log, 0,
+            "rn: UDP socket rebind failed; retaining current endpoint and retrying");
+        rn_schedule_rebind_after(worker, RN_REBIND_RETRY_MS);
+    }
 }
 
 static void
@@ -2197,7 +2453,8 @@ rn_udp_read_handler(ngx_event_t *ev) {
         u_char buf[2048];
         struct sockaddr_storage sa;
         socklen_t slen = sizeof(sa);
-        ssize_t n = recvfrom(worker->udp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&sa, &slen);
+        ssize_t n = recvfrom(c->fd, buf, sizeof(buf), 0,
+            (struct sockaddr *) &sa, &slen);
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 worker->udp_read_active = 0;
