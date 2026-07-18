@@ -32,9 +32,10 @@ PY_SCRIPTS := \
 	tests/test-spec-consistency.py \
 	tests/test-dependency-drift-workflow.py \
 	tests/test-workflow-pins.py \
+	tests/test-ci-gates.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test spec-consistency-test unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
+.PHONY: help check fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test spec-consistency-test unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
@@ -44,6 +45,7 @@ help:
 		'  make dependency-bootstrap-test  deterministic dependency gate' \
 		'  make dependency-drift-workflow-test  scheduled-probe isolation gate' \
 		'  make workflow-pin-test  immutable GitHub Actions gate' \
+		'  make ci-gates-test  named CI gate structure test' \
 		'  make spec-consistency-test  source-backed specification gate' \
 		'  make test           unit, config, and public integration tests' \
 		'  make dynamic-relocation-test  relocated dynamic-module gate' \
@@ -83,10 +85,13 @@ dependency-drift-workflow-test:
 workflow-pin-test:
 	python3 tests/test-workflow-pins.py
 
+ci-gates-test:
+	python3 tests/test-ci-gates.py
+
 spec-consistency-test:
 	python3 tests/test-spec-consistency.py
 
-unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test spec-consistency-test
+unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test spec-consistency-test
 	python3 integration-tests/test_local_dns_server.py
 	./tests/test-numeric.sh
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-srv-records.sh
