@@ -44,7 +44,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -243,6 +243,30 @@ run_cardinality() {
     return 1
   fi
   log "all response-cardinality regressions passed"
+}
+
+run_admission_contract() {
+  local failures=0
+  local policy
+
+  prepare_binaries
+  for policy in close open; do
+    if ARTIFACT_ROOT="${ARTIFACT_ROOT}/admission-contract/${policy}" \
+        FAIL_POLICY="${policy}" \
+        SKIP_BUILD=1 \
+        "${SELF}" "admission-contract-${policy}"; then
+      printf 'PASS %s/admission-contract\n' "${policy}"
+    else
+      printf 'FAIL %s/admission-contract (see %s/admission-contract/%s)\n' \
+        "${policy}" "${ARTIFACT_ROOT}" "${policy}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if (( failures > 0 )); then
+    echo "${failures} admission-contract regression(s) failed" >&2
+    return 1
+  fi
+  log "all admission-contract regressions passed"
 }
 
 run_protocol_policy() {
@@ -503,8 +527,10 @@ write_nginx_config() {
   if [[ -n "${FAULT_POINT}" ]]; then
     fault_directive="  ratelimitly_test_fault ${FAULT_POINT};"
   fi
-  mkdir -p "${PREFIX}/logs"
+  mkdir -p "${PREFIX}/logs" "${PREFIX}/html/admission-redirect"
   printf 'admission:{PLAIN}secret\n' >"${AUTH_FILE}"
+  printf 'admitted through internal redirect\n' \
+    >"${PREFIX}/html/admission-redirect/index.html"
 
   cat >"${NGINX_CONF}" <<EOF
 ${load_module_directive}
@@ -531,6 +557,7 @@ http {
 ${fault_directive}
 
   ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=${zone_rate};
+  ratelimitly_zone redirect_zone bucket="redirect:one-request" rate=10000r/s;
 ${guard_defs}
 
   server {
@@ -564,6 +591,29 @@ ${guard_defs}
       ratelimitly zone=lifecycle_zone;
       root ${RN_ROOT}/tests;
       try_files /ok.txt =418;
+    }
+
+    location /admission-redirect/ {
+      ratelimitly_label "REDIRECT:\$uri";
+      ratelimitly zone=redirect_zone;
+      root ${PREFIX}/html;
+      index index.html;
+    }
+
+    location = /admission-subrequest {
+      mirror /admission-mirror;
+      ratelimitly_label "SUBREQUEST-MAIN:\$uri";
+      ratelimitly zone=redirect_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /admission-mirror {
+      internal;
+      ratelimitly_label "SUBREQUEST-MIRROR:\$uri";
+      ratelimitly zone=redirect_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
     }
   }
 }
@@ -1100,7 +1150,56 @@ run_admission_contract_case() {
     log "try_files completed before the final RateLimitly admission"
   fi
 
+  before="${after}"
+  code="$(request_path_code /admission-redirect/ "${CLIENT_TIMEOUT_SEC}")"
+  if [[ "${code}" != "200" ]]; then
+    record_failure "internal-redirect request returned ${code}, expected 200"
+  fi
+  wait_for_log '"label":"REDIRECT:/admission-redirect/' \
+    "${RESPONDER_LOG}" 20 \
+    || record_failure "internal-redirect request did not reach RateLimitly admission"
+  sleep 0.1
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "one internally redirected request produced $((after - before)) RateLimitly events, expected 1"
+  else
+    log "internal redirect preserved exactly one RateLimitly admission"
+  fi
+
+  before="${after}"
+  code="$(request_path_code /admission-subrequest "${CLIENT_TIMEOUT_SEC}")"
+  if [[ "${code}" != "200" ]]; then
+    record_failure "request with mirrored subrequest returned ${code}, expected 200"
+  fi
+  wait_for_log '"label":"SUBREQUEST-MAIN:/ok.txt"' \
+    "${RESPONDER_LOG}" 20 \
+    || record_failure "main mirrored request did not reach RateLimitly admission"
+  sleep 0.1
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "one request with a mirrored subrequest produced $((after - before)) RateLimitly events, expected 1"
+  elif grep -q '"label":"SUBREQUEST-MIRROR:' "${RESPONDER_LOG}"; then
+    record_failure "mirrored subrequest consumed RateLimitly admission"
+  else
+    log "subrequest did not create an independent RateLimitly admission"
+  fi
+
   start_responder deny keep 0
+  before="$(responder_rate_request_count)"
+  code="$(request_path_code /admission-redirect/ "${CLIENT_TIMEOUT_SEC}")"
+  if [[ "${code}" != "429" ]]; then
+    record_failure "denied internal-redirect request returned ${code}, expected 429"
+  fi
+  wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
+    || record_failure "deny responder did not observe the internal-redirect request"
+  sleep 0.1
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "denied internal-redirect request produced $((after - before)) RateLimitly events, expected 1"
+  else
+    log "RateLimitly denial stopped content before the internal redirect"
+  fi
+
   code="$(request_path_code /admission-auth "${CLIENT_TIMEOUT_SEC}" \
     --user admission:secret)"
   if [[ "${code}" != "429" ]]; then
@@ -1109,6 +1208,26 @@ run_admission_contract_case() {
   wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
     || record_failure "deny responder did not observe the authorized request"
   log "RateLimitly deny remained the final admission decision"
+
+  start_responder drop keep 0
+  before="$(responder_rate_request_count)"
+  code="$(request_path_code /admission-redirect/ "${CLIENT_TIMEOUT_SEC}")"
+  if [[ "${FAIL_POLICY}" == "open" ]]; then
+    if [[ "${code}" != "200" ]]; then
+      record_failure "fail-open internal-redirect request returned ${code}, expected 200"
+    fi
+  elif [[ "${code}" != "429" ]]; then
+    record_failure "fail-close internal-redirect request returned ${code}, expected 429"
+  fi
+  wait_for_log '"disposition":"dropped"' "${RESPONDER_LOG}" 20 \
+    || record_failure "drop responder did not observe the internal-redirect request"
+  sleep 0.1
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "dependency-error internal-redirect request produced $((after - before)) RateLimitly events, expected 1"
+  else
+    log "fail-${FAIL_POLICY} outcome preserved exactly one RateLimitly attempt"
+  fi
 
   check_worker_survival "pre-content admission contract"
   check_follow_up "pre-content admission contract"
@@ -1246,7 +1365,7 @@ run_one() {
     guard-pass|guard-deny|guard-multiple) run_guard_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
-    admission-contract) run_admission_contract_case ;;
+    admission-contract-close|admission-contract-open) run_admission_contract_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
     fault) run_fault_case ;;
   esac
@@ -1265,6 +1384,8 @@ run_one() {
 
 if [[ "${MODE}" == "all" ]]; then
   run_all
+elif [[ "${MODE}" == "admission-contract" ]]; then
+  run_admission_contract
 elif [[ "${MODE}" == "cardinality" ]]; then
   run_cardinality
 elif [[ "${MODE}" == "protocol-policy" ]]; then

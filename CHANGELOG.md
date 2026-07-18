@@ -12,6 +12,8 @@ Changes since `v0.1.0-rc.1`:
 - defined a valid allow as consumed admission directly into content processing
   and added static, dynamic, and sanitizer regression coverage for the
   ordering contract;
+- preserved one admission across nginx internal redirects and kept subrequests
+  outside independent RateLimitly accounting;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a

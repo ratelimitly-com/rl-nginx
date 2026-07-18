@@ -62,7 +62,11 @@ This case proves that an unauthenticated request under `satisfy any` is rejected
 without reaching RateLimitly, while an authenticated request consumes exactly
 one admission. It also requires `try_files` to select `/ok.txt` before the
 RateLimitly request is rendered, then proves that a valid RateLimitly deny is
-the final decision before content processing.
+the final decision before content processing. The case runs under fail-close
+and fail-open and also proves that an index-generated internal redirect reuses
+one admission, a denial stops content before that redirect, a dependency-error
+outcome is not retried after internal routing, and a mirrored subrequest does
+not create an independent RateLimitly request.
 
 Run the exact enforcement boundary alone:
 

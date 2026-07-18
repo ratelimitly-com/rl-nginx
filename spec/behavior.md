@@ -21,6 +21,13 @@ effective rules into one combined rate-limit check containing:
 - one guard for every distinct referenced guard definition, in first-seen
   order.
 
+An nginx internal redirect remains part of the same main HTTP request. Once
+that request has obtained an admission result, later internal routing MUST
+reuse it and MUST NOT send another RateLimitly request. An admitted request
+therefore consumes once even when an index, error page, or another content
+handler internally redirects before producing the response. Subrequests remain
+unprotected by this module and MUST NOT create an independent admission.
+
 The effective label, zone bucket/rate values, and guard service/threshold
 values are rendered for the request. Invalid dynamic values, an empty rendered
 guard service, or a C-client request-construction error MUST follow the
