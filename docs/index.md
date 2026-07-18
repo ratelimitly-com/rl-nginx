@@ -9,6 +9,14 @@
 - `operations.md` - DNS, failure modes, warmup, logging, and rollout checks.
 - `c-client.md` - C client integration notes.
 
+Project policies and history are maintained at the repository root:
+
+- [`SUPPORT.md`](../SUPPORT.md) - support scope and issue-report checklist.
+- [`SECURITY.md`](../SECURITY.md) - private vulnerability reporting.
+- [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) - community standards.
+- [`CHANGELOG.md`](../CHANGELOG.md) - release status and notable changes.
+- [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) - dependency licenses.
+
 ## Notes
 
 The root `README.md` is the public entry point. These docs carry the detail
