@@ -386,6 +386,7 @@ run_fault_injection() {
     resolver-addr-request
     resolver-addr-name
     resolver-addr-start
+    posted-request-drain
     rebind-open
   )
 
@@ -406,7 +407,7 @@ run_fault_injection() {
     echo "${failures} fault-injection regression(s) failed" >&2
     return 1
   fi
-  log "all resolver, worker-init, and rebind fault injections passed"
+  log "all resolver, worker-init, posted-request, and rebind fault injections passed"
 }
 
 wait_for_log() {
@@ -531,6 +532,8 @@ write_nginx_config() {
   printf 'admission:{PLAIN}secret\n' >"${AUTH_FILE}"
   printf 'admitted through internal redirect\n' \
     >"${PREFIX}/html/admission-redirect/index.html"
+  printf 'before <!--# include virtual="/admission-include" --> after\n' \
+    >"${PREFIX}/html/admission-posted"
 
   cat >"${NGINX_CONF}" <<EOF
 ${load_module_directive}
@@ -606,6 +609,19 @@ ${guard_defs}
       ratelimitly zone=redirect_zone;
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
+    }
+
+    location = /admission-posted {
+      ratelimitly_label "POSTED:\$uri";
+      ratelimitly zone=redirect_zone;
+      root ${PREFIX}/html;
+      default_type text/html;
+      ssi on;
+    }
+
+    location = /admission-include {
+      internal;
+      return 200 "included";
     }
 
     location = /admission-mirror {
@@ -1299,6 +1315,30 @@ run_fault_case() {
       log "failed rebind retained UDP source port ${port_before}"
     fi
     check_follow_up "failed transactional rebind"
+  elif [[ "${FAULT_POINT}" == "posted-request-drain" ]]; then
+    local before
+    local after
+    local response_body="${ARTIFACT_DIR}/posted-request-body.txt"
+
+    before="$(responder_rate_request_count)"
+    code="$(curl --max-time 1 -s -o "${response_body}" -w '%{http_code}' \
+      "http://${NGINX_HOST}:${NGINX_PORT}/admission-posted" || true)"
+    if [[ "${code}" != "200" ]]; then
+      record_failure "SSI request with a posted subrequest returned ${code}, expected 200 without a later client event"
+    elif ! grep -Fq 'before included after' "${response_body}"; then
+      record_failure "SSI request completed without the posted subrequest body"
+    fi
+    wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
+      || record_failure "posted-request-drain responder did not observe the request"
+    sleep 0.1
+    after="$(responder_rate_request_count)"
+    if [[ "${after}" != "$((before + 1))" ]]; then
+      record_failure "SSI request with a posted subrequest produced $((after - before)) RateLimitly events, expected 1"
+    elif [[ "${code}" == "200" ]]; then
+      log "asynchronous verdict drained the posted subrequest in the same event cycle"
+    fi
+    check_worker_survival "posted-request drain"
+    check_follow_up "posted-request drain"
   else
     case "${FAULT_POINT}" in
       worker-tenant|worker-secret|client-create|post-client-create) expected_count=0 ;;
@@ -1348,7 +1388,9 @@ run_one() {
   start_responder allow keep 0
   write_nginx_config
   start_nginx
-  if [[ "${MODE}" == "fault" && "${FAULT_POINT}" != "rebind-open" ]]; then
+  if [[ "${MODE}" == "fault"
+      && "${FAULT_POINT}" != "rebind-open"
+      && "${FAULT_POINT}" != "posted-request-drain" ]]; then
     log "skipping healthy warm-up before fault injection ${FAULT_POINT}"
   elif dns_failure_mode >/dev/null 2>&1; then
     log "skipping healthy warm-up before ${MODE}; DNS starts in failure mode"

@@ -173,6 +173,9 @@ static void rn_request_teardown(
 );
 static void rn_request_cleanup(void *data);
 static rn_req_ctx_t *rn_get_request_ctx(ngx_http_request_t *r);
+#if (RN_TEST_FAULT_INJECTION)
+static ngx_flag_t rn_test_fault_active(rn_worker_ctx_t *worker, const char *name);
+#endif
 static void rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_result_t *result);
 static ngx_int_t ngx_http_rn_log_handler(ngx_http_request_t *r);
 static void rn_hex16(const uint8_t in[16], u_char out[33]);
@@ -674,6 +677,18 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     r->read_event_handler = ngx_http_test_reading;
+
+#if (RN_TEST_FAULT_INJECTION)
+    /*
+     * Remove the incidental client-read wakeup which would otherwise hide a
+     * missing posted-request drain after the asynchronous verdict callback.
+     */
+    if (rn_test_fault_active(worker, "posted-request-drain")
+        && r->connection->read->posted)
+    {
+        ngx_delete_posted_event(r->connection->read);
+    }
+#endif
 
     return NGX_AGAIN;
 }
@@ -2705,7 +2720,12 @@ ngx_http_rn_log_handler(ngx_http_request_t *r) {
 static void
 rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_result_t *result) {
     ngx_http_request_t *r = user;
+    ngx_connection_t *c;
     if (r == NULL) {
+        return;
+    }
+    c = r->connection;
+    if (c == NULL) {
         return;
     }
     rn_req_ctx_t *ctx = ngx_http_get_module_ctx(r, ngx_http_rn_module);
@@ -2781,10 +2801,15 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     /*
      * Resume phase processing directly. Finalizing with NGX_DECLINED clears
      * r->content_handler, which breaks content handlers installed by other
-     * directives such as proxy_pass.
+     * directives such as proxy_pass. This callback runs from the module's UDP
+     * event rather than nginx's request event handler, so it must also perform
+     * the posted-request drain normally done by ngx_http_request_handler().
+     * Keep only the connection pointer across phase processing because the
+     * request itself may be finalized and released there.
      */
     r->write_event_handler = ngx_http_core_run_phases;
     ngx_http_core_run_phases(r);
+    ngx_http_run_posted_requests(c);
 }
 
 static void

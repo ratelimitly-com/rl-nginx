@@ -160,7 +160,9 @@ The sanitizer build alone enables the non-public
 which covers every module-owned SRV/address request allocation, resolver-start
 errors, temporary worker-configuration allocation, C-client creation after the
 UDP endpoint opens, cleanup after successful C-client creation, and
-replacement-socket setup. Repeated partial worker-init
+replacement-socket setup. It also removes the incidental client-read wakeup and
+requires an SSI subrequest posted by resumed content processing to complete in
+the same event cycle as the RateLimitly verdict. Repeated partial worker-init
 failures must leave zero module UDP sockets; resolver failures must retain one
 initialized endpoint; and a failed rebind must keep the original source port
 usable. Ordinary and deployment builds do not contain this directive.

@@ -125,7 +125,11 @@ deciding. Callback-owned result arrays MUST NOT be retained after the callback.
 After recording the decision, the callback MUST resume nginx phase processing
 through `ngx_http_core_run_phases`. It MUST preserve content handlers installed
 by directives such as `proxy_pass` and MUST NOT finalize an allow in a way that
-clears them.
+clears them. Because the callback runs from the module's UDP event rather than
+nginx's HTTP request event handler, it MUST then drain the connection's posted
+HTTP requests. It MUST retain only the connection pointer across phase
+processing and MUST NOT dereference the request after phases may have finalized
+and released it.
 
 ## Steering safety
 
@@ -167,6 +171,8 @@ ASan/UBSan lifecycle runs MUST additionally exercise repeated timeout,
 cancellation, steering, reload, and shutdown behavior. A test-only build MUST
 inject every module-owned resolver allocation failure, resolver-start failure,
 partial worker-initialization failure, C-client creation failure, and candidate
-rebind failure. It MUST verify same-worker survival, stable socket counts,
-transactional rebind retention, and clean shutdown. Optional internal full-stack
-validation is not part of the public conformance boundary.
+rebind failure. It MUST also remove the incidental client-read wakeup and prove
+that an SSI subrequest posted during asynchronous phase resumption is drained
+without another client event. It MUST verify same-worker survival, stable
+socket counts, transactional rebind retention, and clean shutdown. Optional
+internal full-stack validation is not part of the public conformance boundary.
