@@ -207,7 +207,10 @@ for those workflows.
 - [C-client integration](docs/c-client.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
-- [Support and bug reports](https://github.com/ratelimitly-com/rl-nginx/issues)
+- [Support and bug reports](SUPPORT.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Release notes and source archives](https://github.com/ratelimitly-com/rl-nginx/releases)
 
 Do not report suspected vulnerabilities in a public issue. Follow
