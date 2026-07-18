@@ -1,9 +1,11 @@
 # rl-nginx
 
-`rl-nginx` is an nginx HTTP module that enforces RateLimitly decisions during
-the nginx access phase. It turns nginx variables into rate-limit resources,
-sends them to RateLimitly through `rl-c-client`, and either lets the request
-continue or returns `429 Too Many Requests`.
+`rl-nginx` is an nginx HTTP module that makes the final admission decision
+before content processing. After nginx access control and pre-content routing
+have succeeded, it turns nginx variables into rate-limit resources and sends
+them to RateLimitly through `rl-c-client`. A valid allow consumes those
+resources and advances directly to content processing; a deny returns
+`429 Too Many Requests`.
 
 The planned `0.1.x` public preview is source-only. It supports static and
 dynamic module builds on Linux with glibc and nginx `1.30.2` or `1.31.1`; the

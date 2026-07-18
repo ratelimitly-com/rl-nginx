@@ -342,6 +342,15 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     size_t label_len = 0;
     ngx_http_cleanup_t *cln;
 
+    /*
+     * The access-phase checker skips subrequests before calling access
+     * handlers.  Preserve that contract now that admission runs in the
+     * generic pre-content phase.
+     */
+    if (r != r->main) {
+        return NGX_DECLINED;
+    }
+
     lcf = ngx_http_get_module_loc_conf(r, ngx_http_rn_module);
     mcf = ngx_http_get_module_main_conf(r, ngx_http_rn_module);
     if (lcf == NULL || !lcf->enabled) {
@@ -366,7 +375,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                     "rn: bypass uri=%V reason=no_resolver fail_open=%d",
                     &r->uri, (int) mcf->fail_open);
             }
-            return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+            return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
         }
         if (rn_worker_init(mcf, clcf->resolver) != NGX_OK) {
             if (mcf->debug) {
@@ -374,7 +383,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                     "rn: bypass uri=%V reason=worker_init_failed fail_open=%d",
                     &r->uri, (int) mcf->fail_open);
             }
-            return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+            return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
         }
     }
     worker = mcf->worker;
@@ -384,7 +393,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 "rn: bypass uri=%V reason=no_client fail_open=%d",
                 &r->uri, (int) mcf->fail_open);
         }
-        return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+        return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
     }
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_rn_module);
@@ -412,7 +421,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         } else {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
             if (group == NULL) {
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             total += group->zones.nelts;
         }
@@ -447,7 +456,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             ngx_uint_t g;
 
             if (guard == NULL) {
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             for (g = 0; g < guard_idx; g++) {
                 if (guard_defs[g] == guard) {
@@ -475,7 +484,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                         "rn: guard_build_failed guard=%V rc=%i fail_open=%d",
                         &guard->name, guard_rc, mcf->fail_open);
                 }
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             guard_defs[guard_idx] = guard;
             guard_idx++;
@@ -485,7 +494,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             rn_zone_t *zone = rn_find_zone(mcf, &rules[i].name);
             ngx_int_t build_rc;
             if (zone == NULL) {
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
             if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
@@ -502,21 +511,21 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                         "rn: zone_build_failed zone=%V rc=%i fail_open=%d",
                         &zone->name, build_rc, mcf->fail_open);
                 }
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             idx++;
         } else {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
             ngx_str_t *zones;
             if (group == NULL) {
-                return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             zones = group->zones.elts;
             for (j = 0; j < group->zones.nelts; j++) {
                 rn_zone_t *zone = rn_find_zone(mcf, &zones[j]);
                 ngx_int_t build_rc;
                 if (zone == NULL) {
-                    return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                    return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
                 }
                 build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
                 if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
@@ -533,7 +542,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                             "rn: zone_build_failed group=%V zone=%V rc=%i fail_open=%d",
                             &group->name, &zone->name, build_rc, mcf->fail_open);
                     }
-                    return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+                    return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
                 }
                 idx++;
             }
@@ -546,7 +555,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
                     "rn: label_build_failed uri=%V fail_open=%d", &r->uri, mcf->fail_open);
             }
-            return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+            return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
         }
         if (label.len > 0) {
             label_ptr = (const char *) label.data;
@@ -603,7 +612,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 &r->uri, async_rc, rn_rclient_status_name(async_rc),
                 idx, guard_idx, label_len, mcf->fail_open);
         }
-        return mcf->fail_open ? NGX_DECLINED : NGX_HTTP_TOO_MANY_REQUESTS;
+        return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
     }
 
     ctx->req = req;
@@ -638,6 +647,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
 static ngx_int_t
 ngx_http_rn_init(ngx_conf_t *cf) {
     ngx_http_handler_pt *h;
+    ngx_array_t *handlers;
     ngx_http_core_main_conf_t *cmcf;
     rn_main_conf_t *mcf;
 
@@ -646,11 +656,22 @@ ngx_http_rn_init(ngx_conf_t *cf) {
         return NGX_ERROR;
     }
 
-    h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+    handlers = &cmcf->phases[NGX_HTTP_PRECONTENT_PHASE].handlers;
+    h = ngx_array_push(handlers);
     if (h == NULL) {
         return NGX_ERROR;
     }
-    *h = ngx_http_rn_handler;
+    /*
+     * nginx executes a phase's handler array in reverse.  Keep RateLimitly at
+     * index zero so access-approved routing/preparation handlers run first and
+     * a RateLimitly allow is the final transition into content processing.
+     */
+    h = handlers->elts;
+    if (handlers->nelts > 1) {
+        ngx_memmove(&h[1], &h[0],
+            (handlers->nelts - 1) * sizeof(ngx_http_handler_pt));
+    }
+    h[0] = ngx_http_rn_handler;
 
     h = ngx_array_push(&cmcf->phases[NGX_HTTP_LOG_PHASE].handlers);
     if (h == NULL) {

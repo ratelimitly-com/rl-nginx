@@ -8,13 +8,21 @@ architecture.
 
 The module MUST register:
 
-- an HTTP access-phase handler for protected-request checks; and
+- the final HTTP pre-content-phase handler for protected-request checks; and
 - an HTTP log-phase handler for post-response guard latency reports.
 
-The access handler MUST return `NGX_DECLINED` for unprotected locations and for
-a fail-open runtime failure, `NGX_AGAIN` while an asynchronous check owns the
-request, `429` for a valid deny or fail-close runtime failure, and `500` for
-the internal nginx failures identified in [Request behavior](behavior.md).
+nginx executes the handlers within a phase in reverse registration order. The
+module MUST therefore place its pre-content handler at index zero of the phase
+handler array. All other pre-content routing and preparation handlers then run
+before RateLimitly, and a RateLimitly allow is the final transition into content
+processing. This ordering MUST work for both static and dynamic module builds.
+
+The pre-content handler MUST return `NGX_DECLINED` for unprotected locations
+and subrequests, `NGX_OK` for a valid allow or fail-open runtime failure,
+`NGX_AGAIN` while an asynchronous check owns the request, `429` for a valid
+deny or fail-close runtime failure, and `500` for the internal nginx failures
+identified in [Request behavior](behavior.md). `NGX_OK` deliberately skips any
+unexpected later pre-content handler and advances directly to content.
 
 Configuration definitions, credentials, timeout, failure policy, bind address,
 and debug flag live in HTTP main configuration. Effective rules and labels
