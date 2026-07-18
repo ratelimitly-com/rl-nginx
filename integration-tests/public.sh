@@ -15,8 +15,9 @@ Runs the required public rl-nginx integration suite using only:
   - the pinned nginx source; and
   - this module.
 
-The suite covers DNS fixture fidelity, request lifecycle safety, steering
-rebind, and response-cardinality handling under fail-open and fail-close.
+The suite covers DNS fixture fidelity, final pre-content admission ordering,
+request lifecycle safety, steering rebind, and response-cardinality handling
+under fail-open and fail-close.
 
 Environment overrides:
   RCLIENT_DIR  C-client checkout (default: locked ./_deps checkout)
@@ -52,6 +53,12 @@ RCLIENT_DIR="${RCLIENT_DIR}" \
   NGINX_SRC="${NGINX_SRC}" \
   SKIP_BUILD=0 \
   "${SCRIPT_DIR}/lifecycle-regressions.sh" all
+
+echo "[public-suite] running the final admission contract"
+RCLIENT_DIR="${RCLIENT_DIR}" \
+  NGINX_SRC="${NGINX_SRC}" \
+  SKIP_BUILD=1 \
+  "${SCRIPT_DIR}/lifecycle-regressions.sh" admission-contract
 
 echo "[public-suite] running the exact enforcement boundary"
 RCLIENT_DIR="${RCLIENT_DIR}" \

@@ -80,6 +80,17 @@ for fragment in (
 require(behavior, "retry attempts to zero", "behavior specification")
 require(implementation, "retry.retry_attempts = 0", "implementation specification")
 
+require(
+    source,
+    "cmcf->phases[NGX_HTTP_PRECONTENT_PHASE].handlers",
+    "final admission phase registration",
+)
+if "cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers" in source:
+    fail("RateLimitly must not register as an access-phase authorization handler")
+require(source, "ngx_memmove(&h[1], &h[0]", "last-running pre-content ordering")
+require(behavior, "final HTTP pre-content handler", "admission contract")
+require(behavior, "consumption of the requested resources", "consumption contract")
+
 for filename in ("dsl.md", "behavior.md", "mapping.md", "implementation.md", "roadmap.md"):
     require(index, f"({filename})", "specification index")
 

@@ -226,7 +226,7 @@ tail -n 200 ./logs/error.log | rg 'rn: result success=|rn: result error status='
 Counter interpretation quick check:
 - `429` high + `000=0` means nginx is reachable and actively denying.
 - `000` non-zero means transport/connectivity failures (no HTTP code).
-- `rn_allow` reflects ratelimitly decision only (access phase), not final upstream/content status.
+- `rn_allow` reflects final pre-content admission, not final upstream/content status.
 - `404` high with `rn_allow` high means rate check passed but final location content/proxy handling returned not found.
 - `rn_*` counters at `0` with non-zero HTTP counters usually means wrong log file path or missing debug-level rn lines.
 

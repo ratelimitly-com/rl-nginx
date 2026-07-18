@@ -12,9 +12,12 @@ resolver, and failure-policy security guidance.
   unprotected health endpoint does not prove RateLimitly readiness.
 - The client discovers RateLimitly servers through tenant-specific DNS SRV
   records. There is no directive for a fixed server address.
-- A valid allow continues nginx request processing. A valid RateLimitly deny,
-  a failed guard, or a nonzero resource deficit returns `429 Too Many
-  Requests`, regardless of the failure policy.
+- nginx access control and pre-content routing run before RateLimitly. Requests
+  rejected or finalized there do not consume RateLimitly resources.
+- RateLimitly is the final pre-content admission point. A valid allow consumes
+  the requested resources and advances directly to content processing. A valid
+  RateLimitly deny, a failed guard, or a nonzero resource deficit returns
+  `429 Too Many Requests`, regardless of the failure policy.
 - DNS, transport, timeout, and invalid-response paths follow
   `ratelimitly_fail open|close`. Fail-open continues nginx processing;
   fail-close returns `429`.
@@ -24,10 +27,12 @@ resolver, and failure-policy security guidance.
   failure can return `500`. `ratelimitly_fail` is not a blanket conversion of
   every nginx failure.
 
-Because allow and fail-open both continue the nginx pipeline, the final HTTP
-status can still come from an upstream or another nginx module. Because a real
-deny and a fail-closed dependency error both return `429`, HTTP status alone
-cannot distinguish them. Use the module log markers described below.
+After admission, the client can disconnect and a content handler or upstream
+can still fail. Those outcomes do not reverse resource consumption. Fail-open
+also advances to content, but without a valid decision or guaranteed
+consumption. Because a real deny and a fail-closed dependency error both return
+`429`, HTTP status alone cannot distinguish them. Use the module log markers
+described below.
 
 ## DNS discovery and network path
 
@@ -123,12 +128,12 @@ ratelimitly_fail close;
 
 | Event | Fail-open | Fail-close |
 | --- | --- | --- |
-| Valid allow | Continue nginx processing | Continue nginx processing |
+| Valid allow | Consume resources and enter content | Consume resources and enter content |
 | Valid RateLimitly/guard/resource deny | `429` | `429` |
-| No usable DNS target | Continue nginx processing | `429` |
-| UDP send or response timeout | Continue nginx processing | `429` |
-| Invalid/authentication-failing/protocol response with no valid decision | Continue nginx processing | `429` |
-| Invalid dynamic rate/threshold, empty service, or C-client request-construction error | Continue nginx processing | `429` |
+| No usable DNS target | Enter content without a valid decision | `429` |
+| UDP send or response timeout | Enter content without a valid decision | `429` |
+| Invalid/authentication-failing/protocol response with no valid decision | Enter content without a valid decision | `429` |
+| Invalid dynamic rate/threshold, empty service, or C-client request-construction error | Enter content without a valid decision | `429` |
 | Internal nginx allocation/event failure | May return `500` | May return `500` |
 
 Fail-open preserves availability but bypasses this enforcement layer during a
@@ -236,9 +241,9 @@ value is instead handled per request under the failure policy.
 ### Protected traffic has no valid-decision marker
 
 1. Confirm the request actually enters a location with a `ratelimitly` rule.
-   Some content-handler configurations can bypass the access phase; the public
-   fixtures deliberately use `try_files`, not a direct `return 200`, on their
-   protected locations.
+   Some content-handler configurations can finalize a request before the
+   pre-content phase; the public fixtures deliberately use `try_files`, not a
+   direct `return 200`, on their protected locations.
 2. Confirm `ratelimitly_debug on` and an effective debug error-log level.
 3. Look first for `bypass`, `async_start_failed`, `SRV target`, `addr`,
    `udp_send failed`, and `result error` markers.

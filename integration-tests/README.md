@@ -52,6 +52,18 @@ Run one case while developing a fix:
 ./integration-tests/lifecycle-regressions.sh steering-rebind
 ```
 
+Run the final admission contract alone:
+
+```sh
+./integration-tests/lifecycle-regressions.sh admission-contract
+```
+
+This case proves that an unauthenticated request under `satisfy any` is rejected
+without reaching RateLimitly, while an authenticated request consumes exactly
+one admission. It also requires `try_files` to select `/ok.txt` before the
+RateLimitly request is rendered, then proves that a valid RateLimitly deny is
+the final decision before content processing.
+
 Run the exact enforcement boundary alone:
 
 ```sh
@@ -395,8 +407,8 @@ It exposes three local endpoints:
 - `/deny`: low quota, expected to return at least some `429` responses.
 
 Both locations serve `tests/ok.txt` through `try_files`. This is intentional:
-using a direct `return 200` content handler can bypass the module's access-phase
-decision path.
+using a direct `return 200` handler can finalize the request before the
+module's pre-content admission point.
 
 ## Success criteria
 

@@ -46,6 +46,21 @@ See [`examples/security-conscious.conf`](../examples/security-conscious.conf)
 for bounded route/method maps and a dynamic rate that cannot take arbitrary
 client-supplied text.
 
+## Admission order and resource consumption
+
+RateLimitly is the final admission point before nginx content processing. nginx
+first resolves its access policy, including `allow`/`deny`, `auth_basic`,
+`auth_request`, and the configured `satisfy all|any` behavior. Pre-content
+routing such as `try_files` also runs before the RateLimitly request.
+
+A request rejected or finalized before that point does not reach RateLimitly
+and does not consume a RateLimitly resource. A valid RateLimitly allow means the
+requested resource has been consumed; the module then advances directly to the
+selected content handler or upstream. A later disconnect, content error, or
+upstream failure does not refund that consumption. `ratelimitly_fail open` is
+different: it advances without a valid decision and therefore without a
+guarantee that RateLimitly recorded consumption.
+
 ## Decide which variables are identities
 
 nginx complex values make many variables available, but availability does not

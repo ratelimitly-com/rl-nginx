@@ -6,10 +6,15 @@ Configuration syntax and wire-field construction are specified separately in
 
 ## Activation and request construction
 
-The module runs in nginx's HTTP access phase. A request without an effective
-`ratelimitly` rule MUST continue through normal nginx processing without a
-RateLimitly request. A protected request MUST expand all effective rules into
-one combined rate-limit check containing:
+The module runs as nginx's final HTTP pre-content handler. nginx access control
+and earlier pre-content routing or preparation handlers MUST complete before
+the module sends a RateLimitly request. A request rejected or finalized before
+that point MUST NOT consume a RateLimitly resource. Subrequests and requests
+without an effective `ratelimitly` rule MUST continue without a RateLimitly
+request.
+
+A protected main request that reaches the final admission point MUST expand all
+effective rules into one combined rate-limit check containing:
 
 - one resource for every referenced zone occurrence, including repeated zone
   and group entries; and
@@ -56,17 +61,19 @@ request sent. A mismatch is a protocol/compatibility failure and follows the
 configured failure policy; partial response arrays MUST NOT be treated as a
 decision.
 
-When status is successful and cardinality is exact, the module MUST continue
-normal nginx processing only if all of the following are true:
+When status is successful and cardinality is exact, the module MUST admit the
+request to content processing only if all of the following are true:
 
 - the response-level `success` value is true;
 - every guard result has `passed` set; and
 - every resource result has `tokens_deficit == 0`.
 
 Otherwise the module MUST return `429 Too Many Requests`. A valid RateLimitly
-deny returns `429` under both failure policies. Continuing nginx processing
-does not guarantee a successful final HTTP status: later nginx phases,
-upstreams, or content handlers still determine the response.
+deny returns `429` under both failure policies. A valid allow represents
+consumption of the requested resources and MUST advance directly to nginx
+content processing without another pre-content handler. The admitted client,
+content handler, or upstream can still fail afterward; such failures do not
+reverse the consumption.
 
 ## Failure policy
 
@@ -75,13 +82,13 @@ decision:
 
 | Condition | `open` | `close` |
 | --- | --- | --- |
-| Valid allow | Continue nginx processing | Continue nginx processing |
+| Valid allow | Admit to content processing | Admit to content processing |
 | Valid RateLimitly, guard, or resource deny | Return `429` | Return `429` |
-| No usable discovery target | Continue nginx processing | Return `429` |
-| UDP send failure or response timeout | Continue nginx processing | Return `429` |
-| Authentication/protocol failure with no valid decision | Continue nginx processing | Return `429` |
-| Response cardinality mismatch | Continue nginx processing | Return `429` |
-| Invalid dynamic request value or request-construction failure | Continue nginx processing | Return `429` |
+| No usable discovery target | Admit without a valid decision | Return `429` |
+| UDP send failure or response timeout | Admit without a valid decision | Return `429` |
+| Authentication/protocol failure with no valid decision | Admit without a valid decision | Return `429` |
+| Response cardinality mismatch | Admit without a valid decision | Return `429` |
+| Invalid dynamic request value or request-construction failure | Admit without a valid decision | Return `429` |
 | Internal nginx allocation/event failure | MAY return `500` | MAY return `500` |
 
 Invalid or irrelevant datagrams can be discarded by the C client. If no valid

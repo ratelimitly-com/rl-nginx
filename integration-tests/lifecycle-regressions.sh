@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -44,7 +44,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -504,6 +504,7 @@ write_nginx_config() {
     fault_directive="  ratelimitly_test_fault ${FAULT_POINT};"
   fi
   mkdir -p "${PREFIX}/logs"
+  printf 'admission:{PLAIN}secret\n' >"${AUTH_FILE}"
 
   cat >"${NGINX_CONF}" <<EOF
 ${load_module_directive}
@@ -544,6 +545,25 @@ ${guard_defs}
       ${ratelimitly_rule}
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
+    }
+
+    location = /admission-auth {
+      satisfy any;
+      deny all;
+      auth_basic "admission contract";
+      auth_basic_user_file ${AUTH_FILE};
+
+      ratelimitly_label "AUTH:\$uri";
+      ratelimitly zone=lifecycle_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /admission-route {
+      ratelimitly_label "ROUTE:\$uri";
+      ratelimitly zone=lifecycle_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =418;
     }
   }
 }
@@ -602,8 +622,19 @@ start_nginx() {
 
 request_code() {
   local max_time="${1:-${CLIENT_TIMEOUT_SEC}}"
+  request_path_code /limited "${max_time}"
+}
+
+request_path_code() {
+  local path="$1"
+  local max_time="${2:-${CLIENT_TIMEOUT_SEC}}"
+  shift 2 || true
   curl --max-time "${max_time}" -s -o /dev/null -w '%{http_code}' \
-    "http://${NGINX_HOST}:${NGINX_PORT}/limited" || true
+    "$@" "http://${NGINX_HOST}:${NGINX_PORT}${path}" || true
+}
+
+responder_rate_request_count() {
+  grep -c '"event":"rate_request"' "${RESPONDER_LOG}" || true
 }
 
 warm_client() {
@@ -1022,6 +1053,67 @@ run_enforcement_boundary_case() {
   check_follow_up "exact enforcement boundary"
 }
 
+run_admission_contract_case() {
+  local after
+  local before
+  local code
+
+  before="$(responder_rate_request_count)"
+  code="$(request_path_code /admission-auth "${CLIENT_TIMEOUT_SEC}")"
+  if [[ "${code}" != "401" ]]; then
+    record_failure "unauthenticated satisfy-any request returned ${code}, expected 401"
+  fi
+  sleep 0.1
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "${before}" ]]; then
+    record_failure "unauthenticated request consumed RateLimitly admission: ${before} -> ${after}"
+  else
+    log "unauthenticated request was rejected before RateLimitly admission"
+  fi
+
+  before="${after}"
+  code="$(request_path_code /admission-auth "${CLIENT_TIMEOUT_SEC}" \
+    --user admission:secret)"
+  if [[ "${code}" != "200" ]]; then
+    record_failure "authenticated satisfy-any request returned ${code}, expected 200"
+  fi
+  wait_for_log '"label":"AUTH:/ok.txt"' "${RESPONDER_LOG}" 20 \
+    || record_failure "authenticated request did not reach RateLimitly after try_files"
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "authenticated request produced ${after} RateLimitly events, expected $((before + 1))"
+  else
+    log "authenticated request consumed exactly one admission and reached content"
+  fi
+
+  before="${after}"
+  code="$(request_path_code /admission-route "${CLIENT_TIMEOUT_SEC}")"
+  if [[ "${code}" != "200" ]]; then
+    record_failure "pre-content routing request returned ${code}, expected 200"
+  fi
+  wait_for_log '"label":"ROUTE:/ok.txt"' "${RESPONDER_LOG}" 20 \
+    || record_failure "RateLimitly ran before try_files selected /ok.txt"
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "routed request produced ${after} RateLimitly events, expected $((before + 1))"
+  else
+    log "try_files completed before the final RateLimitly admission"
+  fi
+
+  start_responder deny keep 0
+  code="$(request_path_code /admission-auth "${CLIENT_TIMEOUT_SEC}" \
+    --user admission:secret)"
+  if [[ "${code}" != "429" ]]; then
+    record_failure "authenticated RateLimitly deny returned ${code}, expected 429"
+  fi
+  wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
+    || record_failure "deny responder did not observe the authorized request"
+  log "RateLimitly deny remained the final admission decision"
+
+  check_worker_survival "pre-content admission contract"
+  check_follow_up "pre-content admission contract"
+}
+
 run_count_mismatch_case() {
   local code
   local error_log_start
@@ -1118,6 +1210,7 @@ run_one() {
   NGINX_ERROR_LOG="${ARTIFACT_DIR}/nginx-error.log"
   NGINX_STDOUT_LOG="${ARTIFACT_DIR}/nginx-stdout.log"
   NGINX_CONFIG_LOG="${ARTIFACT_DIR}/nginx-config.log"
+  AUTH_FILE="${ARTIFACT_DIR}/htpasswd"
   RESPONDER_LOG=""
   RESPONDER_ERROR_LOG=""
   DNS_LOG="${ARTIFACT_DIR}/dns.log"
@@ -1153,6 +1246,7 @@ run_one() {
     guard-pass|guard-deny|guard-multiple) run_guard_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
+    admission-contract) run_admission_contract_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
     fault) run_fault_case ;;
   esac

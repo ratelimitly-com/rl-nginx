@@ -7,6 +7,11 @@ remain preview software and must not be treated as ABI-stable versions.
 
 Changes since `v0.1.0-rc.1`:
 
+- moved RateLimitly enforcement to the final pre-content admission point so
+  nginx access rejection and routing happen before resource consumption;
+- defined a valid allow as consumed admission directly into content processing
+  and added static, dynamic, and sanitizer regression coverage for the
+  ordering contract;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a
