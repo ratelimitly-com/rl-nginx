@@ -47,13 +47,30 @@ def job_blocks(lines: list[str]) -> dict[str, str]:
     return blocks
 
 
+def workflow_events(lines: list[str]) -> set[str]:
+    try:
+        start = lines.index("on:") + 1
+    except ValueError:
+        return set()
+
+    events: set[str] = set()
+    for line in lines[start:]:
+        if line and not line.startswith(" "):
+            break
+        match = re.fullmatch(r"  ([A-Za-z_]+):", line)
+        if match is not None:
+            events.add(match.group(1))
+    return events
+
+
 def main() -> int:
     if not WORKFLOW.is_file():
         print(f"FAIL CI gates: missing {WORKFLOW}", file=sys.stderr)
         return 1
 
     text = WORKFLOW.read_text()
-    blocks = job_blocks(text.splitlines())
+    lines = text.splitlines()
+    blocks = job_blocks(lines)
     failures: list[str] = []
 
     for name, fragments in REQUIRED.items():
@@ -69,6 +86,16 @@ def main() -> int:
         failures.append("workflow must retain least-privilege contents: read permissions")
     if "RL_CI_TOKEN" in text or "secrets." in text:
         failures.append("required CI must not depend on repository or organization secrets")
+    if workflow_events(lines) != {"push", "pull_request", "workflow_dispatch"}:
+        failures.append("workflow must use main pushes, pull requests, and manual dispatch")
+    if "  push:\n    branches:\n      - main" not in text:
+        failures.append("push trigger must be restricted to main")
+    if (
+        "concurrency:\n"
+        "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n"
+        "  cancel-in-progress: true" not in text
+    ):
+        failures.append("workflow must cancel superseded runs using a PR/ref concurrency group")
 
     if failures:
         for failure in failures:

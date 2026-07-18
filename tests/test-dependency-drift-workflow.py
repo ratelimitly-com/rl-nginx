@@ -44,7 +44,7 @@ def main() -> int:
 
     if workflow_events(drift) != {"schedule", "workflow_dispatch"}:
         return fail("drift workflow must be schedule/manual only")
-    if workflow_events(required) != {"push", "pull_request"}:
+    if workflow_events(required) != {"push", "pull_request", "workflow_dispatch"}:
         return fail("required CI triggers changed unexpectedly")
     if "continue-on-error:" in drift:
         return fail("drift failures must remain visible")
