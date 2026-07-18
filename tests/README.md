@@ -1,7 +1,10 @@
 # rl-nginx test harness
 
-This guide shows how to build nginx with the rl-nginx module, run it with a test
-config, and validate traffic against a running Ratelimitly server.
+This optional manual harness shows how to build nginx with the rl-nginx module,
+run it with a test config, and validate traffic against a running RateLimitly
+service. It is not the public release gate: use `make check
+BUILD_FLAGS="--clean"` for deterministic tests that need no service, tenant, or
+credential.
 
 This requires the locked public `rl-c-client` release so nginx can link against
 the compiled C client library. Build and test helpers fetch or verify that
@@ -229,9 +232,12 @@ Counter interpretation quick check:
 
 ## Notes
 
-- This guide expects a running Ratelimitly server (Rust) and valid DNS entries.
-- `tests/nginx.conf` currently uses `ratelimitly_auth_key` with an `rl-aes...` key.
-  Use a current `rl-cookie...` or `rl-aes...` key for local dev and real setups.
+- This guide expects a running RateLimitly server (Rust), valid DNS entries,
+  and a tenant credential that you are authorized to use.
+- `tests/nginx.conf` contains the reserved `tenant.example.invalid` domain and
+  a fixed synthetic `rl-aes...` value solely to make local configuration
+  checks reproducible. Replace both before any live-service test; never use the
+  synthetic value as a production credential and never commit a real key.
 
 ## Scripts in this folder
 
