@@ -34,6 +34,9 @@ index = INDEX.read_text(encoding="utf-8")
 roadmap = ROADMAP.read_text(encoding="utf-8")
 
 source_directives = set(re.findall(r'ngx_string\("(ratelimitly(?:_[a-z_]+)?)"\)', source))
+# This directive is compiled only into the sanitizer fault-injection binary and
+# is deliberately absent from the public module DSL.
+source_directives.discard("ratelimitly_test_fault")
 documented_directives = set(re.findall(r"^### `([^`]+)`$", dsl, re.MULTILINE))
 if source_directives != documented_directives:
     missing = sorted(source_directives - documented_directives)

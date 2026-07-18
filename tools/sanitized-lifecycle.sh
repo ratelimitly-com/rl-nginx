@@ -80,6 +80,7 @@ CFLAGS="${SANITIZER_CFLAGS}" \
   "${RN_ROOT}/tests/test-srv-records.sh"
 
 echo "[sanitizers] building nginx and rl-nginx"
+RN_TEST_FAULT_INJECTION=1 \
 RCLIENT_DIR="${RCLIENT_DIR}" \
   "${RN_ROOT}/tools/build-nginx.sh" "${NGINX_SRC}" \
   --clean --debug --sanitize --skip-rclient-build
@@ -118,6 +119,10 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
     ARTIFACT_ROOT="${run_artifacts}" \
     SKIP_BUILD=1 \
     "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" cardinality
+  RCLIENT_DIR="${RCLIENT_DIR}" \
+    ARTIFACT_ROOT="${run_artifacts}" \
+    SKIP_BUILD=1 \
+    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" fault-injection
 
   if grep -R -E \
       'ERROR: AddressSanitizer|SUMMARY: AddressSanitizer|runtime error:' \
@@ -127,5 +132,5 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
   fi
 done
 
-echo "[sanitizers] ${SANITIZER_RUNS} complete lifecycle/enforcement/outage/dns/guard/protocol/cardinality run(s) passed"
+echo "[sanitizers] ${SANITIZER_RUNS} complete lifecycle/enforcement/outage/dns/guard/protocol/cardinality/fault-injection run(s) passed"
 echo "[sanitizers] artifacts: ${ARTIFACT_ROOT}"

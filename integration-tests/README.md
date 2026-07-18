@@ -139,6 +139,16 @@ disables only UBSan's `nonnull-attribute` category because nginx's core string
 formatter intentionally passes a null source with zero length for an empty
 query string; all other undefined-behavior checks remain enabled.
 
+The sanitizer build alone enables the non-public
+`ratelimitly_test_fault` directive. Each pass runs the `fault-injection` group,
+which covers every module-owned SRV/address request allocation, resolver-start
+errors, temporary worker-configuration allocation, C-client creation after the
+UDP endpoint opens, cleanup after successful C-client creation, and
+replacement-socket setup. Repeated partial worker-init
+failures must leave zero module UDP sockets; resolver failures must retain one
+initialized endpoint; and a failed rebind must keep the original source port
+usable. Ordinary and deployment builds do not contain this directive.
+
 Every case establishes a successful baseline, records the single nginx worker
 PID, triggers the selected lifecycle path, asserts that the same worker remains
 alive, requires a successful follow-up rate-limited request, and checks that

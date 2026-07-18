@@ -28,10 +28,25 @@ created lazily on that worker's first protected request and destroyed on worker
 exit. The UDP socket uses an ephemeral source port and the configured local
 address, if any.
 
+Worker initialization MUST publish the worker through main configuration only
+after the socket, nginx connection, and C client are all usable. Temporary
+tenant and credential copies MUST be released after `r_client_create`, which
+copies them. Every partial initialization failure MUST use the same idempotent
+cleanup path. Worker cleanup MUST destroy the C client while its resolver and
+UDP adapter context is still live, then close the nginx UDP connection exactly
+once.
+
 UDP send/receive, timers, source-port rebinds, and DNS resolution MUST use nginx
 event-loop facilities. Blocking socket or resolver calls are forbidden on the
 request path. DNS SRV and address callbacks MUST release their temporary nginx
 resolver contexts and allocation buffers on success, failure, and cancellation.
+The adapter MUST allow nginx to invoke a resolver callback synchronously from
+`ngx_resolve_name`. It MUST publish a nonzero cancellation ID only for a live
+pending lookup. A failure before resolver submission MUST release the live
+context; an `NGX_ERROR` result MUST return failure without touching the context
+that nginx has already released. Cancellation MUST detach the nginx callback,
+cancel the live resolver context, and complete the C-client callback once so
+the client can retire its lookup state.
 
 The resolver adapter MUST preserve SRV target port, server-ID association, and
 TTL information when converting nginx resolver answers into C-client records.
@@ -104,7 +119,9 @@ The C-client steering callback MAY only mark the worker rebind pending and
 schedule it. The rebind handler MUST require worker in-flight count zero and
 MUST defer again while the UDP read callback is active. Socket replacement
 inside the read callback or while another RateLimitly request is active is
-forbidden.
+forbidden. Rebinding MUST open and register a candidate endpoint before
+publishing it and closing the old endpoint. Candidate failure MUST retain the
+working endpoint, leave rebinding pending, and schedule a bounded retry.
 
 ## Error and logging boundary
 
@@ -133,5 +150,9 @@ The required public gate MUST cover at least:
 - whitespace and script syntax.
 
 ASan/UBSan lifecycle runs MUST additionally exercise repeated timeout,
-cancellation, steering, reload, and shutdown behavior. Optional internal
-full-stack validation is not part of the public conformance boundary.
+cancellation, steering, reload, and shutdown behavior. A test-only build MUST
+inject every module-owned resolver allocation failure, resolver-start failure,
+partial worker-initialization failure, C-client creation failure, and candidate
+rebind failure. It MUST verify same-worker survival, stable socket counts,
+transactional rebind retention, and clean shutdown. Optional internal full-stack
+validation is not part of the public conformance boundary.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print the single UDP source port owned by an nginx worker process."""
+"""Inspect unconnected UDP source ports owned by an nginx worker process."""
 
 import argparse
 import os
@@ -50,9 +50,17 @@ def udp_ports(pid: int, inodes: set[str]) -> set[int]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("pid", type=int)
+    parser.add_argument(
+        "--count",
+        action="store_true",
+        help="print the number of module UDP sockets instead of requiring one",
+    )
     args = parser.parse_args()
 
     ports = udp_ports(args.pid, socket_inodes(args.pid))
+    if args.count:
+        print(len(ports))
+        return 0
     if len(ports) != 1:
         formatted = ", ".join(str(port) for port in sorted(ports)) or "none"
         parser.error(f"expected one worker UDP socket, found: {formatted}")

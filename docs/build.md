@@ -138,8 +138,9 @@ proves an allow/deny boundary without `LD_LIBRARY_PATH`.
 | `--skip-rclient-build` | Reuse an already-built `librclient.a`; intended only for controlled packaging workflows. |
 
 Use `make sanitizers` instead of the raw `--sanitize` flag for the release
-gate. It instruments the C client as well and runs the complete lifecycle and
-response-cardinality suite.
+gate. It instruments the C client as well, runs the complete lifecycle and
+response-cardinality suite, and builds test-only fault hooks to exercise
+resolver, partial worker-initialization, and transactional rebind failures.
 
 ## Building a deployment artifact
 

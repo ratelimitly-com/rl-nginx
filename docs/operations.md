@@ -179,6 +179,7 @@ Useful markers include:
 | `rn: response_cardinality_mismatch ...` | A validly decoded response had the wrong guard/resource count. Treat it as a protocol/compatibility error; the failure policy decides the request. |
 | `rn: bypass ... reason=no_resolver` | A protected request could not initialize because no nginx resolver was available in its configuration context. |
 | `rn: steering_feedback=0 (rebind pending)` | The server requested a deferred UDP source-port rebind. This is normal steering behavior, not an outage by itself. |
+| `rn: UDP socket rebind failed; retaining current endpoint and retrying` | A replacement source-port socket could not be prepared. The existing socket remains active; investigate local socket/connection exhaustion or bind failures if retries continue. |
 
 Numeric C-client statuses are `-1` I/O, `-2` timeout, `-3` protocol, `-4`
 authentication, `-5` DNS, `-6` configuration, and `-7` allocation failure.
