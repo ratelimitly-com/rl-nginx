@@ -8,8 +8,39 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  hygiene:
+    name: hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Script syntax
+        run: make syntax
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Unit tests
+        run: make unit
+
+      - name: Check whitespace
+        run: make whitespace
+
+  supported-build:
+    name: supported build (${{ matrix.nginx.line }}, ${{ matrix.module_mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -36,14 +67,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
 
-      - name: Script syntax
-        run: make syntax
-
       - name: Fetch locked rl-c-client release
         run: make fetch
-
-      - name: Unit tests
-        run: make unit
 
       - name: Select supported nginx release
         run: |
@@ -63,19 +88,91 @@ jobs:
         if: matrix.module_mode == 'dynamic'
         run: make dynamic-relocation-test
 
+  configuration:
+    name: configuration (${{ matrix.nginx.line }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
+      - name: Build nginx module
+        run: make build BUILD_FLAGS="--clean --debug"
+
       - name: Configuration tests
-        if: matrix.module_mode == 'static'
         run: make config-test
 
+  public-behavior:
+    name: public behavior (${{ matrix.nginx.line }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
       - name: Public integration suite
-        if: matrix.module_mode == 'static'
         run: make public-test
 
-      - name: Check whitespace
-        run: make whitespace
-
   sanitizers:
+    name: sanitizers
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out rl-nginx
