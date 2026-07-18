@@ -91,6 +91,12 @@ request pool. A per-request context MUST retain the owning nginx request,
 C-client request handle, deadline timer, expected response cardinality, latency
 report inputs, and exactly-once accounting flags.
 
+nginx clears module-context slots during an internal redirect but preserves the
+main request pool and cleanup chain. The module MUST keep its admission context
+reachable through that request-lifetime owner and restore the module-context
+slot when phases restart. A completed or waiting admission MUST be reused; an
+internal redirect MUST NOT construct or send a second rate request.
+
 Once the asynchronous request starts, the module MUST increment both nginx main
 request accounting and worker in-flight accounting. Completion, cancellation,
 or cleanup MUST use one teardown path that:

@@ -61,6 +61,13 @@ upstream failure does not refund that consumption. `ratelimitly_fail open` is
 different: it advances without a valid decision and therefore without a
 guarantee that RateLimitly recorded consumption.
 
+Internal redirects do not create a second admission. nginx can internally
+redirect while selecting an index, rendering an error page, or executing
+another content handler, but those steps remain part of the same main HTTP
+request. The module preserves and reuses the original completed allow, deny,
+or failure policy outcome across that routing. nginx subrequests are not
+independently rate limited by this module.
+
 ## Decide which variables are identities
 
 nginx complex values make many variables available, but availability does not

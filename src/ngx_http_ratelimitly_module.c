@@ -172,6 +172,7 @@ static void rn_request_teardown(
     ngx_flag_t cancel
 );
 static void rn_request_cleanup(void *data);
+static rn_req_ctx_t *rn_get_request_ctx(ngx_http_request_t *r);
 static void rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_result_t *result);
 static ngx_int_t ngx_http_rn_log_handler(ngx_http_request_t *r);
 static void rn_hex16(const uint8_t in[16], u_char out[33]);
@@ -320,6 +321,40 @@ ngx_module_t ngx_http_rn_module = {
     NGX_MODULE_V1_PADDING
 };
 
+static rn_req_ctx_t *
+rn_get_request_ctx(ngx_http_request_t *r) {
+    ngx_http_cleanup_t *cln;
+    rn_req_ctx_t *ctx;
+
+    if (r == NULL) {
+        return NULL;
+    }
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_rn_module);
+    if (ctx != NULL) {
+        return ctx;
+    }
+
+    /*
+     * ngx_http_internal_redirect() clears every module context but preserves
+     * the main request pool and its cleanup list.  Recover the admission
+     * context from that request-lifetime owner so internal routing cannot
+     * issue a second RateLimitly request for the same external HTTP request.
+     */
+    for (cln = r->cleanup; cln != NULL; cln = cln->next) {
+        if (cln->handler != rn_request_cleanup) {
+            continue;
+        }
+        ctx = cln->data;
+        if (ctx != NULL && ctx->r == r) {
+            ngx_http_set_ctx(r, ctx, ngx_http_rn_module);
+            return ctx;
+        }
+    }
+
+    return NULL;
+}
+
 static ngx_int_t
 ngx_http_rn_handler(ngx_http_request_t *r) {
     rn_loc_conf_t *lcf;
@@ -351,6 +386,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         return NGX_DECLINED;
     }
 
+    ctx = rn_get_request_ctx(r);
     lcf = ngx_http_get_module_loc_conf(r, ngx_http_rn_module);
     mcf = ngx_http_get_module_main_conf(r, ngx_http_rn_module);
     if (lcf == NULL || !lcf->enabled) {
@@ -366,6 +402,14 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 "rn: bypass uri=%V reason=main_disabled", &r->uri);
         }
         return NGX_DECLINED;
+    }
+    if (ctx != NULL) {
+        if (ctx->done) {
+            return ctx->decision;
+        }
+        if (ctx->waiting) {
+            return NGX_AGAIN;
+        }
     }
     if (mcf->worker == NULL) {
         ngx_http_core_loc_conf_t *clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
@@ -394,16 +438,6 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 &r->uri, (int) mcf->fail_open);
         }
         return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
-    }
-
-    ctx = ngx_http_get_module_ctx(r, ngx_http_rn_module);
-    if (ctx != NULL) {
-        if (ctx->done) {
-            return ctx->decision;
-        }
-        if (ctx->waiting) {
-            return NGX_AGAIN;
-        }
     }
 
     if (lcf->rules == NULL || lcf->rules->nelts == 0) {
