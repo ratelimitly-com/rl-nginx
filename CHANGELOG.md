@@ -14,6 +14,8 @@ Changes since `v0.1.0-rc.1`:
   ordering contract;
 - preserved one admission across nginx internal redirects and kept subrequests
   outside independent RateLimitly accounting;
+- drained nginx posted requests after asynchronous verdict callbacks so
+  resumed content cannot remain pinned awaiting an unrelated client event;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a
