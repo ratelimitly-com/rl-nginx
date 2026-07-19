@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -26,10 +27,7 @@ REQUIRED_MARKERS = {
 }
 
 RUN_LINE = re.compile(r"^(\s*)(?:-\s*)?run:\s*(.*)$")
-MAKE_COMMAND = re.compile(
-    r"^(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*"
-    r"make\s+([A-Za-z0-9_.-]+)(?:\s|$)"
-)
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def job_blocks(lines: list[str]) -> dict[str, str]:
@@ -67,6 +65,24 @@ def workflow_events(lines: list[str]) -> set[str]:
     return events
 
 
+def make_target(code: str) -> str | None:
+    try:
+        tokens = shlex.split(code, comments=True)
+    except ValueError:
+        return None
+
+    index = 0
+    while index < len(tokens):
+        name, separator, _value = tokens[index].partition("=")
+        if not separator or ENV_NAME.fullmatch(name) is None:
+            break
+        index += 1
+    if index + 1 >= len(tokens) or tokens[index] != "make":
+        return None
+    target = tokens[index + 1]
+    return target if re.fullmatch(r"[A-Za-z0-9_.-]+", target) else None
+
+
 def run_commands(block: str) -> set[str]:
     lines = block.splitlines()
     commands: set[str] = set()
@@ -93,10 +109,9 @@ def run_commands(block: str) -> set[str]:
             index += 1
 
         for script in scripts:
-            code = script.partition("#")[0].strip()
-            command = MAKE_COMMAND.match(code)
-            if command is not None:
-                commands.add(command.group(1))
+            target = make_target(script)
+            if target is not None:
+                commands.add(target)
     return commands
 
 
@@ -148,10 +163,8 @@ def remove_make_command(text: str, target: str) -> str:
     lines: list[str] = []
     for line in text.splitlines():
         run_line = RUN_LINE.match(line)
-        code = (run_line.group(2) if run_line is not None else line.strip())
-        code = code.partition("#")[0].strip()
-        command = MAKE_COMMAND.match(code)
-        if command is not None and command.group(1) == target:
+        code = run_line.group(2) if run_line is not None else line.strip()
+        if make_target(code) == target:
             lines.append(f"{line[: len(line) - len(line.lstrip())]}# removed make {target}")
         else:
             lines.append(line)
