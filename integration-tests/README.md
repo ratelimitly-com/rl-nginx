@@ -19,6 +19,13 @@ register a tenant, read a credential, or access `../rl`. If the locked C-client
 checkout is absent, the public entrypoint fetches its released source through
 `tools/fetch-rl-c-client.sh`.
 
+Before nginx lifecycle cases, `make unit` also links a direct compatibility
+probe against the selected C client. It binds the callback, borrowed-input,
+deadline, timeout, cancel, destroy, and resolver-cancellation behavior on which
+the nginx lifecycle adapter depends. The same probe runs against
+`rl-c-client/main` in the scheduled drift workflow, so a dependency change can
+fail before an nginx worker is involved.
+
 Before running the socket-level cases, test the portable DNS, numeric, and
 SRV-record helpers directly:
 

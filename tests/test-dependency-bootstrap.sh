@@ -21,6 +21,7 @@ SUPPORTED_ENTRYPOINTS=(
   tools/build-nginx.sh
   tools/sanitized-lifecycle.sh
   tests/build-nginx.sh
+  tests/test-c-client-contract.sh
   tests/test-config.sh
   tests/test-srv-records.sh
   integration-tests/public.sh
@@ -38,6 +39,11 @@ for entrypoint in "${SUPPORTED_ENTRYPOINTS[@]}"; do
   if grep -Fq '../rl-c-client' "${RN_ROOT}/${entrypoint}"; then
     fail "supported entrypoint contains an implicit sibling fallback: ${entrypoint}"
   fi
+done
+
+for contract_gate in Makefile tools/sanitized-lifecycle.sh; do
+  grep -Fq 'tests/test-c-client-contract.sh' "${RN_ROOT}/${contract_gate}" \
+    || fail "required gate omits the C-client contract probe: ${contract_gate}"
 done
 
 SOURCE_REPOSITORY="${TEST_ROOT}/source"
@@ -90,8 +96,20 @@ FETCHED_CHECKOUT="${TEST_ROOT}/fetched"
 [[ "$(git -C "${FETCHED_CHECKOUT}" rev-parse HEAD)" != "${FLOATING_COMMIT}" ]] \
   || fail "fetch selected the floating branch head"
 
-# Reusing an exact checkout is allowed; silently accepting drift is not.
+# Reusing an exact clean checkout is allowed; silently accepting revision or
+# working-tree drift is not.
 "${FIXTURE_ROOT}/tools/fetch-rl-c-client.sh" "${FETCHED_CHECKOUT}" >/dev/null
+DIRTY_CHECKOUT="${TEST_ROOT}/dirty"
+git clone -q --branch v1.2.3 "${SOURCE_REPOSITORY}" "${DIRTY_CHECKOUT}"
+printf 'local modification\n' >"${DIRTY_CHECKOUT}/version.txt"
+if "${FIXTURE_ROOT}/tools/fetch-rl-c-client.sh" "${DIRTY_CHECKOUT}" \
+    >"${TEST_ROOT}/dirty.out" 2>&1; then
+  fail "fetch accepted a dirty checkout at the locked commit"
+fi
+grep -Fq "locked rl-c-client checkout has local changes" \
+  "${TEST_ROOT}/dirty.out" \
+  || fail "dirty-checkout failure did not explain the immutable default"
+
 DRIFTED_CHECKOUT="${TEST_ROOT}/drifted"
 git clone -q "${SOURCE_REPOSITORY}" "${DRIFTED_CHECKOUT}"
 if "${FIXTURE_ROOT}/tools/fetch-rl-c-client.sh" "${DRIFTED_CHECKOUT}" \
@@ -132,10 +150,12 @@ RESOLVED_DEFAULT="$(env -u RCLIENT_DIR "${FIXTURE_ROOT}/tools/resolve-rl-c-clien
   || fail "default resolver did not verify the locked commit"
 
 EXPLICIT_CHECKOUT="${TEST_ROOT}/intentional-client"
-mkdir -p "${EXPLICIT_CHECKOUT}"
+git clone -q --branch v1.2.3 "${SOURCE_REPOSITORY}" "${EXPLICIT_CHECKOUT}"
+printf 'intentional development modification\n' \
+  >"${EXPLICIT_CHECKOUT}/version.txt"
 RESOLVED_EXPLICIT="$(RCLIENT_DIR="${EXPLICIT_CHECKOUT}" \
   "${FIXTURE_ROOT}/tools/resolve-rl-c-client.sh")"
 [[ "${RESOLVED_EXPLICIT}" == "${EXPLICIT_CHECKOUT}" ]] \
-  || fail "resolver ignored explicit RCLIENT_DIR"
+  || fail "resolver rejected or ignored a dirty explicit RCLIENT_DIR"
 
 echo "PASS deterministic rl-c-client bootstrap"

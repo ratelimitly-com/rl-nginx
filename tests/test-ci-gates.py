@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +29,26 @@ REQUIRED_MARKERS = {
 
 RUN_LINE = re.compile(r"^(\s*)(?:-\s*)?run:\s*(.*)$")
 ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+NGINX_MATRIX_ENTRY = re.compile(
+    r"^[ \t]*- line:[ \t]*([^\s]+)[ \t]*$"
+    r"\n^[ \t]+ref:[ \t]*([^\s]+)[ \t]*$"
+    r"\n^[ \t]+commit:[ \t]*([0-9a-f]{40})[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def nginx_gitlink_commit() -> str | None:
+    try:
+        output = subprocess.check_output(
+            ["git", "ls-files", "--stage", "--", "upstream-nginx"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    match = re.fullmatch(r"160000 ([0-9a-f]{40}) 0\tupstream-nginx", output)
+    return match.group(1) if match is not None else None
 
 
 def job_blocks(lines: list[str]) -> dict[str, str]:
@@ -115,7 +136,7 @@ def run_commands(block: str) -> set[str]:
     return commands
 
 
-def validate(text: str) -> list[str]:
+def validate(text: str, nginx_gitlink: str) -> list[str]:
     lines = text.splitlines()
     blocks = job_blocks(lines)
     failures: list[str] = []
@@ -140,6 +161,17 @@ def validate(text: str) -> list[str]:
         for fragment in REQUIRED_MARKERS.get(name, ()):
             if fragment not in block:
                 failures.append(f"job {name!r} lacks {fragment!r}")
+
+    for name in ("supported-build", "configuration", "public-behavior"):
+        block = blocks.get(name, "")
+        entries = NGINX_MATRIX_ENTRY.findall(block)
+        mainline = [entry for entry in entries if entry[0] == "mainline"]
+        if len(mainline) != 1:
+            failures.append(f"job {name!r} must declare one mainline nginx entry")
+        elif mainline[0][2] != nginx_gitlink:
+            failures.append(
+                f"job {name!r} mainline commit does not match the nginx gitlink"
+            )
 
     if "permissions:\n  contents: read" not in text:
         failures.append("workflow must retain least-privilege contents: read permissions")
@@ -171,25 +203,25 @@ def remove_make_command(text: str, target: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def negative_fixture_failures(text: str) -> list[str]:
+def negative_fixture_failures(text: str, nginx_gitlink: str) -> list[str]:
     failures: list[str] = []
     targets = sorted({target for targets in REQUIRED_COMMANDS.values() for target in targets})
     for target in targets:
-        if not validate(remove_make_command(text, target)):
+        if not validate(remove_make_command(text, target), nginx_gitlink):
             failures.append(f"validator stayed green after removing 'make {target}'")
 
     continue_on_error = text.replace(
         "  hygiene:\n", "  hygiene:\n    continue-on-error: true\n", 1
     )
-    if not validate(continue_on_error):
+    if not validate(continue_on_error, nginx_gitlink):
         failures.append("validator accepted continue-on-error on a required job")
 
     no_timeout = text.replace("    timeout-minutes: 15", "    timeout-minutes: 0", 1)
-    if not validate(no_timeout):
+    if not validate(no_timeout, nginx_gitlink):
         failures.append("validator accepted an unbounded required job")
 
     shallow_hygiene = text.replace("          fetch-depth: 0\n", "", 1)
-    if not validate(shallow_hygiene):
+    if not validate(shallow_hygiene, nginx_gitlink):
         failures.append("validator accepted a whitespace job without revision history")
 
     no_whitespace_base = re.sub(
@@ -198,8 +230,14 @@ def negative_fixture_failures(text: str) -> list[str]:
         text,
         count=1,
     )
-    if not validate(no_whitespace_base):
+    if not validate(no_whitespace_base, nginx_gitlink):
         failures.append("validator accepted a whitespace job without an event base")
+
+    mismatched_gitlink = text.replace(nginx_gitlink, "0" * 40)
+    if mismatched_gitlink == text:
+        failures.append("negative fixture could not mutate the nginx matrix commit")
+    elif not validate(mismatched_gitlink, nginx_gitlink):
+        failures.append("validator accepted an nginx matrix that omitted the gitlink")
     return failures
 
 
@@ -208,16 +246,21 @@ def main() -> int:
         print(f"FAIL CI gates: missing {WORKFLOW}", file=sys.stderr)
         return 1
 
+    nginx_gitlink = nginx_gitlink_commit()
+    if nginx_gitlink is None:
+        print("FAIL CI gates: could not read the upstream-nginx gitlink", file=sys.stderr)
+        return 1
+
     text = WORKFLOW.read_text()
-    failures = validate(text)
-    failures.extend(negative_fixture_failures(text))
+    failures = validate(text, nginx_gitlink)
+    failures.extend(negative_fixture_failures(text, nginx_gitlink))
 
     if failures:
         for failure in failures:
             print(f"FAIL CI gates: {failure}", file=sys.stderr)
         return 1
 
-    mutation_count = len({target for targets in REQUIRED_COMMANDS.values() for target in targets}) + 4
+    mutation_count = len({target for targets in REQUIRED_COMMANDS.values() for target in targets}) + 5
     print(
         "PASS named CI gates execute and propagate failures: "
         f"{', '.join(REQUIRED_COMMANDS)} ({mutation_count} red-case mutations)"

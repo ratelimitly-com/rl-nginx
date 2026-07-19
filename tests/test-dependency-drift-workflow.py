@@ -13,11 +13,6 @@ REQUIRED_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DRIFT_WORKFLOW = ROOT / ".github" / "workflows" / "dependency-drift.yml"
 
 
-def fail(message: str) -> int:
-    print(f"FAIL dependency drift workflow: {message}", file=sys.stderr)
-    return 1
-
-
 def workflow_events(text: str) -> set[str]:
     lines = text.splitlines()
     try:
@@ -35,21 +30,27 @@ def workflow_events(text: str) -> set[str]:
     return events
 
 
-def main() -> int:
-    if not REQUIRED_WORKFLOW.is_file() or not DRIFT_WORKFLOW.is_file():
-        return fail("required or drift workflow is missing")
-
-    required = REQUIRED_WORKFLOW.read_text()
-    drift = DRIFT_WORKFLOW.read_text()
-
+def validate(required: str, drift: str) -> list[str]:
+    failures: list[str] = []
     if workflow_events(drift) != {"schedule", "workflow_dispatch"}:
-        return fail("drift workflow must be schedule/manual only")
+        failures.append("drift workflow must be schedule/manual only")
     if workflow_events(required) != {"push", "pull_request", "workflow_dispatch"}:
-        return fail("required CI triggers changed unexpectedly")
+        failures.append("required CI triggers changed unexpectedly")
     if "continue-on-error:" in drift:
-        return fail("drift failures must remain visible")
+        failures.append("drift failures must remain visible")
     if "rl-c-client-main" in required or "origin master" in required:
-        return fail("required CI contains a floating dependency probe")
+        failures.append("required CI contains a floating dependency probe")
+    if "permissions:\n  contents: read" not in drift:
+        failures.append("drift workflow must retain top-level contents: read")
+    if re.search(r"^[ \t]{2,}permissions:", drift, re.MULTILINE):
+        failures.append("drift jobs must not override top-level permissions")
+    if "write-all" in drift or "secrets." in drift or "RL_CI_TOKEN" in drift:
+        failures.append("drift workflow must not gain write or secret access")
+
+    checkout_count = drift.count("uses: actions/checkout@")
+    credential_blocks = drift.count("persist-credentials: false")
+    if checkout_count == 0 or credential_blocks != checkout_count:
+        failures.append("every drift checkout must disable credential persistence")
 
     required_fragments = (
         "c-client-main:",
@@ -61,9 +62,60 @@ def main() -> int:
     )
     for fragment in required_fragments:
         if fragment not in drift:
-            return fail(f"missing compatibility probe fragment: {fragment}")
+            failures.append(f"missing compatibility probe fragment: {fragment}")
 
-    print("PASS dependency drift probes are isolated from required CI")
+    return failures
+
+
+def negative_fixture_failures(required: str, drift: str) -> list[str]:
+    failures: list[str] = []
+    mutations = (
+        (
+            "writable top-level permissions",
+            drift.replace("permissions:\n  contents: read", "permissions:\n  contents: write", 1),
+        ),
+        (
+            "job-level write-all override",
+            drift.replace(
+                "  c-client-main:\n",
+                "  c-client-main:\n    permissions: write-all\n",
+                1,
+            ),
+        ),
+        (
+            "persisted checkout credentials",
+            drift.replace("          persist-credentials: false\n", "", 1),
+        ),
+    )
+    for name, mutated in mutations:
+        if mutated == drift:
+            failures.append(f"negative fixture could not create {name}")
+        elif not validate(required, mutated):
+            failures.append(f"validator accepted {name}")
+    return failures
+
+
+def main() -> int:
+    if not REQUIRED_WORKFLOW.is_file() or not DRIFT_WORKFLOW.is_file():
+        print(
+            "FAIL dependency drift workflow: required or drift workflow is missing",
+            file=sys.stderr,
+        )
+        return 1
+
+    required = REQUIRED_WORKFLOW.read_text()
+    drift = DRIFT_WORKFLOW.read_text()
+    failures = validate(required, drift)
+    failures.extend(negative_fixture_failures(required, drift))
+    if failures:
+        for failure in failures:
+            print(f"FAIL dependency drift workflow: {failure}", file=sys.stderr)
+        return 1
+
+    print(
+        "PASS dependency drift probes are isolated and read-only "
+        "(3 red-case mutations)"
+    )
     return 0
 
 

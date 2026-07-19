@@ -10,6 +10,10 @@ This requires the locked public `rl-c-client` release so nginx can link against
 the compiled C client library. Build and test helpers fetch or verify that
 release automatically when `RCLIENT_DIR` is not set.
 
+The default locked checkout must be clean as well as pinned to the exact
+commit. Use an explicit `RCLIENT_DIR` for an intentionally modified development
+tree.
+
 ## 1) Build rl-c-client
 
 ```sh
@@ -77,14 +81,25 @@ worker is started.
 IPv4/IPv6 answers with null, empty, and oversized inputs and requires the
 reported count and output order to contain only usable addresses.
 
+`test-c-client-contract.sh` links to the selected C client and its released
+responder protocol fixture. It makes the module's otherwise out-of-tree
+assumptions executable: create-time borrowing, non-callback start errors,
+asynchronous successful start, callback identity and lifetime, deadline and
+synchronous timeout behavior, callback-free cancel/destroy, late-response
+suppression, and resolver-cancel reentrancy. It runs against the lock in
+required CI and against `rl-c-client/main` in the scheduled drift workflow.
+
 ## Required oracle self-tests
 
 `make unit` includes negative fixtures for the repository's own gates. They
 prove an invalid early shell script, failed explicit client resolution, and
-committed whitespace all fail; remove each required CI command and disable
-executable C defaults to prove the meta-checks reject those mutations; and
-exercise exact HTTP-status, forced-shutdown, complete lifecycle-manifest, and
-DNS-timeout oracles. These tests require no nginx worker or remote service.
+committed whitespace all fail; reject a dirty default client while allowing an
+explicit dirty override; remove each required CI command, diverge the nginx
+gitlink from its matrix, weaken drift permissions, float an action/container,
+and disable executable C defaults to prove the meta-checks reject those
+mutations; and exercise exact HTTP-status, forced-shutdown, complete
+lifecycle-manifest, and DNS-timeout oracles. These tests require no nginx
+worker or remote service.
 
 ## 3) Run nginx with the test config
 

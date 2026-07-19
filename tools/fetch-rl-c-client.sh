@@ -9,7 +9,9 @@ Fetches the public rl-c-client release recorded in
 dependencies/rl-c-client.env and verifies its full commit SHA.
 
 The default destination is ./_deps/rl-c-client. An existing Git checkout is
-accepted only when its HEAD matches the locked commit.
+accepted only when its HEAD matches the locked commit and its working tree is
+clean. Use an explicit RCLIENT_DIR for an intentionally modified development
+or packaging checkout.
 EOF
 }
 
@@ -56,6 +58,17 @@ if [[ -e "$DESTINATION" ]]; then
   if [[ -e "$DESTINATION/.git" ]]; then
     ACTUAL_COMMIT="$(git -C "$DESTINATION" rev-parse HEAD)"
     if [[ "$ACTUAL_COMMIT" == "$RL_C_CLIENT_COMMIT" ]]; then
+      if ! DIRTY_STATE="$(git -C "$DESTINATION" status \
+          --porcelain=v1 --untracked-files=normal)"; then
+        echo "could not inspect locked rl-c-client working tree: $DESTINATION" >&2
+        exit 1
+      fi
+      if [[ -n "$DIRTY_STATE" ]]; then
+        echo "existing locked rl-c-client checkout has local changes:" >&2
+        echo "  path: $DESTINATION" >&2
+        echo "Use RCLIENT_DIR for an intentionally modified checkout." >&2
+        exit 1
+      fi
       echo "rl-c-client $RL_C_CLIENT_TAG is already present ($RL_C_CLIENT_COMMIT)"
       echo "Path: $DESTINATION"
       exit 0

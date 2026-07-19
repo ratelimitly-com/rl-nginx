@@ -40,7 +40,8 @@ make check BUILD_FLAGS="--clean"
 checks nginx configuration, runs the deterministic public integration suite,
 and checks whitespace. It materializes the C client at
 `./_deps/rl-c-client`; that checkout must match the tag and full commit in
-[`dependencies/rl-c-client.env`](dependencies/rl-c-client.env).
+[`dependencies/rl-c-client.env`](dependencies/rl-c-client.env) and have a clean
+working tree.
 
 The resulting static nginx binary is:
 
@@ -175,7 +176,9 @@ Supported builds use immutable inputs:
 Set `NGINX_SRC=/path/to/nginx-src` when testing another supported nginx source
 tree. Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally developing
 or packaging against another client checkout. An override is not a supported
-release lock, and no sibling checkout is selected implicitly.
+release lock, may contain local changes, and no sibling checkout is selected
+implicitly. The selected client must also pass the
+[callback and ownership contract](docs/c-client.md#required-lifecycle-contract).
 
 Scheduled compatibility probes test `rl-c-client/main` and nginx `master` for
 early warning only. Required builds and support claims remain on the immutable
