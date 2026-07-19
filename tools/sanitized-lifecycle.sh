@@ -98,34 +98,6 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
   RCLIENT_DIR="${RCLIENT_DIR}" \
     ARTIFACT_ROOT="${run_artifacts}" \
     SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" admission-contract
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" enforcement-boundary
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" outage-policy
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" dns-policy
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" guard-latency
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" protocol-policy
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
-    "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" cardinality
-  RCLIENT_DIR="${RCLIENT_DIR}" \
-    ARTIFACT_ROOT="${run_artifacts}" \
-    SKIP_BUILD=1 \
     "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" fault-injection
 
   if grep -R -E \
@@ -136,5 +108,5 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
   fi
 done
 
-echo "[sanitizers] ${SANITIZER_RUNS} complete lifecycle/admission/enforcement/outage/dns/guard/protocol/cardinality/fault-injection run(s) passed"
+echo "[sanitizers] ${SANITIZER_RUNS} complete public lifecycle and fault-injection run(s) passed"
 echo "[sanitizers] artifacts: ${ARTIFACT_ROOT}"

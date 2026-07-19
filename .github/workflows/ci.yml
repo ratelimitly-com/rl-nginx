@@ -26,6 +26,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
@@ -42,6 +43,8 @@ jobs:
         run: make unit
 
       - name: Check whitespace
+        env:
+          WHITESPACE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: make whitespace
 
   supported-build:

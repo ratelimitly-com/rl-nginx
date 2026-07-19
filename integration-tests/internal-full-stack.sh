@@ -513,23 +513,28 @@ assert_gt() {
 }
 
 assert_results() {
-  local allow_200 allow_429 allow_000 allow_5xx deny_429 deny_000 deny_5xx
+  local allow_200 allow_429 allow_000 allow_5xx allow_other
+  local deny_429 deny_000 deny_5xx deny_other
   allow_200="$(extract_result_field allow 200)"
   allow_429="$(extract_result_field allow 429)"
   allow_000="$(extract_result_field allow 000)"
   allow_5xx="$(extract_result_field allow 5xx)"
+  allow_other="$(extract_result_field allow other)"
   deny_429="$(extract_result_field deny 429)"
   deny_000="$(extract_result_field deny 000)"
   deny_5xx="$(extract_result_field deny 5xx)"
+  deny_other="$(extract_result_field deny other)"
 
   assert_gt "allow 200" "${allow_200}" 0
   assert_eq "allow 429" "${allow_429}" 0
   assert_eq "allow 000" "${allow_000}" 0
   assert_eq "allow 5xx" "${allow_5xx}" 0
+  assert_eq "allow other" "${allow_other}" 0
 
   assert_gt "deny 429" "${deny_429}" 0
   assert_eq "deny 000" "${deny_000}" 0
   assert_eq "deny 5xx" "${deny_5xx}" 0
+  assert_eq "deny other" "${deny_other}" 0
 
   grep -q 'rn: result success=1' "${ARTIFACT_DIR}/nginx-error.log" || {
     echo "FAIL missing rn allow decision logs" >&2

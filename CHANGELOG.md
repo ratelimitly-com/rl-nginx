@@ -22,6 +22,10 @@ Changes since `v0.1.0-rc.1`:
 - made the HTTP-scope resolver and timeout deterministic for each worker,
   validated bind addresses at configuration time, and bounded failed worker
   initialization retries;
+- made public test and CI oracles fail closed: fetch/syntax loops preserve early
+  failures, committed whitespace is checked, required workflow commands are
+  executable and non-optional, lifecycle faults require exact outcomes, and
+  every gate class has a deliberate red-case fixture;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a

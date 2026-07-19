@@ -44,6 +44,13 @@ Run all lifecycle cases:
 ./integration-tests/lifecycle-regressions.sh
 ```
 
+`all` means the complete required public lifecycle matrix: the four direct
+lifecycle cases plus admission, enforcement boundary, outage, DNS, guard,
+protocol, and cardinality groups. Print that manifest without resolving or
+building dependencies with `lifecycle-regressions.sh list-all`. Test-only fault
+injection remains a separate group because ordinary public binaries do not
+contain its configuration directive.
+
 Run one case while developing a fix:
 
 ```sh
@@ -167,7 +174,9 @@ requires an SSI subrequest posted by resumed content processing to complete in
 the same event cycle as the RateLimitly verdict. Repeated partial worker-init
 failures must be suppressed during bounded backoff and leave zero module UDP
 sockets; resolver failures must retain one initialized endpoint; and a failed
-rebind must keep the original source port usable. The public lifecycle group
+rebind must keep the original source port usable. Every admission-affecting
+fault must return the exact fail-close status `429`; accepting merely any
+non-transport status is not sufficient. The public lifecycle group
 also proves that the HTTP-scope resolver and timeout win even when the first
 protected location declares a conflicting resolver. Ordinary and deployment
 builds do not contain the test-only directive.
@@ -176,19 +185,22 @@ Every case establishes a successful baseline, records the single nginx worker
 PID, triggers the selected lifecycle path, asserts that the same worker remains
 alive, requires a successful follow-up rate-limited request, and checks that
 an nginx reload replaces the worker with a functional one before clean shutdown
-reports no leaked connection. The aborted client case uses delayed responder
-output so clients close while requests are in flight; the timeout case uses
-`drop`; the steering case requests a source port rebind through response
-feedback and verifies the port through Linux `/proc` socket metadata.
+reports no leaked connection. Requiring `SIGKILL` is a failed clean-shutdown
+oracle even when cleanup can subsequently remove the process. The aborted
+client case uses delayed responder output so clients close while requests are
+in flight; the timeout case uses `drop`; the steering case requests a source
+port rebind through response feedback and verifies the port through Linux
+`/proc` socket metadata.
 
 These are acceptance regressions, not an expected-failure wrapper. Each case
 must return zero and protects a specific ownership invariant that previously
 failed:
 
 - `timeout`: synchronous C-client completion must be the timeout handler's last
-  access to request-owned state;
+  access to request-owned state, and exactly one timeout completion is allowed;
 - `aborted-client`: resetting a connection must cancel the C-client request and
-  timer while balancing the nginx and worker request counts;
+  timer while balancing the nginx and worker request counts, with no later
+  timeout completion;
 - `steering-rebind`: source-port replacement must run in a deferred worker
   event after the UDP read callback unwinds.
 
@@ -222,6 +234,11 @@ management tooling. The harness builds and runs these local components:
 - nginx, from the `upstream-nginx` submodule, with this repo's module added.
 - a small local DNS server that serves SRV and localhost A/AAAA records.
 - a generated nginx config with one permissive route and one rate-limited route.
+
+The burst oracle permits only `200` on the allow route and the expected
+`200`/`429` quota split on the deny route. Transport failures, `5xx`, an allow
+route denial, and any status in the computed `other` bucket fail instead of
+being printed and ignored.
 
 ## Quick run
 
@@ -426,9 +443,9 @@ module's pre-content admission point.
 The test passes when:
 
 - `/allow` has at least one `200`.
-- `/allow` has zero `429`, zero `000`, and zero `5xx`.
+- `/allow` has zero `429`, zero `000`, zero `5xx`, and zero `other`.
 - `/deny` has at least one `429`.
-- `/deny` has zero `000` and zero `5xx`.
+- `/deny` has zero `000`, zero `5xx`, and zero `other`.
 - nginx debug log contains at least one `rn: result success=1`.
 - nginx debug log contains at least one `rn: result success=0`.
 
