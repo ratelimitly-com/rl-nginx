@@ -45,11 +45,11 @@ Run all lifecycle cases:
 ```
 
 `all` means the complete required public lifecycle matrix: the four direct
-lifecycle cases plus admission, enforcement boundary, outage, DNS, guard,
-protocol, and cardinality groups. Print that manifest without resolving or
-building dependencies with `lifecycle-regressions.sh list-all`. Test-only fault
-injection remains a separate group because ordinary public binaries do not
-contain its configuration directive.
+lifecycle cases plus admission, enforcement boundary, rendered-value, outage,
+DNS, guard, protocol, and cardinality groups. Print that manifest without
+resolving or building dependencies with `lifecycle-regressions.sh list-all`.
+Test-only fault injection remains a separate group because ordinary public
+binaries do not contain its configuration directive.
 
 Run one case while developing a fix:
 
@@ -87,6 +87,21 @@ quota responder with allowance 3, and requires the sequential result
 requests containing one resource, worker survival, a successful follow-up,
 reload, and clean shutdown. The responder process owns the test counter, so no
 wall-clock refill or burst scheduling can change the boundary.
+
+Run rendered-value policy and identifier boundaries alone:
+
+```sh
+./integration-tests/lifecycle-regressions.sh rendered-values
+```
+
+The matrix runs under fail-close and fail-open. Empty buckets/services,
+1025-byte buckets/services, 257-byte labels, and zero dynamic guard thresholds
+must take the configured policy without reaching the responder. An empty label
+must be omitted, while boundary values of 1024 bytes for buckets/services and
+256 bytes for labels must reach it. A unitless threshold of `1` must become
+`1000ms`, and the known bucket text
+`boundary:known-bucket` must produce the pinned C-client identifier
+`adad04e30132078dd71e82746cbfe92d` in a one-resource responder request.
 
 Run the outage-policy matrix separately while working on fail-policy behavior:
 
@@ -424,8 +439,8 @@ ratelimitly_timeout  100ms;
 ratelimitly_fail     close;
 ratelimitly_debug    on;
 
-ratelimitly_zone allow_zone bucket="v1|fixture=allow" rate=10000r/s;
-ratelimitly_zone deny_zone  bucket="v1|fixture=deny"  rate=1r/s;
+ratelimitly_zone allow_zone "bucket=v1|fixture=allow" rate=10000r/s;
+ratelimitly_zone deny_zone  "bucket=v1|fixture=deny"  rate=1r/s;
 ```
 
 It exposes three local endpoints:

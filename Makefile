@@ -14,6 +14,7 @@ SH_SCRIPTS := \
 	tools/sanitized-lifecycle.sh \
 	tests/build-nginx.sh \
 	tests/test-config.sh \
+	tests/test-addr-records.sh \
 	tests/test-async-state.sh \
 	tests/test-numeric.sh \
 	tests/test-dependency-bootstrap.sh \
@@ -105,6 +106,7 @@ lifecycle-oracles-test:
 
 unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test spec-consistency-test make-gates-test lifecycle-oracles-test
 	python3 integration-tests/test_local_dns_server.py
+	./tests/test-addr-records.sh
 	./tests/test-async-state.sh
 	./tests/test-numeric.sh
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-srv-records.sh

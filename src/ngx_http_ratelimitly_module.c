@@ -4,6 +4,7 @@
 #include <ngx_resolver.h>
 
 #include "r_client.h"
+#include "rn_addr_records.h"
 #include "rn_async_state.h"
 #include "rn_numeric.h"
 #include "rn_srv_records.h"
@@ -15,6 +16,9 @@
 #define RN_REBIND_RETRY_MS 1000
 #define RN_INIT_RETRY_INITIAL_MS 1000
 #define RN_INIT_RETRY_MAX_MS 5000
+#define RN_MAX_BUCKET_LEN 1024
+#define RN_MAX_SERVICE_LEN 1024
+#define RN_MAX_LABEL_LEN 256
 
 typedef struct {
     ngx_str_t name;
@@ -65,6 +69,7 @@ typedef struct {
     ngx_msec_t init_retry_at;
     ngx_msec_t init_retry_delay;
     ngx_flag_t debug;
+    ngx_flag_t debug_set;
 #if (RN_TEST_FAULT_INJECTION)
     ngx_str_t test_fault;
 #endif
@@ -232,6 +237,7 @@ static ngx_int_t rn_parse_protocol_duration_ms(
     ngx_str_t *value,
     uint32_t *out_ms
 );
+static ngx_flag_t rn_has_literal_value_quotes(ngx_str_t *value);
 static ngx_int_t rn_build_guard_entries(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
@@ -614,6 +620,14 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
         }
         if (label.len > 0) {
+            if (label.len > RN_MAX_LABEL_LEN) {
+                if (mcf->debug) {
+                    ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                        "rn: label_build_failed uri=%V reason=too_long len=%uz max=%d fail_open=%d",
+                        &r->uri, label.len, RN_MAX_LABEL_LEN, mcf->fail_open);
+                }
+                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+            }
             label_ptr = (const char *) label.data;
             label_len = label.len;
         }
@@ -815,6 +829,7 @@ ngx_http_rn_create_main_conf(ngx_conf_t *cf) {
     mcf->init_retry_at = 0;
     mcf->init_retry_delay = 0;
     mcf->debug = 0;
+    mcf->debug_set = 0;
 
     return mcf;
 }
@@ -860,9 +875,7 @@ ngx_http_rn_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child) {
     rn_srv_conf_t *prev = parent;
     rn_srv_conf_t *conf = child;
 
-    if (conf->enabled == NGX_CONF_UNSET) {
-        conf->enabled = prev->enabled;
-    }
+    ngx_conf_merge_value(conf->enabled, prev->enabled, 0);
     if (conf->rules == NULL) {
         conf->rules = prev->rules;
     }
@@ -879,9 +892,7 @@ ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
     rn_loc_conf_t *prev = parent;
     rn_loc_conf_t *conf = child;
 
-    if (conf->enabled == NGX_CONF_UNSET) {
-        conf->enabled = prev->enabled;
-    }
+    ngx_conf_merge_value(conf->enabled, prev->enabled, 0);
     if (conf->rules == NULL) {
         conf->rules = prev->rules;
     }
@@ -939,9 +950,9 @@ static char *
 ngx_http_rn_set_timeout(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
-    ngx_msec_t ms = ngx_parse_time(&value[1], 0);
+    uint32_t ms;
 
-    if (ms == (ngx_msec_t) NGX_ERROR) {
+    if (rn_parse_protocol_duration_ms(&value[1], &ms) != NGX_OK) {
         return "invalid timeout";
     }
     mcf->timeout_ms = ms;
@@ -993,15 +1004,17 @@ ngx_http_rn_set_debug(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
 
-    if (mcf->debug != 0) {
+    if (mcf->debug_set) {
         return "is duplicate";
     }
     if (value[1].len == 2 && ngx_strncmp(value[1].data, "on", 2) == 0) {
         mcf->debug = 1;
+        mcf->debug_set = 1;
         return NGX_CONF_OK;
     }
     if (value[1].len == 3 && ngx_strncmp(value[1].data, "off", 3) == 0) {
         mcf->debug = 0;
+        mcf->debug_set = 1;
         return NGX_CONF_OK;
     }
     return "invalid ratelimitly_debug value";
@@ -1016,13 +1029,25 @@ rn_parse_protocol_duration_ms(ngx_str_t *value, uint32_t *out_ms) {
     }
 
     ms = ngx_parse_time(value, 0);
-    if (ms == (ngx_msec_t) NGX_ERROR
+    if (ms == 0 || ms == (ngx_msec_t) NGX_ERROR
         || rn_numeric_u32_from_u64((uint64_t) ms, out_ms) != 0)
     {
         return NGX_ERROR;
     }
 
     return NGX_OK;
+}
+
+static ngx_flag_t
+rn_has_literal_value_quotes(ngx_str_t *value) {
+    u_char first;
+
+    if (value == NULL || value->len < 2) {
+        return 0;
+    }
+    first = value->data[0];
+    return (first == '"' || first == '\'')
+        && value->data[value->len - 1] == first;
 }
 
 static ngx_int_t
@@ -1041,7 +1066,9 @@ rn_build_zone_resource(
         return NGX_ERROR;
     }
 
-    if (ngx_http_complex_value(r, &zone->bucket_cv, &bucket) != NGX_OK) {
+    if (ngx_http_complex_value(r, &zone->bucket_cv, &bucket) != NGX_OK
+        || bucket.len == 0 || bucket.len > RN_MAX_BUCKET_LEN)
+    {
         return NGX_ERROR;
     }
     bucket_cstr = ngx_pnalloc(r->pool, bucket.len + 1);
@@ -1105,7 +1132,9 @@ rn_build_guard_entries(
         return NGX_ERROR;
     }
 
-    if (ngx_http_complex_value(r, &guard->service_cv, &service) != NGX_OK || service.len == 0) {
+    if (ngx_http_complex_value(r, &guard->service_cv, &service) != NGX_OK
+        || service.len == 0 || service.len > RN_MAX_SERVICE_LEN)
+    {
         return NGX_ERROR;
     }
     service_cstr = ngx_pnalloc(r->pool, service.len + 1);
@@ -1178,6 +1207,17 @@ ngx_http_rn_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     if (bucket.len == 0 || rate.len == 0) {
         return "ratelimitly_zone requires <name>, bucket=, rate=";
     }
+    if (rn_has_literal_value_quotes(&bucket)) {
+        return "quote the complete bucket= argument, not only its value";
+    }
+    if (ngx_http_script_variables_count(&bucket) == 0
+        && bucket.len > RN_MAX_BUCKET_LEN)
+    {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+            "ratelimitly_zone bucket is %uz bytes; maximum is %d",
+            bucket.len, RN_MAX_BUCKET_LEN);
+        return NGX_CONF_ERROR;
+    }
     if (ngx_http_script_variables_count(&rate) == 0
         && rn_numeric_parse_rate(rate.data, rate.len, &static_rate,
             &static_window_ms) != 0)
@@ -1233,6 +1273,11 @@ ngx_http_rn_group(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     if (cf->args->nelts < 3) {
         return "ratelimitly_group requires name and at least one zone=";
     }
+    if (value[1].len == 0
+        || ngx_strlchr(value[1].data, value[1].data + value[1].len, '=') != NULL)
+    {
+        return "ratelimitly_group requires positional <name> as first argument";
+    }
 
     if (mcf->groups == NULL) {
         mcf->groups = ngx_array_create(cf->pool, 2, sizeof(rn_group_t));
@@ -1261,6 +1306,9 @@ ngx_http_rn_group(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         ngx_str_t zname;
         zname.data = value[i].data + 5;
         zname.len = value[i].len - 5;
+        if (zname.len == 0) {
+            return "ratelimitly_group requires nonempty zone= references";
+        }
         if (rn_find_zone(mcf, &zname) == NULL) {
             return "ratelimitly_group references unknown zone";
         }
@@ -1344,6 +1392,17 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     if (service.len == 0 || threshold.len == 0) {
         return "ratelimitly_guard requires <name>, service=, threshold=";
     }
+    if (rn_has_literal_value_quotes(&service)) {
+        return "quote the complete service= argument, not only its value";
+    }
+    if (ngx_http_script_variables_count(&service) == 0
+        && service.len > RN_MAX_SERVICE_LEN)
+    {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+            "ratelimitly_guard service is %uz bytes; maximum is %d",
+            service.len, RN_MAX_SERVICE_LEN);
+        return NGX_CONF_ERROR;
+    }
     if (ngx_http_script_variables_count(&threshold) == 0
         && rn_parse_protocol_duration_ms(&threshold,
             &static_threshold_ms) != NGX_OK)
@@ -1403,6 +1462,8 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_uint_t i;
     ngx_str_t zone_name = ngx_null_string;
     ngx_str_t group_name = ngx_null_string;
+    ngx_flag_t zone_seen = 0;
+    ngx_flag_t group_seen = 0;
     ngx_array_t *guard_names = NULL;
 
     if (lcf->rules == NULL) {
@@ -1419,15 +1480,17 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
     for (i = 1; i < cf->args->nelts; i++) {
         if (ngx_strncmp(value[i].data, "zone=", 5) == 0) {
-            if (group_name.len != 0 || zone_name.len != 0) {
+            if (group_seen || zone_seen) {
                 return "ratelimitly expects exactly one of zone= or group=";
             }
+            zone_seen = 1;
             zone_name.data = value[i].data + 5;
             zone_name.len = value[i].len - 5;
         } else if (ngx_strncmp(value[i].data, "group=", 6) == 0) {
-            if (zone_name.len != 0 || group_name.len != 0) {
+            if (zone_seen || group_seen) {
                 return "ratelimitly expects exactly one of zone= or group=";
             }
+            group_seen = 1;
             group_name.data = value[i].data + 6;
             group_name.len = value[i].len - 6;
         } else if (ngx_strncmp(value[i].data, "guard=", 6) == 0) {
@@ -1435,6 +1498,9 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
             ngx_str_t *g;
             gname.data = value[i].data + 6;
             gname.len = value[i].len - 6;
+            if (gname.len == 0) {
+                return "ratelimitly requires nonempty guard= references";
+            }
             if (rn_find_guard(mcf, &gname) == NULL) {
                 return "ratelimitly references unknown guard";
             }
@@ -1448,10 +1514,15 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         }
     }
 
-    if (zone_name.len == 0 && group_name.len == 0) {
+    if (!zone_seen && !group_seen) {
         return "ratelimitly requires zone=<name> or group=<name>";
     }
-    if (zone_name.len != 0) {
+    if ((zone_seen && zone_name.len == 0)
+        || (group_seen && group_name.len == 0))
+    {
+        return "ratelimitly requires a nonempty zone= or group= reference";
+    }
+    if (zone_seen) {
         if (rn_find_zone(mcf, &zone_name) == NULL) {
             return "ratelimitly references unknown zone";
         }
@@ -1502,6 +1573,15 @@ static char *
 ngx_http_rn_label(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_loc_conf_t *lcf = conf;
     ngx_str_t *value = cf->args->elts;
+
+    if (ngx_http_script_variables_count(&value[1]) == 0
+        && value[1].len > RN_MAX_LABEL_LEN)
+    {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+            "ratelimitly_label is %uz bytes; maximum is %d",
+            value[1].len, RN_MAX_LABEL_LEN);
+        return NGX_CONF_ERROR;
+    }
 
     lcf->label_template = value[1];
     ngx_http_compile_complex_value_t ccv;
@@ -2260,30 +2340,54 @@ rn_resolve_addr_handler(ngx_resolver_ctx_t *ctx) {
     if (ctx->state != 0 || ctx->naddrs == 0) {
         req->addr_cb(req->user, -1, NULL, 0);
     } else {
-        r_addr_t *addrs = ngx_alloc(ctx->naddrs * sizeof(r_addr_t), req->worker->log);
-        if (addrs == NULL) {
+        rn_addr_source_t *sources = NULL;
+        r_addr_t *addrs = NULL;
+        size_t addr_count;
+
+        if (ctx->naddrs > SIZE_MAX / sizeof(r_addr_t)
+            || ctx->naddrs > SIZE_MAX / sizeof(rn_addr_source_t))
+        {
             req->addr_cb(req->user, -1, NULL, 0);
         } else {
-            ngx_memzero(addrs, ctx->naddrs * sizeof(r_addr_t));
-            for (ngx_uint_t i = 0; i < ctx->naddrs; i++) {
-                ngx_resolver_addr_t *addr = &ctx->addrs[i];
-                if (addr->socklen > sizeof(addrs[i].sa)) {
-                    continue;
+            addrs = ngx_alloc(ctx->naddrs * sizeof(r_addr_t), req->worker->log);
+            sources = ngx_alloc(ctx->naddrs * sizeof(rn_addr_source_t),
+                req->worker->log);
+            if (addrs == NULL || sources == NULL) {
+                req->addr_cb(req->user, -1, NULL, 0);
+            } else {
+                for (ngx_uint_t i = 0; i < ctx->naddrs; i++) {
+                    ngx_resolver_addr_t *addr = &ctx->addrs[i];
+                    sources[i].sockaddr = addr->sockaddr;
+                    sources[i].socklen = addr->socklen;
                 }
-                ngx_memcpy(&addrs[i].sa, addr->sockaddr, addr->socklen);
-                addrs[i].len = addr->socklen;
+                addr_count = rn_addr_records_compact(sources, ctx->naddrs,
+                    addrs, ctx->naddrs);
                 if (req->worker->debug) {
-                    u_char text[NGX_SOCKADDR_STRLEN];
-                    size_t n = ngx_sock_ntop(addr->sockaddr, addr->socklen, text, sizeof(text), 0);
-                    if (n >= sizeof(text)) {
-                        n = sizeof(text) - 1;
+                    for (size_t i = 0; i < addr_count; i++) {
+                        struct sockaddr *addr = (struct sockaddr *) &addrs[i].sa;
+                        socklen_t addr_len = addrs[i].len;
+                        u_char text[NGX_SOCKADDR_STRLEN];
+                        size_t n = ngx_sock_ntop(addr, addr_len, text,
+                            sizeof(text), 0);
+                        if (n >= sizeof(text)) {
+                            n = sizeof(text) - 1;
+                        }
+                        text[n] = '\0';
+                        ngx_log_error(NGX_LOG_DEBUG, req->worker->log, 0,
+                            "rn: addr=%s", text);
                     }
-                    text[n] = '\0';
-                    ngx_log_error(NGX_LOG_DEBUG, req->worker->log, 0,
-                        "rn: addr=%s", text);
+                }
+                if (addr_count == 0) {
+                    req->addr_cb(req->user, -1, NULL, 0);
+                } else {
+                    req->addr_cb(req->user, 0, addrs, addr_count);
                 }
             }
-            req->addr_cb(req->user, 0, addrs, ctx->naddrs);
+        }
+        if (sources != NULL) {
+            ngx_free(sources);
+        }
+        if (addrs != NULL) {
             ngx_free(addrs);
         }
     }

@@ -92,20 +92,34 @@ run_example_case() {
 VALID_AUTH_KEY='rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjmkmcwk6tqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqq0n6jux'
 VALID_AUTH="  ratelimitly_auth_key ${VALID_AUTH_KEY};"
 VALID_TENANT='  ratelimitly_tenant tenant.example.invalid;'
-VALID_ZONE='  ratelimitly_zone primary bucket="primary" rate=100r/s;'
+VALID_ZONE='  ratelimitly_zone primary "bucket=primary" rate=100r/s;'
 VALID_RESOLVER='  resolver 127.0.0.1;'
 ENABLED_SERVER=$'  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }'
+printf -v MAX_IDENTIFIER '%*s' 1024 ''
+MAX_IDENTIFIER="${MAX_IDENTIFIER// /i}"
+OVERSIZED_IDENTIFIER="${MAX_IDENTIFIER}i"
+printf -v MAX_LABEL '%*s' 256 ''
+MAX_LABEL="${MAX_LABEL// /l}"
+OVERSIZED_LABEL="${MAX_LABEL}l"
 
 run_case representative accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'\
-$'  ratelimitly_timeout 50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary bucket="primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary bucket="secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency service="service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
+$'  ratelimitly_timeout 50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency "service=service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
 
 run_case min_sample_zero accept \
-  $'  ratelimitly_guard zero service="service:zero" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+  $'  ratelimitly_guard zero "service=service:zero" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
 run_case min_sample_positive accept \
-  $'  ratelimitly_guard positive service="service:positive" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=1;'
+  $'  ratelimitly_guard positive "service=service:positive" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=1;'
 run_case dynamic_values_deferred accept \
-  $'  map $arg_rate $dynamic_rate { default invalid-at-runtime; }\n  map $arg_threshold $dynamic_threshold { default invalid-at-runtime; }\n  ratelimitly_zone dynamic bucket="dynamic" rate=$dynamic_rate;\n  ratelimitly_guard dynamic_guard service="dynamic" threshold=$dynamic_threshold;'
+  $'  map $arg_rate $dynamic_rate { default invalid-at-runtime; }\n  map $arg_threshold $dynamic_threshold { default invalid-at-runtime; }\n  ratelimitly_zone dynamic "bucket=dynamic" rate=$dynamic_rate;\n  ratelimitly_guard dynamic_guard "service=dynamic" threshold=$dynamic_threshold;'
+run_case unitless_durations_are_seconds accept \
+  $'  ratelimitly_timeout 1;\n  ratelimitly_guard seconds "service=seconds" threshold=1 ttl=1;'
+run_case max_static_bucket accept \
+  "  ratelimitly_zone max_bucket \"bucket=${MAX_IDENTIFIER}\" rate=1r/s;"
+run_case max_static_service accept \
+  "  ratelimitly_guard max_service \"service=${MAX_IDENTIFIER}\" threshold=1ms;"
+run_case max_static_label accept \
+  "  server { listen unix:__SOCKET__; location / { ratelimitly_label \"${MAX_LABEL}\"; return 204; } }"
 
 run_case missing_tenant reject \
   "${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}" \
@@ -118,24 +132,45 @@ run_case invalid_auth reject \
   'invalid ratelimitly_auth_key bech32 value'
 
 run_case malformed_static_rate reject \
-  $'  ratelimitly_zone malformed bucket="malformed" rate=not-a-rate;' \
+  $'  ratelimitly_zone malformed "bucket=malformed" rate=not-a-rate;' \
   'invalid ratelimitly_zone rate'
 run_case overflow_static_rate reject \
-  $'  ratelimitly_zone overflow bucket="overflow" rate=4294967296r/s;' \
+  $'  ratelimitly_zone overflow "bucket=overflow" rate=4294967296r/s;' \
   'invalid ratelimitly_zone rate'
 run_case overflow_static_window reject \
-  $'  ratelimitly_zone overflow_window bucket="overflow" rate=1r/4294968s;' \
+  $'  ratelimitly_zone overflow_window "bucket=overflow" rate=1r/4294968s;' \
   'invalid ratelimitly_zone rate'
+run_case oversized_static_bucket reject \
+  "  ratelimitly_zone oversized_bucket \"bucket=${OVERSIZED_IDENTIFIER}\" rate=1r/s;" \
+  'ratelimitly_zone bucket is 1025 bytes; maximum is 1024'
+run_case value_only_quoted_bucket reject \
+  $'  ratelimitly_zone quoted bucket="quoted" rate=1r/s;' \
+  'quote the complete bucket= argument, not only its value'
 
 run_case duplicate_zone reject \
-  $'  ratelimitly_zone duplicate bucket="one" rate=1r/s;\n  ratelimitly_zone duplicate bucket="two" rate=2r/s;' \
+  $'  ratelimitly_zone duplicate "bucket=one" rate=1r/s;\n  ratelimitly_zone duplicate "bucket=two" rate=2r/s;' \
   'duplicate ratelimitly_zone name'
 run_case duplicate_guard reject \
-  $'  ratelimitly_guard duplicate service="one" threshold=1ms;\n  ratelimitly_guard duplicate service="two" threshold=2ms;' \
+  $'  ratelimitly_guard duplicate "service=one" threshold=1ms;\n  ratelimitly_guard duplicate "service=two" threshold=2ms;' \
   'duplicate ratelimitly_guard name'
 run_case duplicate_group reject \
   "${VALID_ZONE}"$'\n  ratelimitly_group duplicate zone=primary;\n  ratelimitly_group duplicate zone=primary;' \
   'duplicate ratelimitly_group name'
+run_case empty_zone_name reject \
+  $'  ratelimitly_zone "" "bucket=empty" rate=1r/s;' \
+  'ratelimitly_zone requires positional <name> as first argument'
+run_case empty_guard_name reject \
+  $'  ratelimitly_guard "" "service=empty" threshold=1ms;' \
+  'ratelimitly_guard requires positional <name> as first argument'
+run_case empty_group_name reject \
+  "${VALID_ZONE}"$'\n  ratelimitly_group "" zone=primary;' \
+  'ratelimitly_group requires positional <name> as first argument'
+run_case named_argument_as_group_name reject \
+  "${VALID_ZONE}"$'\n  ratelimitly_zone secondary "bucket=secondary" rate=1r/s;\n  ratelimitly_group zone=primary zone=secondary;' \
+  'ratelimitly_group requires positional <name> as first argument'
+run_case empty_group_zone_reference reject \
+  "${VALID_ZONE}"$'\n  ratelimitly_group invalid zone=;' \
+  'ratelimitly_group requires nonempty zone= references'
 
 run_case unknown_group_zone reject \
   $'  ratelimitly_group invalid zone=missing;' \
@@ -149,28 +184,61 @@ run_case unknown_rule_group reject \
 run_case unknown_rule_guard reject \
   "${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / { ratelimitly zone=primary guard=missing; }\n  }' \
   'ratelimitly references unknown guard'
+run_case empty_rule_zone_reference reject \
+  $'  server { listen unix:__SOCKET__; location / { ratelimitly zone=; } }' \
+  'ratelimitly requires a nonempty zone= or group= reference'
+run_case empty_rule_group_reference reject \
+  $'  server { listen unix:__SOCKET__; location / { ratelimitly group=; } }' \
+  'ratelimitly requires a nonempty zone= or group= reference'
+run_case empty_rule_guard_reference reject \
+  "${VALID_ZONE}"$'\n  server { listen unix:__SOCKET__; location / { ratelimitly zone=primary guard=; } }' \
+  'ratelimitly requires nonempty guard= references'
+run_case empty_zone_cannot_hide_group_reference reject \
+  "${VALID_ZONE}"$'\n  ratelimitly_group combined zone=primary;\n  server { listen unix:__SOCKET__; location / { ratelimitly zone= group=combined; } }' \
+  'ratelimitly expects exactly one of zone= or group='
+run_case empty_group_cannot_hide_zone_reference reject \
+  "${VALID_ZONE}"$'\n  server { listen unix:__SOCKET__; location / { ratelimitly group= zone=primary; } }' \
+  'ratelimitly expects exactly one of zone= or group='
 
 run_case malformed_static_threshold reject \
-  $'  ratelimitly_guard invalid service="invalid" threshold=not-a-duration;' \
+  $'  ratelimitly_guard invalid "service=invalid" threshold=not-a-duration;' \
   'invalid ratelimitly_guard threshold'
 run_case overflow_static_threshold reject \
-  $'  ratelimitly_guard overflow service="overflow" threshold=4294967296ms;' \
+  $'  ratelimitly_guard overflow "service=overflow" threshold=4294967296ms;' \
+  'invalid ratelimitly_guard threshold'
+run_case zero_static_threshold reject \
+  $'  ratelimitly_guard zero "service=zero" threshold=0;' \
   'invalid ratelimitly_guard threshold'
 run_case overflow_ttl reject \
-  $'  ratelimitly_guard overflow service="overflow" threshold=1ms ttl=4294967296ms;' \
+  $'  ratelimitly_guard overflow "service=overflow" threshold=1ms ttl=4294967296ms;' \
   'invalid ratelimitly_guard ttl'
+run_case zero_ttl reject \
+  $'  ratelimitly_guard zero "service=zero" threshold=1ms ttl=0;' \
+  'invalid ratelimitly_guard ttl'
+run_case oversized_static_service reject \
+  "  ratelimitly_guard oversized_service \"service=${OVERSIZED_IDENTIFIER}\" threshold=1ms;" \
+  'ratelimitly_guard service is 1025 bytes; maximum is 1024'
+run_case value_only_quoted_service reject \
+  $'  ratelimitly_guard quoted service="quoted" threshold=1ms;' \
+  'quote the complete service= argument, not only its value'
 run_case zero_max_samples reject \
-  $'  ratelimitly_guard zero service="zero" threshold=1ms max_samples=0;' \
+  $'  ratelimitly_guard zero "service=zero" threshold=1ms max_samples=0;' \
   'invalid ratelimitly_guard max_samples'
 run_case zero_buffer_size reject \
-  $'  ratelimitly_guard zero service="zero" threshold=1ms buffer_size=0;' \
+  $'  ratelimitly_guard zero "service=zero" threshold=1ms buffer_size=0;' \
   'invalid ratelimitly_guard buffer_size'
 run_case overflow_min_sample reject \
-  $'  ratelimitly_guard overflow service="overflow" threshold=1ms min_sample_threshold=4294967296;' \
+  $'  ratelimitly_guard overflow "service=overflow" threshold=1ms min_sample_threshold=4294967296;' \
   'invalid ratelimitly_guard min_sample_threshold'
 
 run_case invalid_timeout reject \
   $'  ratelimitly_timeout forever;' \
+  'invalid timeout'
+run_case zero_timeout reject \
+  $'  ratelimitly_timeout 0;' \
+  'invalid timeout'
+run_case overflow_timeout reject \
+  $'  ratelimitly_timeout 4294967296ms;' \
   'invalid timeout'
 run_case invalid_fail_policy reject \
   $'  ratelimitly_fail maybe;' \
@@ -178,6 +246,15 @@ run_case invalid_fail_policy reject \
 run_case invalid_debug_flag reject \
   $'  ratelimitly_debug maybe;' \
   'invalid ratelimitly_debug value'
+run_case duplicate_debug_off_then_on reject \
+  $'  ratelimitly_debug off;\n  ratelimitly_debug on;' \
+  'is duplicate'
+run_case duplicate_debug_on_then_off reject \
+  $'  ratelimitly_debug on;\n  ratelimitly_debug off;' \
+  'is duplicate'
+run_case oversized_static_label reject \
+  "  server { listen unix:__SOCKET__; location / { ratelimitly_label \"${OVERSIZED_LABEL}\"; return 204; } }" \
+  'ratelimitly_label is 257 bytes; maximum is 256'
 run_case invalid_bind reject \
   $'  ratelimitly_bind not-an-ip;' \
   'invalid ratelimitly_bind address'

@@ -63,10 +63,13 @@ examples. See the configuration and operations guides for include-file,
 ratelimitly_timeout <duration>;
 ```
 
-The value MUST be a duration accepted by nginx's millisecond-mode time parser.
-It becomes the C-client attempt timeout. The module sets retry attempts to zero,
-so the timeout bounds the only attempt. If repeated, the later value is
-effective; configurations SHOULD define it once.
+The value MUST be a positive duration accepted by nginx's millisecond-mode time
+parser whose total fits `1..4294967295ms`. Accepted units are `w`, `d`, `h`,
+`m`, `s`, and `ms`; compound components appear from larger to smaller units.
+A final unitless number means seconds, so `1` is `1000ms`, not `1ms`. It becomes
+the C-client attempt timeout. The module sets retry attempts to zero, so the
+timeout bounds the only attempt. If repeated, the later value is effective;
+configurations SHOULD define it once.
 
 ### `ratelimitly_fail`
 
@@ -106,17 +109,21 @@ The default is `off`. `on` enables additional module decision, DNS, UDP,
 identifier, latency-report, and steering messages. Debug-level messages also
 require an nginx binary built with `--with-debug` and an effective debug error
 log. Debug output MUST be treated as sensitive operational data and SHOULD be
-enabled only for a bounded diagnostic window.
+enabled only for a bounded diagnostic window. A second occurrence is a
+configuration error regardless of whether the first value is `on` or `off`.
 
 ### `ratelimitly_zone`
 
 ```nginx
-ratelimitly_zone <name> bucket="<template>" rate=<rate-expression>;
+ratelimitly_zone <name> "bucket=<template>" rate=<rate-expression>;
 ```
 
 The directive takes exactly one positional name plus one nonempty `bucket=` and
 one nonempty `rate=` argument. The two named arguments MAY appear in either
 order. A name containing `=` or a duplicate zone name is a configuration error.
+When quoting is needed, the quotes MUST enclose the complete named argument as
+shown above. `bucket="value"` is invalid because nginx treats quotes that start
+in the middle of a token as literal bytes.
 
 `bucket` is an nginx complex value rendered per request. The rendered text is
 hashed as specified in [Wire mapping](mapping.md). Components MUST be canonical
@@ -125,6 +132,10 @@ paths as authenticated identity. `$binary_remote_addr` MUST NOT be used: the
 current text hash boundary is NUL-terminated and embedded NUL bytes can truncate
 the identity. Use textual `$remote_addr` with correctly configured real-IP or
 proxy-protocol trust.
+
+The rendered bucket MUST contain `1..1024` bytes. An oversized static template
+is a configuration error. An empty or oversized dynamic result follows
+`ratelimitly_fail` and MUST NOT be sent to the C client.
 
 `rate` is also an nginx complex value. A static value is validated during
 configuration loading; a value containing variables is rendered and validated
@@ -151,7 +162,7 @@ but redundant `0` form.
 
 ```nginx
 ratelimitly_guard <name>
-  service="<template>"
+  "service=<template>"
   threshold=<duration-or-template>
   [ttl=<duration>]
   [max_samples=<uint32>]
@@ -162,6 +173,9 @@ ratelimitly_guard <name>
 The positional name, nonempty `service=`, and nonempty `threshold=` are
 required. A name containing `=` or a duplicate guard name is a configuration
 error. Unknown named arguments are rejected.
+When quoting is needed, the quotes MUST enclose the complete `service=`
+argument. `service="value"` is invalid because those quotes would be literal
+identifier bytes.
 
 `service` is rendered per request and hashed as specified in
 [Wire mapping](mapping.md). It SHOULD be fixed or selected from a finite,
@@ -169,12 +183,18 @@ operator-controlled map. An empty rendered service follows the failure policy.
 Raw host, URI, argument, header, cookie, or user values MUST NOT create service
 cardinality.
 
+The rendered service MUST contain `1..1024` bytes. An oversized static template
+is a configuration error. An empty or oversized dynamic result follows
+`ratelimitly_fail` and MUST NOT be sent to the C client.
+
 `threshold` is an nginx complex value parsed as milliseconds. A static value is
 validated at configuration load; a value containing variables is validated per
 request and follows the failure policy on error. `ttl` and all sample fields
 are static and validated at configuration load.
 
-Threshold and TTL milliseconds and all sample fields MUST fit an unsigned
+Threshold and TTL use the same duration grammar as `ratelimitly_timeout`; a
+unitless value means seconds. Their millisecond values MUST fit
+`1..4294967295`, so zero is invalid. All sample fields MUST fit an unsigned
 32-bit wire field. `max_samples` and `buffer_size` MUST be nonzero.
 `min_sample_threshold=0` is valid and disables only the insertion-rate
 sufficiency gate; it does not synthesize a retained latency sample.
@@ -185,10 +205,11 @@ sufficiency gate; it does not synthesize a retained latency sample.
 ratelimitly_group <name> zone=<zone1> [zone=<zone2> ...];
 ```
 
-At least one zone is required. Every argument after the name MUST be `zone=`
-and MUST reference a previously defined zone. A duplicate group name is a
-configuration error. A group preserves listed order and does not deduplicate
-repeated zone references; each occurrence maps to a ResourceBlock.
+The positional name MUST be nonempty and MUST NOT contain `=`. At least one
+nonempty `zone=` reference is required. Every argument after the name MUST be
+`zone=` and MUST reference a previously defined zone. A duplicate group name
+is a configuration error. A group preserves listed order and does not
+deduplicate repeated zone references; each occurrence maps to a ResourceBlock.
 
 ### `ratelimitly`
 
@@ -198,9 +219,10 @@ ratelimitly group=<name> [guard=<guard1> ...];
 ```
 
 Each directive MUST contain exactly one `zone=` or `group=` reference and MAY
-contain zero or more `guard=` references. Every reference MUST already exist.
-Unknown arguments and a rule containing both or neither resource reference are
-configuration errors.
+contain zero or more `guard=` references. Every reference MUST be nonempty and
+MUST already exist. Unknown arguments and a rule containing both or neither
+resource reference are configuration errors, including when either textual
+reference has an empty value.
 
 Multiple rules in one effective context are combined into one RateLimitly
 request. Zones, including repeated references, remain separate ResourceBlocks.
@@ -219,9 +241,11 @@ ratelimitly_label "<template>";
 ```
 
 The effective label is rendered once per protected request and supplied with
-the combined rule. An empty rendered value omits the metrics-label TLV. A child
-inherits its parent's label unless it declares its own; a later label in the
-same context is effective.
+the combined rule. It MUST contain at most 256 bytes. An oversized static label
+is a configuration error; an oversized dynamic label follows
+`ratelimitly_fail` and MUST NOT reach the C client. An empty rendered value
+omits the metrics-label TLV. A child inherits its parent's label unless it
+declares its own; a later label in the same context is effective.
 
 Labels MUST be bounded and non-sensitive. Raw paths, arguments, headers,
 cookies, credentials, session tokens, user identifiers, email addresses, and

@@ -65,11 +65,17 @@ RCLIENT_DIR=./_deps/rl-c-client ./tests/test-config.sh
 
 The matrix uses isolated `nginx -t` configurations. It covers representative
 valid configuration, required tenant and credentials, static numeric syntax
-and bounds, duplicate names, unknown references, directive flags, and the
-intentional acceptance of `min_sample_threshold=0`. It also verifies that
-variable-driven rates and guard thresholds are deferred to request-time
+and bounds, empty names/references, order-independent duplicate flags,
+whole-argument named-value quoting, and the intentional acceptance of
+`min_sample_threshold=0`. It binds the inclusive 1024-byte bucket/service and
+256-byte label limits, positive duration rules, and unitless-seconds grammar.
+It also verifies that variable-driven values are deferred to request-time
 validation. Cases that enable the module use isolated Unix sockets; no nginx
 worker is started.
+
+`test-addr-records.sh` exercises the pure resolver-address compactor. It mixes
+IPv4/IPv6 answers with null, empty, and oversized inputs and requires the
+reported count and output order to contain only usable addresses.
 
 ## Required oracle self-tests
 

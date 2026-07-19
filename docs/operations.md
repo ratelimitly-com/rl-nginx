@@ -146,7 +146,7 @@ ratelimitly_fail close;
 | No usable DNS target | Enter content without a valid decision | `429` |
 | UDP send or response timeout | Enter content without a valid decision | `429` |
 | Invalid/authentication-failing/protocol response with no valid decision | Enter content without a valid decision | `429` |
-| Invalid dynamic rate/threshold, empty service, or C-client request-construction error | Enter content without a valid decision | `429` |
+| Invalid dynamic rate/threshold, empty or oversized bucket/service, oversized label, or C-client request-construction error | Enter content without a valid decision | `429` |
 | Internal nginx allocation/event failure | May return `500` | May return `500` |
 
 Fail-open preserves availability but bypasses this enforcement layer during a

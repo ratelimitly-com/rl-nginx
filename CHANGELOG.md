@@ -26,6 +26,17 @@ Changes since `v0.1.0-rc.1`:
   failures, committed whitespace is checked, required workflow commands are
   executable and non-optional, lifecycle faults require exact outcomes, and
   every gate class has a deliberate red-case fixture;
+- bounded rendered bucket and service keys to 1024 bytes and wire labels to
+  256 bytes, made empty/oversized dynamic values follow the failure policy,
+  and rejected zero or oversized request/guard durations;
+- corrected named-value quoting so examples quote the complete `bucket=` or
+  `service=` argument; value-only quotes are now rejected because nginx treats
+  them as literal identifier bytes;
+- rejected empty resource, group, guard, and positional references, made debug
+  duplicate detection order-independent, and normalized unconfigured location
+  activation to a real disabled value;
+- compacted resolver addresses before reporting their successful count to the
+  C client and added a unit oracle for skipped oversized addresses;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a

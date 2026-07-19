@@ -39,6 +39,14 @@ PHASE_STATEMENTS = (
     "ngx_memmove(&h[1], &h[0]",
 )
 
+LIMIT_STATEMENTS = (
+    "#define RN_MAX_BUCKET_LEN 1024",
+    "#define RN_MAX_SERVICE_LEN 1024",
+    "#define RN_MAX_LABEL_LEN 256",
+)
+
+ENABLED_MERGE_STATEMENT = "ngx_conf_merge_value(conf->enabled, prev->enabled, 0);"
+
 
 def strip_non_executable_c(source: str) -> str:
     """Remove comments and literal #if 0 blocks before checking C statements."""
@@ -124,6 +132,22 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     for fragment in dsl_defaults:
         require(dsl, fragment, "DSL defaults table", failures)
 
+    for fragment in LIMIT_STATEMENTS:
+        require(source, fragment, "executable rendered-value limit", failures)
+    for fragment in ("1..1024", "at most 256 bytes", "unitless value means seconds"):
+        require(dsl, fragment, "DSL validation contract", failures)
+
+    for function_name in (
+        "ngx_http_rn_merge_srv_conf",
+        "ngx_http_rn_merge_loc_conf",
+    ):
+        require(
+            function_body(source, function_name),
+            ENABLED_MERGE_STATEMENT,
+            f"{function_name} disabled-default normalization",
+            failures,
+        )
+
     worker_init = function_body(source, "rn_worker_init")
     handler = function_body(source, "ngx_http_rn_handler")
     log_handler = function_body(source, "ngx_http_rn_log_handler")
@@ -157,6 +181,19 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "consumption contract",
         failures,
     )
+    mapping = (SPEC_DIR / "mapping.md").read_text(encoding="utf-8")
+    require(
+        mapping,
+        "first 16 bytes of the BLAKE2s-256 digest",
+        "wire hash contract",
+        failures,
+    )
+    require(
+        mapping,
+        "adad04e30132078dd71e82746cbfe92d",
+        "wire bucket boundary oracle",
+        failures,
+    )
 
     for filename in ("dsl.md", "behavior.md", "mapping.md", "implementation.md", "roadmap.md"):
         require(index, f"({filename})", "specification index", failures)
@@ -187,7 +224,12 @@ def validate(raw_source: str) -> tuple[list[str], int]:
 
 def negative_fixture_failures(source: str) -> list[str]:
     failures: list[str] = []
-    statements = (*DEFAULT_STATEMENTS.values(), *C_CLIENT_STATEMENTS, *PHASE_STATEMENTS)
+    statements = (
+        *DEFAULT_STATEMENTS.values(),
+        *C_CLIENT_STATEMENTS,
+        *PHASE_STATEMENTS,
+        *LIMIT_STATEMENTS,
+    )
     for statement in statements:
         mutated = source.replace(statement, f"/* disabled: {statement} */", 1)
         if mutated == source:
@@ -202,6 +244,22 @@ def negative_fixture_failures(source: str) -> list[str]:
     )
     if not validate(dead_default)[0]:
         failures.append("validator accepted a default hidden in #if 0")
+
+    for function_name in (
+        "ngx_http_rn_merge_srv_conf",
+        "ngx_http_rn_merge_loc_conf",
+    ):
+        body = function_body(source, function_name)
+        mutated_body = body.replace(
+            ENABLED_MERGE_STATEMENT,
+            f"/* disabled: {ENABLED_MERGE_STATEMENT} */",
+            1,
+        )
+        mutated = source.replace(body, mutated_body, 1)
+        if mutated_body == body:
+            failures.append(f"negative fixture could not mutate {function_name}")
+        elif not validate(mutated)[0]:
+            failures.append(f"validator accepted disabled merge in {function_name}")
     return failures
 
 
@@ -213,7 +271,13 @@ def main() -> int:
         for failure in failures:
             print(f"spec consistency: FAIL: {failure}", file=sys.stderr)
         return 1
-    mutation_count = len(DEFAULT_STATEMENTS) + len(C_CLIENT_STATEMENTS) + len(PHASE_STATEMENTS) + 1
+    mutation_count = (
+        len(DEFAULT_STATEMENTS)
+        + len(C_CLIENT_STATEMENTS)
+        + len(PHASE_STATEMENTS)
+        + len(LIMIT_STATEMENTS)
+        + 3
+    )
     print(
         "spec consistency: PASS "
         f"({directive_count} directives, executable defaults, {mutation_count} red cases)"
