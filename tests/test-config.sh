@@ -93,10 +93,11 @@ VALID_AUTH_KEY='rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjm
 VALID_AUTH="  ratelimitly_auth_key ${VALID_AUTH_KEY};"
 VALID_TENANT='  ratelimitly_tenant tenant.example.invalid;'
 VALID_ZONE='  ratelimitly_zone primary bucket="primary" rate=100r/s;'
+VALID_RESOLVER='  resolver 127.0.0.1;'
 ENABLED_SERVER=$'  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }'
 
 run_case representative accept \
-  "${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'\
+  "${VALID_RESOLVER}"$'\n'"${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'\
 $'  ratelimitly_timeout 50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary bucket="primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary bucket="secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency service="service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
 
 run_case min_sample_zero accept \
@@ -177,6 +178,12 @@ run_case invalid_fail_policy reject \
 run_case invalid_debug_flag reject \
   $'  ratelimitly_debug maybe;' \
   'invalid ratelimitly_debug value'
+run_case invalid_bind reject \
+  $'  ratelimitly_bind not-an-ip;' \
+  'invalid ratelimitly_bind address'
+run_case location_only_resolver reject \
+  "${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      resolver 127.0.0.1;\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }' \
+  'ratelimitly requires resolver in the http context'
 
 run_example_case "${RN_ROOT}/examples/minimal.conf"
 run_example_case "${RN_ROOT}/examples/security-conscious.conf"

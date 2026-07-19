@@ -163,9 +163,12 @@ UDP endpoint opens, cleanup after successful C-client creation, and
 replacement-socket setup. It also removes the incidental client-read wakeup and
 requires an SSI subrequest posted by resumed content processing to complete in
 the same event cycle as the RateLimitly verdict. Repeated partial worker-init
-failures must leave zero module UDP sockets; resolver failures must retain one
-initialized endpoint; and a failed rebind must keep the original source port
-usable. Ordinary and deployment builds do not contain this directive.
+failures must be suppressed during bounded backoff and leave zero module UDP
+sockets; resolver failures must retain one initialized endpoint; and a failed
+rebind must keep the original source port usable. The public lifecycle group
+also proves that the HTTP-scope resolver and timeout win even when the first
+protected location declares a conflicting resolver. Ordinary and deployment
+builds do not contain the test-only directive.
 
 Every case establishes a successful baseline, records the single nginx worker
 PID, triggers the selected lifecycle path, asserts that the same worker remains

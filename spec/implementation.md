@@ -34,7 +34,14 @@ live in location configuration and follow the inheritance contract in
 Each nginx worker owns at most one module C client and UDP socket. They are
 created lazily on that worker's first protected request and destroyed on worker
 exit. The UDP socket uses an ephemeral source port and the configured local
-address, if any.
+address, if any. The local bind address MUST be parsed and validated while
+loading configuration, not from each worker-initialization attempt.
+
+The module MUST capture exactly one resolver and `resolver_timeout` from the
+`http` context during configuration. A resolver declared only in a server or
+location is unsupported and MUST NOT make worker behavior depend on which
+location receives the first request. Every SRV and address resolver context
+MUST receive the captured timeout before submission.
 
 Worker initialization MUST publish the worker through main configuration only
 after the socket, nginx connection, and C client are all usable. Temporary
@@ -42,7 +49,9 @@ tenant and credential copies MUST be released after `r_client_create`, which
 copies them. Every partial initialization failure MUST use the same idempotent
 cleanup path. Worker cleanup MUST destroy the C client while its resolver and
 UDP adapter context is still live, then close the nginx UDP connection exactly
-once.
+once. Failed lazy initialization MUST use bounded exponential backoff; requests
+arriving before the next attempt follow the configured failure policy without
+allocating another candidate worker.
 
 UDP send/receive, timers, source-port rebinds, and DNS resolution MUST use nginx
 event-loop facilities. Blocking socket or resolver calls are forbidden on the
@@ -164,6 +173,7 @@ The required public gate MUST cover at least:
 - guard decisions and post-response latency-report suppression after denial;
 - timeout, aborted client, source-port steering, reload, and shutdown lifecycle;
 - missing SRV, invalid SRV target, DNS timeout, and same-worker recovery;
+- HTTP-scope resolver selection despite a location-level override;
 - dynamic-module relocation; and
 - whitespace and script syntax.
 
@@ -174,5 +184,6 @@ partial worker-initialization failure, C-client creation failure, and candidate
 rebind failure. It MUST also remove the incidental client-read wakeup and prove
 that an SSI subrequest posted during asynchronous phase resumption is drained
 without another client event. It MUST verify same-worker survival, stable
-socket counts, transactional rebind retention, and clean shutdown. Optional
+socket counts, bounded worker-initialization retries, transactional rebind
+retention, and clean shutdown. Optional
 internal full-stack validation is not part of the public conformance boundary.

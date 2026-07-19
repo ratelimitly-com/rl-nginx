@@ -13,6 +13,8 @@
 #include <netinet/in.h>
 
 #define RN_REBIND_RETRY_MS 1000
+#define RN_INIT_RETRY_INITIAL_MS 1000
+#define RN_INIT_RETRY_MAX_MS 5000
 
 typedef struct {
     ngx_str_t name;
@@ -56,6 +58,12 @@ typedef struct {
     struct rn_worker_ctx *worker;
 
     ngx_str_t bind_addr;
+    struct sockaddr_storage bind_sockaddr;
+    socklen_t bind_socklen;
+    ngx_resolver_t *resolver;
+    ngx_msec_t resolver_timeout;
+    ngx_msec_t init_retry_at;
+    ngx_msec_t init_retry_delay;
     ngx_flag_t debug;
 #if (RN_TEST_FAULT_INJECTION)
     ngx_str_t test_fault;
@@ -96,6 +104,7 @@ typedef struct rn_worker_ctx {
     r_io_ops_t io_ops;
     r_resolver_ops_t resolver_ops;
     ngx_resolver_t *resolver;
+    ngx_msec_t resolver_timeout;
     ngx_socket_t udp_fd;
     int udp_family;
     ngx_connection_t *udp_conn;
@@ -158,7 +167,8 @@ static char *ngx_http_rn_label(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static rn_zone_t *rn_find_zone(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_guard_t *rn_find_guard(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_group_t *rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name);
-static ngx_int_t rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver);
+static ngx_int_t rn_worker_init(rn_main_conf_t *mcf);
+static ngx_int_t rn_worker_ensure(rn_main_conf_t *mcf);
 static ngx_int_t rn_rebind_socket(rn_worker_ctx_t *worker);
 static void rn_worker_cleanup(rn_worker_ctx_t *worker);
 static void rn_schedule_rebind(rn_worker_ctx_t *worker);
@@ -414,24 +424,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             return NGX_AGAIN;
         }
     }
-    if (mcf->worker == NULL) {
-        ngx_http_core_loc_conf_t *clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-        if (clcf == NULL || clcf->resolver == NULL) {
-            if (mcf->debug) {
-                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
-                    "rn: bypass uri=%V reason=no_resolver fail_open=%d",
-                    &r->uri, (int) mcf->fail_open);
-            }
-            return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
-        }
-        if (rn_worker_init(mcf, clcf->resolver) != NGX_OK) {
-            if (mcf->debug) {
-                ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
-                    "rn: bypass uri=%V reason=worker_init_failed fail_open=%d",
-                    &r->uri, (int) mcf->fail_open);
-            }
-            return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
-        }
+    if (mcf->worker == NULL && rn_worker_ensure(mcf) != NGX_OK) {
+        return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
     }
     worker = mcf->worker;
     if (worker == NULL || worker->client == NULL) {
@@ -698,6 +692,7 @@ ngx_http_rn_init(ngx_conf_t *cf) {
     ngx_http_handler_pt *h;
     ngx_array_t *handlers;
     ngx_http_core_main_conf_t *cmcf;
+    ngx_http_core_loc_conf_t *clcf;
     rn_main_conf_t *mcf;
 
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
@@ -738,6 +733,16 @@ ngx_http_rn_init(ngx_conf_t *cf) {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_auth_key is required");
             return NGX_ERROR;
         }
+        clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+        if (clcf == NULL || clcf->resolver == NULL
+            || clcf->resolver->connections.nelts == 0)
+        {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                "ratelimitly requires resolver in the http context");
+            return NGX_ERROR;
+        }
+        mcf->resolver = clcf->resolver;
+        mcf->resolver_timeout = clcf->resolver_timeout;
     }
 
     return NGX_OK;
@@ -767,6 +772,11 @@ ngx_http_rn_create_main_conf(ngx_conf_t *cf) {
     mcf->worker = NULL;
     mcf->bind_addr.len = 0;
     mcf->bind_addr.data = NULL;
+    mcf->bind_socklen = 0;
+    mcf->resolver = NULL;
+    mcf->resolver_timeout = 0;
+    mcf->init_retry_at = 0;
+    mcf->init_retry_delay = 0;
     mcf->debug = 0;
 
     return mcf;
@@ -922,11 +932,22 @@ static char *
 ngx_http_rn_set_bind(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
+    ngx_addr_t addr;
 
     if (mcf->bind_addr.data != NULL) {
         return "is duplicate";
     }
+    ngx_memzero(&addr, sizeof(addr));
+    if (ngx_parse_addr(cf->pool, &addr, value[1].data, value[1].len) != NGX_OK
+        || (addr.sockaddr->sa_family != AF_INET
+            && addr.sockaddr->sa_family != AF_INET6)
+        || addr.socklen > sizeof(mcf->bind_sockaddr))
+    {
+        return "invalid ratelimitly_bind address";
+    }
     mcf->bind_addr = value[1];
+    ngx_memcpy(&mcf->bind_sockaddr, addr.sockaddr, addr.socklen);
+    mcf->bind_socklen = addr.socklen;
     return NGX_CONF_OK;
 }
 
@@ -1871,6 +1892,13 @@ rn_resolve_srv(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_sr
     }
     rctx->handler = rn_resolve_srv_handler;
     rctx->data = req;
+    rctx->timeout = worker->resolver_timeout;
+
+    if (worker->debug) {
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: resolve_srv start name=%s timeout_ms=%M", name,
+            worker->resolver_timeout);
+    }
 
     rn_async_state_begin(&req->start_state);
     resolve_rc = rn_resolve_name_start(worker, rctx, "resolver-srv-start");
@@ -1934,6 +1962,13 @@ rn_resolve_addrs(void *ctx, const char *name, r_dns_req_id_t *out_req_id, r_dns_
     rctx->name.data = req->name_buf;
     rctx->handler = rn_resolve_addr_handler;
     rctx->data = req;
+    rctx->timeout = worker->resolver_timeout;
+
+    if (worker->debug) {
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: resolve_addrs start name=%s timeout_ms=%M", name,
+            worker->resolver_timeout);
+    }
 
     rn_async_state_begin(&req->start_state);
     resolve_rc = rn_resolve_name_start(worker, rctx, "resolver-addr-start");
@@ -2302,9 +2337,8 @@ rn_worker_release_config_buffers(rn_worker_ctx_t *worker, char *dns,
 }
 
 static ngx_int_t
-rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
+rn_worker_init(rn_main_conf_t *mcf) {
     rn_worker_ctx_t *worker;
-    ngx_addr_t addr;
     ngx_socket_t udp_fd;
     ngx_connection_t *udp_conn;
     int udp_family;
@@ -2327,7 +2361,8 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
     worker->udp_fd = (ngx_socket_t) -1;
     worker->udp_family = AF_UNSPEC;
     worker->log = ngx_cycle->log;
-    worker->resolver = resolver;
+    worker->resolver = mcf->resolver;
+    worker->resolver_timeout = mcf->resolver_timeout;
     worker->debug = mcf->debug;
 #if (RN_TEST_FAULT_INJECTION)
     worker->test_fault = mcf->test_fault;
@@ -2337,21 +2372,10 @@ rn_worker_init(rn_main_conf_t *mcf, ngx_resolver_t *resolver) {
     worker->rebind_event.log = worker->log;
     worker->rebind_event.cancelable = 1;
 
-    if (mcf->bind_addr.len != 0) {
-        ngx_memzero(&addr, sizeof(addr));
-        if (ngx_parse_addr(ngx_cycle->pool, &addr, mcf->bind_addr.data,
-                mcf->bind_addr.len) != NGX_OK
-            || (addr.sockaddr->sa_family != AF_INET
-                && addr.sockaddr->sa_family != AF_INET6)
-            || addr.socklen > sizeof(worker->bind_sockaddr))
-        {
-            ngx_log_error(NGX_LOG_WARN, worker->log, 0,
-                "rn: invalid ratelimitly_bind address: %V", &mcf->bind_addr);
-            ngx_free(worker);
-            return NGX_ERROR;
-        }
-        ngx_memcpy(&worker->bind_sockaddr, addr.sockaddr, addr.socklen);
-        worker->bind_socklen = addr.socklen;
+    if (mcf->bind_socklen != 0) {
+        ngx_memcpy(&worker->bind_sockaddr, &mcf->bind_sockaddr,
+            mcf->bind_socklen);
+        worker->bind_socklen = mcf->bind_socklen;
     }
 
     worker->io_ops.ctx = worker;
@@ -2447,6 +2471,41 @@ failed:
         mcf->auth_key.len + (secret != NULL ? 1 : 0));
     rn_worker_cleanup(worker);
     ngx_free(worker);
+    return NGX_ERROR;
+}
+
+static ngx_int_t
+rn_worker_ensure(rn_main_conf_t *mcf)
+{
+    ngx_msec_t delay;
+
+    if (mcf == NULL) {
+        return NGX_ERROR;
+    }
+    if (mcf->worker != NULL) {
+        return NGX_OK;
+    }
+    if (mcf->init_retry_at != 0
+        && (ngx_msec_int_t) (mcf->init_retry_at - ngx_current_msec) > 0)
+    {
+        return NGX_AGAIN;
+    }
+
+    mcf->init_retry_at = 0;
+    if (rn_worker_init(mcf) == NGX_OK) {
+        mcf->init_retry_delay = 0;
+        return NGX_OK;
+    }
+
+    delay = mcf->init_retry_delay;
+    if (delay == 0) {
+        delay = RN_INIT_RETRY_INITIAL_MS;
+    }
+    mcf->init_retry_at = ngx_current_msec + delay;
+    mcf->init_retry_delay = delay < RN_INIT_RETRY_MAX_MS / 2
+        ? delay * 2 : RN_INIT_RETRY_MAX_MS;
+    ngx_log_error(NGX_LOG_WARN, ngx_cycle->log, 0,
+        "rn: worker initialization failed; retrying after %Mms", delay);
     return NGX_ERROR;
 }
 

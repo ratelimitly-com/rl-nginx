@@ -50,7 +50,7 @@ shape uses the reserved, non-working `example.invalid` domain:
 10 50 8080 s-396140499959812.tenant.example.invalid.
 ```
 
-nginx must have a trusted runtime resolver:
+nginx must have a trusted runtime resolver declared directly in `http`:
 
 ```nginx
 resolver 127.0.0.53 valid=30s ipv6=off;
@@ -61,6 +61,7 @@ Use the resolver address and IPv4/IPv6 policy that are actually reachable from
 nginx workers. Permit DNS traffic to that resolver and UDP traffic to every
 address/port returned by the SRV and address lookups. `ratelimitly_bind`, when
 set, chooses only the local UDP source address; it is not a server address.
+Server or location resolver overrides do not affect RateLimitly discovery.
 
 Check discovery from the same network namespace as nginx:
 
@@ -88,7 +89,10 @@ negative cache/timeout interval, retry a protected probe, and require a valid
 decision. The public suite proves same-worker recovery for missing SRV,
 unresolvable target, and DNS timeout cases under both failure policies. A reload
 is required when the nginx configuration itself is wrong, such as a missing or
-misaddressed `resolver`; remember that replacement workers start cold.
+misaddressed HTTP-scope `resolver`; remember that replacement workers start
+cold. Failed worker-client initialization retries after 1, 2, 4, then 5 seconds
+(capped); protected requests between attempts immediately follow
+`ratelimitly_fail`.
 
 ## Startup, reload, and warmup
 
@@ -182,7 +186,8 @@ Useful markers include:
 | `rn: result success=1 server_id=...` | A valid response carried a positive success flag. Correlate it with HTTP/access logs because guard/resource checks and later nginx processing still determine the final status. |
 | `rn: result success=0 server_id=...` | A valid response carried a negative success flag and is rejected with `429`. |
 | `rn: response_cardinality_mismatch ...` | A validly decoded response had the wrong guard/resource count. Treat it as a protocol/compatibility error; the failure policy decides the request. |
-| `rn: bypass ... reason=no_resolver` | A protected request could not initialize because no nginx resolver was available in its configuration context. |
+| `rn: worker initialization failed; retrying after ...` | Worker-client setup failed and entered bounded backoff. Check bind availability and resource pressure; intervening requests follow the failure policy. |
+| `rn: resolve_srv start ... timeout_ms=...` | SRV discovery started with the HTTP-scope `resolver_timeout`. |
 | `rn: steering_feedback=0 (rebind pending)` | The server requested a deferred UDP source-port rebind. This is normal steering behavior, not an outage by itself. |
 | `rn: UDP socket rebind failed; retaining current endpoint and retrying` | A replacement source-port socket could not be prepared. The existing socket remains active; investigate local socket/connection exhaustion or bind failures if retries continue. |
 

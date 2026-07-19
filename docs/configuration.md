@@ -162,8 +162,12 @@ _ratelimitly._udp.<tenant-domain>
 ```
 
 The module has no direct server-address directive. nginx's `resolver` supplies
-the SRV and address answers, so configure a resolver that is trusted and
-reachable from nginx workers. A compromised or unreliable resolver can
+the SRV and address answers. Declare it directly in the `http` context: the
+module captures one resolver and `resolver_timeout` for its worker-local client,
+and deliberately ignores server/location overrides for RateLimitly discovery.
+A configuration that enables RateLimitly without an HTTP-scope resolver fails
+`nginx -t`. Configure a resolver that is trusted and reachable from nginx
+workers. A compromised or unreliable resolver can
 redirect decision traffic or turn enforcement into an outage. Set an explicit
 `resolver_timeout`, restrict resolver and UDP egress according to the
 deployment network policy, and monitor DNS failure/recovery as described in
@@ -338,7 +342,9 @@ ratelimitly_debug on;
 does not configure a RateLimitly server address; servers are discovered through
 DNS SRV records. Normally omit it and let the kernel choose. If policy routing
 or a multi-homed host requires it, use an address owned by the host and include
-that path in network and reload testing.
+that path in network and reload testing. Invalid address syntax fails
+`nginx -t`; a syntactically valid address unavailable to a worker follows the
+configured failure policy and bounded initialization-retry backoff.
 
 Debug mode writes `rn:` events including DNS targets, decision status, and
 hashed identifiers to the nginx error log. It does not make the error log safe

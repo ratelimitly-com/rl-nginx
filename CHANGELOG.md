@@ -16,6 +16,9 @@ Changes since `v0.1.0-rc.1`:
   outside independent RateLimitly accounting;
 - drained nginx posted requests after asynchronous verdict callbacks so
   resumed content cannot remain pinned awaiting an unrelated client event;
+- made the HTTP-scope resolver and timeout deterministic for each worker,
+  validated bind addresses at configuration time, and bounded failed worker
+  initialization retries;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a

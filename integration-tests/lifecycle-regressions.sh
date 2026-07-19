@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -44,7 +44,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -60,6 +60,7 @@ NGINX_LOAD_MODULE="${NGINX_LOAD_MODULE:-}"
 RESPONDER_BIN="${RESPONDER_BIN:-${RCLIENT_DIR}/bin/r_test_responder}"
 DNS_SERVER="${DNS_SERVER:-127.0.0.1}"
 DNS_PORT="${DNS_PORT:-15353}"
+DNS_BAD_PORT="${DNS_BAD_PORT:-$((DNS_PORT + 1))}"
 RESPONDER_HOST="${RESPONDER_HOST:-127.0.0.1}"
 RESPONDER_PORT="${RESPONDER_PORT:-19080}"
 NGINX_HOST="${NGINX_HOST:-127.0.0.1}"
@@ -202,7 +203,7 @@ run_all() {
   local lifecycle_case
 
   prepare_binaries
-  for lifecycle_case in timeout aborted-client steering-rebind; do
+  for lifecycle_case in timeout aborted-client steering-rebind worker-resolver-scope; do
     if SKIP_BUILD=1 "${SELF}" "${lifecycle_case}"; then
       printf 'PASS %s\n' "${lifecycle_case}"
     else
@@ -622,6 +623,15 @@ ${guard_defs}
     location = /admission-include {
       internal;
       return 200 "included";
+    }
+
+    location = /resolver-override {
+      resolver ${DNS_SERVER}:${DNS_BAD_PORT} valid=1s ipv6=off;
+      resolver_timeout 5s;
+      ratelimitly_label "RESOLVER-SCOPE:\$uri";
+      ratelimitly zone=lifecycle_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
     }
 
     location = /admission-mirror {
@@ -1281,11 +1291,46 @@ run_count_mismatch_case() {
   check_follow_up "${MODE} fail-${FAIL_POLICY} decision"
 }
 
+run_worker_resolver_scope_case() {
+  local attempt
+  local before
+  local after
+  local code
+
+  before="$(responder_rate_request_count)"
+  code="$(request_path_code /resolver-override "${CLIENT_TIMEOUT_SEC}")"
+  for (( attempt = 0; attempt < 40 && code != 200; attempt++ )); do
+    sleep 0.05
+    code="$(request_path_code /resolver-override "${CLIENT_TIMEOUT_SEC}")"
+  done
+  if [[ "${code}" != "200" ]]; then
+    record_failure "worker stayed pinned to the location resolver: returned ${code}, expected same-worker recovery through the HTTP-scope resolver"
+  fi
+  wait_for_log '"label":"RESOLVER-SCOPE:/ok.txt"' \
+    "${RESPONDER_LOG}" 40 \
+    || record_failure "HTTP-scope resolver did not deliver the first rate request"
+  wait_for_log 'rn: resolve_srv start .* timeout_ms=1000' \
+    "${NGINX_ERROR_LOG}" 40 \
+    || record_failure "resolver context did not receive the HTTP-scope resolver_timeout"
+  sleep 0.1
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 1))" ]]; then
+    record_failure "resolver-scope request produced $((after - before)) RateLimitly events, expected 1"
+  else
+    log "HTTP-scope resolver and timeout won independently of request location"
+  fi
+  check_worker_survival "deterministic worker resolver selection"
+  check_follow_up "deterministic worker resolver selection"
+}
+
 run_fault_case() {
   local attempt
   local code
   local count
   local expected_count=1
+  local fault_count_before
+  local fault_count_after
+  local worker_init_fault=0
   local port_before
   local port_after
 
@@ -1341,7 +1386,10 @@ run_fault_case() {
     check_follow_up "posted-request drain"
   else
     case "${FAULT_POINT}" in
-      worker-tenant|worker-secret|client-create|post-client-create) expected_count=0 ;;
+      worker-tenant|worker-secret|client-create|post-client-create)
+        expected_count=0
+        worker_init_fault=1
+        ;;
     esac
 
     for (( attempt = 1; attempt <= 8; attempt++ )); do
@@ -1356,6 +1404,33 @@ run_fault_case() {
         record_failure "${FAULT_POINT} attempt ${attempt} left ${count} module UDP sockets, expected ${expected_count}"
       fi
     done
+
+    if (( worker_init_fault )); then
+      fault_count_before="$(grep -c "test fault injected: ${FAULT_POINT}" \
+        "${NGINX_ERROR_LOG}" || true)"
+      if (( fault_count_before >= 8 )); then
+        record_failure "${FAULT_POINT} retried initialization on every request instead of backing off"
+      fi
+
+      sleep 1.1
+      code="$(request_code)"
+      if [[ "${code}" == "000" ]]; then
+        record_failure "${FAULT_POINT} bounded retry caused a transport error"
+      fi
+      fault_count_after="$(grep -c "test fault injected: ${FAULT_POINT}" \
+        "${NGINX_ERROR_LOG}" || true)"
+      if [[ "${fault_count_after}" != "$((fault_count_before + 1))" ]]; then
+        record_failure "${FAULT_POINT} did not execute exactly one initialization retry after backoff"
+      else
+        log "${FAULT_POINT} suppressed request-driven retries and retried once after backoff"
+      fi
+      check_worker_survival "${FAULT_POINT} bounded retry"
+      count="$(worker_udp_socket_count)" \
+        || fail "could not count worker UDP sockets after ${FAULT_POINT} retry"
+      if [[ "${count}" != "${expected_count}" ]]; then
+        record_failure "${FAULT_POINT} retry left ${count} module UDP sockets, expected ${expected_count}"
+      fi
+    fi
   fi
 
   wait_for_log "test fault injected: ${FAULT_POINT}" "${NGINX_ERROR_LOG}" 40 \
@@ -1392,6 +1467,8 @@ run_one() {
       && "${FAULT_POINT}" != "rebind-open"
       && "${FAULT_POINT}" != "posted-request-drain" ]]; then
     log "skipping healthy warm-up before fault injection ${FAULT_POINT}"
+  elif [[ "${MODE}" == "worker-resolver-scope" ]]; then
+    log "skipping healthy warm-up so the resolver-override location initializes the worker"
   elif dns_failure_mode >/dev/null 2>&1; then
     log "skipping healthy warm-up before ${MODE}; DNS starts in failure mode"
   else
@@ -1407,6 +1484,7 @@ run_one() {
     guard-pass|guard-deny|guard-multiple) run_guard_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
+    worker-resolver-scope) run_worker_resolver_scope_case ;;
     admission-contract-close|admission-contract-open) run_admission_contract_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
     fault) run_fault_case ;;
