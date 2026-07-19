@@ -4,15 +4,17 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
+# shellcheck source=lifecycle-oracles.sh
+source "${SCRIPT_DIR}/lifecycle-oracles.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
-Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
-regressions against the locked rl-c-client test responder. Every case pins the
-original nginx worker PID, triggers its target path, and requires both worker
-survival and a successful follow-up request.
+Runs the complete required public lifecycle matrix against the locked
+rl-c-client test responder. Every case pins the original nginx worker PID,
+triggers its target path, and requires both worker survival and a successful
+follow-up request. Use list-all to print the all-mode group manifest.
 
 Environment overrides:
   RCLIENT_DIR       C-client checkout (default: locked ./_deps checkout)
@@ -44,13 +46,31 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
     exit 2
     ;;
 esac
+
+ALL_PUBLIC_GROUPS=(
+  timeout
+  aborted-client
+  steering-rebind
+  worker-resolver-scope
+  admission-contract
+  enforcement-boundary
+  outage-policy
+  dns-policy
+  guard-latency
+  protocol-policy
+  cardinality
+)
+if [[ "${MODE}" == "list-all" ]]; then
+  printf '%s\n' "${ALL_PUBLIC_GROUPS[@]}"
+  exit 0
+fi
 
 RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
 export RCLIENT_DIR
@@ -114,29 +134,8 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
-terminate_pid() {
-  local pid="$1"
-  local label="$2"
-  local attempt
-
-  if [[ -z "${pid}" ]] || ! kill -0 "${pid}" 2>/dev/null; then
-    return 0
-  fi
-  kill -TERM "${pid}" 2>/dev/null || true
-  for (( attempt = 0; attempt < 30; attempt++ )); do
-    if ! kill -0 "${pid}" 2>/dev/null; then
-      wait "${pid}" 2>/dev/null || true
-      return 0
-    fi
-    sleep 0.1
-  done
-  log "force-killing ${label}: pid=${pid}"
-  kill -KILL "${pid}" 2>/dev/null || true
-  wait "${pid}" 2>/dev/null || true
-}
-
 stop_responder() {
-  terminate_pid "${RESPONDER_PID}" "test responder"
+  rn_terminate_pid "${RESPONDER_PID}" "test responder" || true
   RESPONDER_PID=""
 }
 
@@ -155,7 +154,9 @@ stop_nginx() {
       sleep 0.1
     done
   fi
-  terminate_pid "${NGINX_PID}" "nginx master"
+  if ! rn_terminate_pid "${NGINX_PID}" "nginx master"; then
+    record_failure "nginx required SIGKILL during clean shutdown"
+  fi
   NGINX_PID=""
 }
 
@@ -171,7 +172,7 @@ check_clean_nginx_shutdown() {
 cleanup() {
   stop_nginx
   stop_responder
-  terminate_pid "${DNS_PID}" "local DNS server"
+  rn_terminate_pid "${DNS_PID}" "local DNS server" || true
 }
 
 prepare_binaries() {
@@ -203,8 +204,8 @@ run_all() {
   local lifecycle_case
 
   prepare_binaries
-  for lifecycle_case in timeout aborted-client steering-rebind worker-resolver-scope; do
-    if SKIP_BUILD=1 "${SELF}" "${lifecycle_case}"; then
+  for lifecycle_case in "${ALL_PUBLIC_GROUPS[@]}"; do
+    if FAIL_POLICY=close SKIP_BUILD=1 "${SELF}" "${lifecycle_case}"; then
       printf 'PASS %s\n' "${lifecycle_case}"
     else
       printf 'FAIL %s (see %s/%s)\n' \
@@ -216,7 +217,7 @@ run_all() {
     echo "${failures} lifecycle regression(s) failed" >&2
     return 1
   fi
-  log "all lifecycle regressions passed"
+  log "all public lifecycle regressions passed"
 }
 
 run_cardinality() {
@@ -404,6 +405,7 @@ run_fault_injection() {
   for fault in "${fault_points[@]}"; do
     if ARTIFACT_ROOT="${ARTIFACT_ROOT}/fault-injection/${fault}" \
         FAULT_POINT="${fault}" \
+        FAIL_POLICY=close \
         SKIP_BUILD=1 \
         "${SELF}" fault; then
       printf 'PASS fault/%s\n' "${fault}"
@@ -888,14 +890,9 @@ run_timeout_case() {
   sleep 0.2
   tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
     >"${ARTIFACT_DIR}/timeout-trigger.log"
-  if ! grep -q 'rn: result error status=-2' "${ARTIFACT_DIR}/timeout-trigger.log"; then
-    record_failure "timeout trigger did not complete through the C-client callback"
-  elif awk '
-      /rn: result error status=-2/ { completed = 1; next }
-      completed && /rn: timeout tick/ { unsafe = 1 }
-      END { exit unsafe ? 0 : 1 }
-    ' "${ARTIFACT_DIR}/timeout-trigger.log"; then
-    record_failure "timeout handler continued using request context after synchronous completion"
+  if ! rn_expect_log_count "${ARTIFACT_DIR}/timeout-trigger.log" \
+      'rn: result error status=-2' 1; then
+    record_failure "timeout trigger did not produce exactly one C-client timeout completion"
   fi
   check_worker_survival "timeout callback"
   check_follow_up "timeout callback"
@@ -916,8 +913,9 @@ run_aborted_client_case() {
   sleep 0.5
   tail -n "+$((abort_log_start + 1))" "${NGINX_ERROR_LOG}" \
     >"${ARTIFACT_DIR}/aborted-client-trigger.log"
-  if grep -q 'rn: timeout tick' "${ARTIFACT_DIR}/aborted-client-trigger.log"; then
-    record_failure "request timer fired after the clients reset their connections"
+  if ! rn_expect_log_count "${ARTIFACT_DIR}/aborted-client-trigger.log" \
+      'rn: result error status=-2' 0; then
+    record_failure "an aborted request reached the C-client timeout callback after cleanup"
   fi
   if [[ "${MODE}" == "guard-aborted-client" ]] \
       && grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
@@ -1444,8 +1442,8 @@ run_fault_case() {
 
     for (( attempt = 1; attempt <= 8; attempt++ )); do
       code="$(request_code)"
-      if [[ "${code}" == "000" ]]; then
-        record_failure "${FAULT_POINT} attempt ${attempt} caused a transport error"
+      if ! rn_expect_http_status "${code}" 429; then
+        record_failure "${FAULT_POINT} attempt ${attempt} returned ${code}, expected fail-close 429"
       fi
       check_worker_survival "${FAULT_POINT} attempt ${attempt}"
       count="$(worker_udp_socket_count)" \
@@ -1464,8 +1462,8 @@ run_fault_case() {
 
       sleep 1.1
       code="$(request_code)"
-      if [[ "${code}" == "000" ]]; then
-        record_failure "${FAULT_POINT} bounded retry caused a transport error"
+      if ! rn_expect_http_status "${code}" 429; then
+        record_failure "${FAULT_POINT} bounded retry returned ${code}, expected fail-close 429"
       fi
       fault_count_after="$(grep -c "test fault injected: ${FAULT_POINT}" \
         "${NGINX_ERROR_LOG}" || true)"

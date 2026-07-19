@@ -71,6 +71,15 @@ variable-driven rates and guard thresholds are deferred to request-time
 validation. Cases that enable the module use isolated Unix sockets; no nginx
 worker is started.
 
+## Required oracle self-tests
+
+`make unit` includes negative fixtures for the repository's own gates. They
+prove an invalid early shell script, failed explicit client resolution, and
+committed whitespace all fail; remove each required CI command and disable
+executable C defaults to prove the meta-checks reject those mutations; and
+exercise exact HTTP-status, forced-shutdown, complete lifecycle-manifest, and
+DNS-timeout oracles. These tests require no nginx worker or remote service.
+
 ## 3) Run nginx with the test config
 
 Edit the config first:

@@ -108,6 +108,13 @@ class DnsServerStateTests(unittest.TestCase):
         )
         self.assertEqual(self.query_counts("s-1.localhost", TYPE_A), (3, 0))
 
+    def test_timeout_drops_the_query_without_a_response(self) -> None:
+        self.set_mode("timeout")
+        response = self.server.handle_query(
+            build_query("_ratelimitly._udp.rn-test.local", TYPE_SRV)
+        )
+        self.assertIsNone(response)
+
     def test_normal_mode_can_be_restored_after_failure_mode(self) -> None:
         self.set_mode("missing-srv")
         self.assertEqual(

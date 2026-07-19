@@ -202,6 +202,11 @@ failure and recovery, timeouts, aborted clients, steering rebinds, guards,
 malformed responses, response cardinality, reload, worker survival, and clean
 shutdown. It requires no real tenant or credential.
 
+The unit gate also runs negative oracle fixtures. They deliberately break each
+required Make/CI/specification control and require its checker to turn red;
+runtime oracle tests likewise reject a wrong fail-close status, a forced nginx
+shutdown, and an incomplete public lifecycle manifest.
+
 `tests/smoke-test.sh` and `tests/burst-test.sh` are manual diagnostics, not
 release gates. The private full-stack harness is optional and is not required
 for public contributors. See [the integration-test guide](integration-tests/README.md)

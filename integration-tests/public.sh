@@ -48,52 +48,10 @@ fi
 echo "[public-suite] testing the strict DNS fixture"
 python3 "${SCRIPT_DIR}/test_local_dns_server.py"
 
-echo "[public-suite] running lifecycle regressions"
+echo "[public-suite] running all public lifecycle regressions"
 RCLIENT_DIR="${RCLIENT_DIR}" \
   NGINX_SRC="${NGINX_SRC}" \
   SKIP_BUILD=0 \
   "${SCRIPT_DIR}/lifecycle-regressions.sh" all
-
-echo "[public-suite] running the final admission contract"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" admission-contract
-
-echo "[public-suite] running the exact enforcement boundary"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" enforcement-boundary
-
-echo "[public-suite] running outage-policy regressions"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" outage-policy
-
-echo "[public-suite] running DNS-policy regressions"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" dns-policy
-
-echo "[public-suite] running guard/latency regressions"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" guard-latency
-
-echo "[public-suite] running malformed protocol regressions"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" protocol-policy
-
-echo "[public-suite] running response-cardinality regressions"
-RCLIENT_DIR="${RCLIENT_DIR}" \
-  NGINX_SRC="${NGINX_SRC}" \
-  SKIP_BUILD=1 \
-  "${SCRIPT_DIR}/lifecycle-regressions.sh" cardinality
 
 echo "PASS public integration suite"

@@ -184,8 +184,6 @@ class DnsServer:
                         raise
                     break
 
-                if self.mode() == "timeout":
-                    continue
                 response = self.handle_query(payload)
                 if response is not None:
                     sock.sendto(response, addr)
@@ -194,6 +192,8 @@ class DnsServer:
         return 0
 
     def handle_query(self, message: bytes) -> bytes | None:
+        if self.mode() == "timeout":
+            return None
         if len(message) < 12:
             return None
 

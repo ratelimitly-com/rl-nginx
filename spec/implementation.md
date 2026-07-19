@@ -189,6 +189,13 @@ The required public gate MUST cover at least:
 - dynamic-module relocation; and
 - whitespace and script syntax.
 
+Required gate implementations MUST have a negative fixture that removes or
+invalidates the behavior they claim to protect and observes a non-zero result.
+Workflow checks MUST validate executable commands and failure propagation, not
+comments or substrings. Source-backed specification checks MUST ignore comments
+and disabled preprocessor blocks. Whitespace validation MUST inspect committed
+revision content as well as working-tree changes.
+
 ASan/UBSan lifecycle runs MUST additionally exercise repeated timeout,
 cancellation, steering, reload, and shutdown behavior. A test-only build MUST
 inject every module-owned resolver allocation failure, resolver-start failure,
@@ -197,5 +204,6 @@ rebind failure. It MUST also remove the incidental client-read wakeup and prove
 that an SSI subrequest posted during asynchronous phase resumption is drained
 without another client event. It MUST verify same-worker survival, stable
 socket counts, bounded worker-initialization retries, transactional rebind
-retention, and clean shutdown. Optional
+retention, exact fail-close `429` outcomes for admission-affecting faults, and
+clean shutdown without `SIGKILL`. Optional
 internal full-stack validation is not part of the public conformance boundary.

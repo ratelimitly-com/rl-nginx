@@ -77,8 +77,10 @@ make check BUILD_FLAGS="--clean"
 
 This command verifies the dependency lock, builds the C client and nginx,
 checks nginx configuration, runs the deterministic public integration suite,
-and checks whitespace. It needs no RateLimitly server, tenant, API key, or
-private repository.
+checks both committed and working-tree whitespace, and runs negative fixtures
+that prove the required Make, CI, specification, and lifecycle oracles turn red
+when their protected behavior is removed. It needs no RateLimitly server,
+tenant, API key, or private repository.
 
 The resulting evaluation binary is:
 
