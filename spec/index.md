@@ -25,9 +25,12 @@ resolved in the same change.
 
 ## Conformance evidence
 
-The required public gate is `make check BUILD_FLAGS="--clean"`. It combines
-configuration parsing with public DNS, lifecycle, enforcement, failure-policy,
-recovery, protocol, cardinality, reload, and shutdown tests. `make sanitizers`
-adds the request-ownership lifecycle gate under ASan/UBSan. The lightweight
-specification consistency test checks directive coverage and executable
-defaults, but it does not replace behavioral tests.
+The required static contributor gate is `make check`. It combines configuration
+parsing with public DNS, lifecycle, enforcement, failure-policy, recovery,
+protocol, cardinality, reload, and shutdown tests while preserving the binary
+produced from its static `BUILD_FLAGS`. Release conformance additionally
+requires relocated dynamic-module behavior on both supported architectures and
+ASan/UBSan/LSan coverage on both supported nginx lines. The optional private
+full-stack test is supplemental, not public conformance evidence. The
+lightweight specification consistency test checks directive coverage and
+executable defaults, but it does not replace behavioral tests.

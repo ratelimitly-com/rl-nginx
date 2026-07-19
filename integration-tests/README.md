@@ -171,8 +171,8 @@ worker survival, recovery through a healthy responder, reload, and clean
 shutdown. Malformed guard/resource counts and empty success arrays are covered
 by the response-cardinality matrix below.
 
-Run the complete gate repeatedly with ASan and UBSan instrumentation in both
-the C client and nginx/module code:
+Run the complete gate repeatedly with ASan, UBSan, and LeakSanitizer
+instrumentation in both the C client and nginx/module code:
 
 ```sh
 ./tools/sanitized-lifecycle.sh
@@ -181,10 +181,16 @@ the C client and nginx/module code:
 The sanitizer runner defaults to three complete passes, preserves each pass's
 artifacts under `integration-tests/artifacts/lifecycle-sanitized/`, and restores
 the ordinary C-client build before it exits. Set `SANITIZER_RUNS=1` for a quick
-local check. The C client receives the complete ASan/UBSan set. The nginx build
-disables only UBSan's `nonnull-attribute` category because nginx's core string
-formatter intentionally passes a null source with zero length for an empty
-query string; all other undefined-behavior checks remain enabled.
+local check. One shared flag definition instruments the C client, standalone C
+probes, nginx, and all module sources; no sanitizer category is disabled
+build-wide. Leak detection remains active for standalone probes and actual
+nginx master/worker shutdown. It is disabled only for short-lived `nginx -t`
+and `nginx -s` processes, whose upstream exits retain the entire
+configuration-cycle pool and would otherwise report the same non-runtime
+allocations for every case. UBSan's `nonnull-attribute` category remains
+enabled. The final scan accepts only the exact, reviewed upstream-nginx
+zero-length-copy report at `src/core/ngx_string.c:586`; every other UBSan
+report remains fatal.
 
 The sanitizer build alone enables the non-public
 `ratelimitly_test_fault` directive. Each pass runs the `fault-injection` group,

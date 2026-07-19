@@ -39,9 +39,10 @@ A37 validation on 2026-07-17 established the initial source-build matrix:
 | Stable | `release-1.30.2` | `a92a53786` | `make check NGINX_SRC=/tmp/rl-nginx-a37-nginx-1.30.2` passed |
 | Mainline | `release-1.31.1` | `d44205284` | `make check NGINX_SRC=/tmp/rl-nginx-a37-nginx-1.31.1` passed |
 
-This confirms source-build and public behavioral compatibility for the two
-nginx releases named above. Current required CI enforces static and dynamic
-builds, dynamic-module relocation, and the sanitizer lifecycle gate.
+This confirms source-build and static public behavioral compatibility for the
+two nginx releases named above. Current required CI repeats that static gate
+and relocated dynamic behavior on native `x86_64` and `aarch64`, and runs the
+sanitizer lifecycle gate against both nginx releases on `x86_64`.
 The CI meta-test reads the `upstream-nginx` gitlink directly and requires every
 mainline matrix copy to declare that same commit, so changing either side alone
 turns required CI red.
@@ -66,20 +67,40 @@ turns required CI red.
 
 ## Release validation gates
 
-Every supported matrix entry must pass all of the following from an anonymous,
-clean checkout:
+Support evidence is layered rather than claiming that every gate runs for every
+Cartesian combination. A release candidate must pass all of the following from
+anonymous, clean checkouts:
 
-1. Build the locked C client without credentials or private repositories.
-2. Build nginx and the module with warnings treated as errors.
-3. Build both static and dynamic module modes.
-4. Load the relocated dynamic module without a workspace runtime path or a
-   developer-checkout `librclient.so` dependency.
-5. Pass configuration validation and the public behavioral test suite.
-6. Pass the lifecycle regression suite under ASan and UBSan.
+1. On native `x86_64` and native `aarch64`, for both supported nginx releases,
+   build the locked C client and run `make check` with warnings treated as
+   errors. This is the complete static configuration and public-behavior gate.
+2. On both architectures and nginx releases, build the dynamic module, relocate
+   it with its matching nginx binary, reject RPATH/RUNPATH and a shared
+   `librclient.so`, and run final-admission, resolver-scope,
+   enforcement-boundary, and guard/latency behavior through that relocated
+   module.
+3. On `x86_64`, run the complete lifecycle and fault-injection suite under
+   ASan, UBSan, and LeakSanitizer against both supported nginx releases. The
+   category set applies to nginx and module code without a build-wide
+   exclusion. Leak detection is disabled only in short-lived `nginx -t` and
+   `nginx -s` subprocesses, where upstream nginx intentionally exits without
+   destroying configuration pools; real runtime shutdown and standalone C
+   probes retain leak detection. The report scanner accepts only the known
+   upstream `src/core/ngx_string.c:586` zero-length-copy `nonnull-attribute`
+   diagnostic shared by the two locked nginx releases; the check remains
+   enabled and every other UBSan report fails the gate.
+4. Keep `make test-internal` optional. It requires private service credentials
+   and may supplement a release decision, but neither contributors nor public
+   CI need it and its absence cannot fail the public release.
+
+`make check` is therefore the required static contributor gate, not shorthand
+for the whole release matrix. It reuses the binary produced from the caller's
+static `BUILD_FLAGS`; dynamic flags are rejected and must use the separate
+dynamic build and relocation sequence.
 
 The release notes must list the exact nginx release, C-client tag and SHA,
-operating system, architecture, compiler, and static/dynamic result used for
-the release decision.
+operating system, architecture, compiler, module mode, and sanitizer result
+used for the release decision.
 
 ## Scheduled dependency drift detection
 

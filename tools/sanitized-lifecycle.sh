@@ -2,11 +2,13 @@
 set -Eeuo pipefail
 
 RN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${RN_ROOT}/tools/sanitizer-flags.env"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 SANITIZER_RUNS="${SANITIZER_RUNS:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${RN_ROOT}/integration-tests/artifacts/lifecycle-sanitized}"
-SANITIZER_CFLAGS="-O1 -g -Wall -Wextra -std=c11 -fsanitize=address,undefined -fno-omit-frame-pointer"
-SANITIZER_LDFLAGS="-fsanitize=address,undefined"
+SANITIZER_CFLAGS="${RN_SANITIZER_COMPILE_FLAGS} ${RN_SANITIZER_PROBE_FLAGS}"
+SANITIZER_LDFLAGS="${RN_SANITIZER_LINK_FLAGS}"
 RCLIENT_REBUILT=0
 
 usage() {
@@ -64,8 +66,13 @@ restore_rclient() {
 }
 trap restore_rclient EXIT
 
-export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=0:strict_string_checks=1}"
+export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=1:strict_string_checks=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}"
+# nginx -t and nginx -s control commands exit without tearing down the
+# configuration-cycle pools they initialized. Suppress leak detection only for
+# those short-lived subprocesses; the runtime master, workers, and standalone
+# probes retain detect_leaks=1.
+export RN_NGINX_ONESHOT_ASAN_OPTIONS="${ASAN_OPTIONS}:detect_leaks=0"
 
 echo "[sanitizers] building rl-c-client and responder"
 make -C "${RCLIENT_DIR}" clean
@@ -104,9 +111,7 @@ for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
     SKIP_BUILD=1 \
     "${RN_ROOT}/integration-tests/lifecycle-regressions.sh" fault-injection
 
-  if grep -R -E \
-      'ERROR: AddressSanitizer|SUMMARY: AddressSanitizer|runtime error:' \
-      "${run_artifacts}"; then
+  if ! "${RN_ROOT}/tools/check-sanitizer-reports.sh" "${run_artifacts}"; then
     echo "[sanitizers] sanitizer report found in run ${run}" >&2
     exit 1
   fi

@@ -72,10 +72,10 @@ git clone --recurse-submodules https://github.com/ratelimitly-com/rl-nginx.git
 cd rl-nginx
 ```
 
-Run the required static public gate:
+Run the required static contributor gate:
 
 ```sh
-make check BUILD_FLAGS="--clean"
+make check
 ```
 
 This command verifies the dependency lock, builds the C client and nginx,
@@ -83,7 +83,9 @@ checks nginx configuration, runs the deterministic public integration suite,
 checks both committed and working-tree whitespace, and runs negative fixtures
 that prove the required Make, CI, specification, and lifecycle oracles turn red
 when their protected behavior is removed. It needs no RateLimitly server,
-tenant, API key, or private repository.
+tenant, API key, or private repository. It is a static-only target and rejects
+`--dynamic`; its integration phase reuses the exact nginx binary produced from
+the caller's `BUILD_FLAGS` instead of silently rebuilding a debug binary.
 
 The resulting evaluation binary is:
 
@@ -129,7 +131,8 @@ make dynamic-relocation-test NGINX_SRC=/path/to/nginx-src
 
 That gate copies the nginx binary and module into an isolated runtime, rejects
 RPATH/RUNPATH and a shared `librclient.so` dependency, runs `nginx -t`, and
-proves an allow/deny boundary without `LD_LIBRARY_PATH`.
+exercises final-admission ordering, worker resolver selection, the exact
+allow/deny boundary, and guard/latency behavior without `LD_LIBRARY_PATH`.
 
 ### Helper flags
 
@@ -146,6 +149,25 @@ Use `make sanitizers` instead of the raw `--sanitize` flag for the release
 gate. It instruments the C client as well, runs the complete lifecycle and
 response-cardinality suite, and builds test-only fault hooks to exercise
 resolver, partial worker-initialization, and transactional rebind failures.
+ASan, UBSan, and LeakSanitizer remain enabled for standalone probes and nginx
+runtime shutdown. Leak detection is disabled only for short-lived `nginx -t`
+and `nginx -s` subprocesses, which exit without tearing down upstream nginx's
+configuration-cycle pools; no allocator-stack suppression hides runtime
+module allocations. The `nonnull-attribute` check also remains enabled. The
+artifact scan accepts one exact upstream-nginx zero-length-copy diagnostic at
+`src/core/ngx_string.c:586`; any other UBSan diagnostic, including one in
+module or C-client code, fails the gate.
+
+These targets have distinct acceptance roles:
+
+- `make check` is the required static contributor gate and retains its tested
+  binary;
+- a dynamic build followed by `make dynamic-relocation-test` is a required
+  release gate for each supported nginx line and architecture;
+- `make sanitizers` is a required release gate for both supported nginx lines
+  on `x86_64`; and
+- `make test-internal` is optional supplemental validation because it requires
+  private service credentials and is not reproducible by public contributors.
 
 ## Building a deployment artifact
 

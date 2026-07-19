@@ -1,0 +1,2 @@
+# Exact upstream-nginx reports accepted by the sanitizer artifact scan.
+src/core/ngx_string.c:586:19: runtime error: null pointer passed as argument 2, which is declared to never be null

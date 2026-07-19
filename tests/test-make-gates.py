@@ -29,6 +29,11 @@ def require_red(name: str, result: subprocess.CompletedProcess[str]) -> None:
         )
 
 
+def require_green(name: str, result: subprocess.CompletedProcess[str]) -> None:
+    if result.returncode != 0:
+        raise SystemExit(f"FAIL Makefile gate oracle: {name} failed\n{result.stdout}")
+
+
 def check_fetch_failure() -> None:
     with tempfile.TemporaryDirectory() as directory:
         missing = Path(directory) / "missing-client"
@@ -101,11 +106,51 @@ def check_committed_whitespace_failure() -> None:
         )
 
 
+def check_public_test_reuses_requested_build() -> None:
+    dry_check = run(
+        "make",
+        "--no-print-directory",
+        "-n",
+        "check",
+        "BUILD_FLAGS=--clean",
+    )
+    require_green("could not inspect make check", dry_check)
+    if "SKIP_BUILD=1 ./integration-tests/public.sh" not in dry_check.stdout:
+        raise SystemExit(
+            "FAIL Makefile gate oracle: make check does not reuse its requested build"
+        )
+    if "./tools/build-nginx.sh \"./upstream-nginx\" --clean" not in dry_check.stdout:
+        raise SystemExit(
+            "FAIL Makefile gate oracle: make check discarded caller BUILD_FLAGS"
+        )
+
+    standalone = run("make", "--no-print-directory", "-n", "public-test")
+    require_green("could not inspect standalone public-test", standalone)
+    if "SKIP_BUILD=0 ./integration-tests/public.sh" not in standalone.stdout:
+        raise SystemExit(
+            "FAIL Makefile gate oracle: standalone public-test no longer builds nginx"
+        )
+
+    require_red(
+        "make check accepted dynamic BUILD_FLAGS without a reusable nginx binary",
+        run(
+            "make",
+            "--no-print-directory",
+            "check-build-flags",
+            "BUILD_FLAGS=--dynamic --compat --clean",
+        ),
+    )
+
+
 def main() -> None:
     check_fetch_failure()
     check_early_syntax_failure()
     check_committed_whitespace_failure()
-    print("PASS Makefile failure propagation (fetch, syntax, committed whitespace)")
+    check_public_test_reuses_requested_build()
+    print(
+        "PASS Makefile failure propagation and build reuse "
+        "(fetch, syntax, whitespace, static check)"
+    )
 
 
 if __name__ == "__main__":

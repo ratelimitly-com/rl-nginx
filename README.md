@@ -27,18 +27,20 @@ sudo apt-get install -y \
   zlib1g-dev
 ```
 
-Clone the repository with its pinned nginx source and run the required public
-gate:
+Clone the repository with its pinned nginx source and run the required static
+contributor gate:
 
 ```sh
 git clone --recurse-submodules https://github.com/ratelimitly-com/rl-nginx.git
 cd rl-nginx
-make check BUILD_FLAGS="--clean"
+make check
 ```
 
 `make check` verifies scripts and dependency locks, builds the static module,
 checks nginx configuration, runs the deterministic public integration suite,
-and checks whitespace. It materializes the C client at
+and checks whitespace. The integration suite reuses the exact static binary
+built from `BUILD_FLAGS`; dynamic flags are rejected because that mode does not
+produce the nginx binary this target exercises. It materializes the C client at
 `./_deps/rl-c-client`; that checkout must match the tag and full commit in
 [`dependencies/rl-c-client.env`](dependencies/rl-c-client.env) and have a clean
 working tree.
@@ -186,11 +188,18 @@ revisions above.
 
 ## Testing
 
-The required contributor and release-readiness entrypoint is:
+The required static contributor entrypoint is:
 
 ```sh
 make check
 ```
+
+Release readiness is intentionally broader. For both supported nginx releases,
+required CI runs the static contributor gate and relocated dynamic behavior on
+native `x86_64` and `aarch64`, plus ASan/UBSan/LSan on `x86_64`. The optional
+private full-stack test is supplemental evidence, not a public acceptance gate.
+See the [compatibility evidence contract](docs/compatibility.md#release-validation-gates)
+for the exact boundary.
 
 Useful narrower gates are:
 

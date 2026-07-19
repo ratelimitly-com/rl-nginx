@@ -7,6 +7,16 @@ remain preview software and must not be treated as ABI-stable versions.
 
 Changes since `v0.1.0-rc.1`:
 
+- added native `aarch64` static and relocated-dynamic coverage for both
+  supported nginx releases and extended sanitizers to both nginx lines;
+- made `make check` preserve and exercise its caller-selected static build,
+  separated contributor, release-only, and optional-private gate contracts,
+  and made dynamic relocation exercise four representative behavior groups;
+- enabled LeakSanitizer for probes and nginx runtime shutdown with a narrow
+  one-shot nginx config/control exception, removed the build-wide UBSan
+  category exclusion, replaced it with one exact reviewed upstream-nginx
+  report signature, and centralized sanitizer flags across dependency, module,
+  and nginx builds;
 - moved RateLimitly enforcement to the final pre-content admission point so
   nginx access rejection and routing happen before resource consumption;
 - defined a valid allow as consumed admission directly into content processing
