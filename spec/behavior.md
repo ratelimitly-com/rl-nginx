@@ -37,7 +37,9 @@ failures MAY return `500 Internal Server Error` instead.
 The worker-local UDP socket and C client are created lazily by the first
 protected request handled by that worker. A running nginx worker therefore
 proves process liveness, not that the worker has initialized RateLimitly
-enforcement or completed discovery.
+enforcement or completed discovery. Failed initialization retries use bounded
+backoff; protected requests during that interval immediately follow
+`ratelimitly_fail`.
 
 ## Discovery, dispatch, and selection
 
@@ -45,6 +47,9 @@ Supported deployments MUST publish SRV records as required by
 [`ratelimitly_tenant`](dsl.md#ratelimitly_tenant). The locked C client resolves
 those records and their A/AAAA targets through the nginx asynchronous resolver.
 It sends the request to every currently usable discovered endpoint address.
+The resolver and `resolver_timeout` are captured from the `http` context and
+apply process-wide to the worker client. Server and location resolver overrides
+do not change RateLimitly discovery.
 
 The module starts from the locked C-client request-policy defaults, overrides
 the attempt timeout with `ratelimitly_timeout`, and sets retry attempts to zero.

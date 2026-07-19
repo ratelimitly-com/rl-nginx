@@ -69,7 +69,10 @@ configure options as the nginx binary that will run it. See
 
 The tenant domain and API key below are deliberately non-working placeholders.
 Replace both before running `nginx -t`. Also replace the resolver address if
-`127.0.0.53` is not the DNS resolver available to your nginx workers.
+`127.0.0.53` is not the DNS resolver available to your nginx workers. The
+resolver must be declared directly in the `http` context: the module has one
+worker-local client, so server/location resolver overrides do not select its
+discovery resolver.
 
 ```nginx
 events {}

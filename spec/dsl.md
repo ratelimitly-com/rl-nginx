@@ -89,10 +89,11 @@ ratelimitly_bind <local-ip>;
 
 The value selects the local IPv4 or IPv6 address for the worker UDP socket. The
 port is always ephemeral. It does not select a RateLimitly server. The address
-is parsed and bound when a worker handles its first protected request; an
-invalid or unavailable address makes worker-client initialization follow the
-failure policy. When omitted, the kernel selects the local address. A second
-occurrence is a configuration error.
+is parsed and validated while loading configuration, so invalid syntax fails
+`nginx -t`. The socket is bound when a worker handles its first protected
+request; an unavailable valid address makes worker-client initialization
+follow the failure policy. When omitted, the kernel selects the local address.
+A second occurrence is a configuration error.
 
 ### `ratelimitly_debug`
 
