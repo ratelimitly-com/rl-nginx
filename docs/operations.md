@@ -21,6 +21,9 @@ resolver, and failure-policy security guidance.
 - DNS, transport, timeout, and invalid-response paths follow
   `ratelimitly_fail open|close`. Fail-open continues nginx processing;
   fail-close returns `429`.
+- Guard latency feedback is emitted only after a valid RateLimitly allow and
+  completed request processing. Denials, fail-open/fail-close dependency
+  outcomes, missing verdicts, timeouts, and client aborts do not add samples.
 - The current integration disables C-client request retries. A request waits at
   most the configured `ratelimitly_timeout` for its single attempt.
 - Internal nginx failures such as request-pool allocation or event-registration
@@ -33,6 +36,12 @@ also advances to content, but without a valid decision or guaranteed
 consumption. Because a real deny and a fail-closed dependency error both return
 `429`, HTTP status alone cannot distinguish them. Use the module log markers
 described below.
+
+Guard latency reporting follows the same distinction: an admitted request can
+report its completed processing latency even when the eventual HTTP response
+is an application or upstream error, but a fail-open request cannot report a
+sample because no valid RateLimitly allow exists. A client abort suppresses the
+sample without refunding an already consumed admission.
 
 ## DNS discovery and network path
 

@@ -124,6 +124,30 @@ typedef struct rn_worker_ctx {
 #endif
 } rn_worker_ctx_t;
 
+/* Admission outcome and completion cause are separate axes.  The pair
+ * distinguishes, for example, timeout fail-open from a valid allow. */
+typedef enum {
+    RN_ADMISSION_NONE = 0,
+    RN_ADMISSION_WAITING,
+    RN_ADMISSION_VALID_ALLOW,
+    RN_ADMISSION_VALID_DENY,
+    RN_ADMISSION_FAIL_OPEN,
+    RN_ADMISSION_FAIL_CLOSE,
+    RN_ADMISSION_INTERNAL_ERROR,
+    RN_ADMISSION_ABORTED
+} rn_admission_outcome_t;
+
+typedef enum {
+    RN_COMPLETION_NONE = 0,
+    RN_COMPLETION_VALID_VERDICT,
+    RN_COMPLETION_START_FAILURE,
+    RN_COMPLETION_DEPENDENCY_ERROR,
+    RN_COMPLETION_TIMEOUT,
+    RN_COMPLETION_CARDINALITY_MISMATCH,
+    RN_COMPLETION_NGINX_ERROR,
+    RN_COMPLETION_CLIENT_ABORT
+} rn_completion_cause_t;
+
 typedef struct {
     ngx_http_request_t *r;
     rn_worker_ctx_t *worker;
@@ -134,13 +158,14 @@ typedef struct {
     size_t expected_resource_count;
     ngx_event_t timer;
     ngx_int_t decision;
+    rn_admission_outcome_t admission_outcome;
+    rn_completion_cause_t completion_cause;
     ngx_flag_t waiting;
     ngx_flag_t done;
     ngx_flag_t nginx_counted;
     ngx_flag_t inflight_counted;
     ngx_flag_t lat_report_enabled;
     ngx_flag_t lat_report_sent;
-    ngx_flag_t ratelimitly_denied;
 } rn_req_ctx_t;
 
 static ngx_int_t ngx_http_rn_init(ngx_conf_t *cf);
@@ -610,11 +635,12 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     ctx->waiting = 0;
     ctx->done = 0;
     ctx->decision = NGX_DECLINED;
+    ctx->admission_outcome = RN_ADMISSION_NONE;
+    ctx->completion_cause = RN_COMPLETION_NONE;
     ctx->nginx_counted = 0;
     ctx->inflight_counted = 0;
     ctx->lat_report_enabled = (guard_idx > 0);
     ctx->lat_report_sent = 0;
-    ctx->ratelimitly_denied = 0;
     ngx_http_set_ctx(r, ctx, ngx_http_rn_module);
 
     cln = ngx_http_cleanup_add(r, 0);
@@ -643,7 +669,13 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 &r->uri, async_rc, rn_rclient_status_name(async_rc),
                 idx, guard_idx, label_len, mcf->fail_open);
         }
-        return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->decision = mcf->fail_open
+            ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->admission_outcome = mcf->fail_open
+            ? RN_ADMISSION_FAIL_OPEN : RN_ADMISSION_FAIL_CLOSE;
+        ctx->completion_cause = RN_COMPLETION_START_FAILURE;
+        ctx->done = 1;
+        return ctx->decision;
     }
 
     ctx->req = req;
@@ -661,6 +693,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     }
 
     ctx->waiting = 1;
+    ctx->admission_outcome = RN_ADMISSION_WAITING;
     r->main->count++;
     ctx->nginx_counted = 1;
 
@@ -668,6 +701,10 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         ngx_post_event(r->connection->read, &ngx_posted_events);
     } else if (ngx_handle_read_event(r->connection->read, 0) != NGX_OK) {
         rn_request_teardown(ctx, NULL, 1);
+        ctx->decision = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        ctx->admission_outcome = RN_ADMISSION_INTERNAL_ERROR;
+        ctx->completion_cause = RN_COMPLETION_NGINX_ERROR;
+        ctx->done = 1;
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     r->read_event_handler = ngx_http_test_reading;
@@ -2709,6 +2746,10 @@ static void
 rn_request_cleanup(void *data) {
     rn_req_ctx_t *ctx = data;
     if (ctx != NULL) {
+        if (ctx->admission_outcome == RN_ADMISSION_WAITING) {
+            ctx->admission_outcome = RN_ADMISSION_ABORTED;
+            ctx->completion_cause = RN_COMPLETION_CLIENT_ABORT;
+        }
         rn_request_teardown(ctx, NULL, 1);
         ctx->r = NULL;
     }
@@ -2733,7 +2774,17 @@ ngx_http_rn_log_handler(ngx_http_request_t *r) {
     if (ctx == NULL || !ctx->lat_report_enabled || ctx->lat_report_sent) {
         return NGX_OK;
     }
-    if (ctx->ratelimitly_denied || ctx->lat_reports == NULL || ctx->lat_report_count == 0) {
+    if (r->connection == NULL || r->connection->timedout
+        || r->connection->error || r->connection->destroyed)
+    {
+        ctx->admission_outcome = RN_ADMISSION_ABORTED;
+        ctx->completion_cause = RN_COMPLETION_CLIENT_ABORT;
+        ctx->lat_report_sent = 1;
+        return NGX_OK;
+    }
+    if (ctx->admission_outcome != RN_ADMISSION_VALID_ALLOW
+        || ctx->lat_reports == NULL || ctx->lat_report_count == 0)
+    {
         ctx->lat_report_sent = 1;
         return NGX_OK;
     }
@@ -2816,6 +2867,9 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
             ctx->expected_resource_count, result->resource_count,
             (int) (mcf && mcf->fail_open));
         rc = (mcf && mcf->fail_open) ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->admission_outcome = (mcf && mcf->fail_open)
+            ? RN_ADMISSION_FAIL_OPEN : RN_ADMISSION_FAIL_CLOSE;
+        ctx->completion_cause = RN_COMPLETION_CARDINALITY_MISMATCH;
 
     } else if (status == RCLIENT_OK && result) {
         ngx_flag_t allow = result->success ? 1 : 0;
@@ -2838,8 +2892,15 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
             }
         }
         rc = allow ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->admission_outcome = allow
+            ? RN_ADMISSION_VALID_ALLOW : RN_ADMISSION_VALID_DENY;
+        ctx->completion_cause = RN_COMPLETION_VALID_VERDICT;
     } else {
         rc = (mcf && mcf->fail_open) ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->admission_outcome = (mcf && mcf->fail_open)
+            ? RN_ADMISSION_FAIL_OPEN : RN_ADMISSION_FAIL_CLOSE;
+        ctx->completion_cause = (status == RCLIENT_ERR_TIMEOUT)
+            ? RN_COMPLETION_TIMEOUT : RN_COMPLETION_DEPENDENCY_ERROR;
     }
     if (worker->debug && !cardinality_mismatch) {
         if (status == RCLIENT_OK && result) {
@@ -2853,7 +2914,6 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
     }
 
     ctx->decision = rc;
-    ctx->ratelimitly_denied = (rc == NGX_HTTP_TOO_MANY_REQUESTS) ? 1 : 0;
     ctx->done = 1;
     ctx->waiting = 0;
 

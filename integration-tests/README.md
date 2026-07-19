@@ -117,12 +117,14 @@ post-response latency reporting:
 ./integration-tests/lifecycle-regressions.sh guard-latency
 ```
 
-The matrix covers a passing guard, a denying guard, and two guards attached to
-one protected location. It verifies the public responder sees the expected
-guard/resource request shape, guard denial returns `429`, successful guarded
+The matrix covers a passing guard, a denying guard, two guards attached to one
+protected location, request-start fail-open, timeout fail-open, and client
+abort before a verdict. It verifies the public responder sees the expected
+guard/resource request shape, guard denial returns `429`, valid allowed guarded
 requests send a post-response `latency_report` with the expected report count,
-and denied requests do not report latency. Each case still requires worker
-survival, a valid follow-up, reload, and clean shutdown.
+and every invalid or absent admission suppresses both attempted and delivered
+latency reports. Each case still requires worker survival, a valid follow-up,
+reload, and clean shutdown.
 
 Run the malformed-protocol matrix separately while working on response parsing
 and fail-policy behavior:

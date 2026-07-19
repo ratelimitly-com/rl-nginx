@@ -121,7 +121,8 @@ read the [configuration guide](docs/configuration.md) before deploying. Treat
 - Discovers RateLimitly servers through tenant-specific DNS SRV records.
 - Defines nginx-native resources with `ratelimitly_zone`.
 - Groups resources with `ratelimitly_group`.
-- Optionally reports latency guard blocks with `ratelimitly_guard`.
+- Optionally reports guarded request latency after valid RateLimitly allows
+  with `ratelimitly_guard`.
 - Enforces allow and deny decisions before proxying or serving content.
 - Applies a configured fail-open or fail-closed policy when no valid decision
   is available.
@@ -134,6 +135,10 @@ protocol failures follow `ratelimitly_fail open|close`.
 
 The module does not create tenants, issue credentials, manage DNS, or include a
 RateLimitly server.
+
+Guard latency feedback is admission-aware: it is reported only after a valid
+allow and subsequent request processing. A deny, fail-open/fail-close error,
+missing verdict, timeout, or client abort does not contribute a latency sample.
 
 ## Core Directives
 

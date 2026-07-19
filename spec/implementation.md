@@ -98,7 +98,12 @@ MUST treat its result as observability only.
 Arrays and strings passed to the borrowed C-client API are owned by the nginx
 request pool. A per-request context MUST retain the owning nginx request,
 C-client request handle, deadline timer, expected response cardinality, latency
-report inputs, and exactly-once accounting flags.
+report inputs, and exactly-once accounting flags. It MUST also represent the
+admission outcome independently from the completion cause: valid allow, valid
+deny, fail-open, fail-close, internal nginx error, and client abort are distinct
+outcomes, while a valid verdict, request-start failure, dependency error,
+timeout, cardinality mismatch, internal nginx error, and client abort are
+distinct causes.
 
 nginx clears module-context slots during an internal redirect but preserves the
 main request pool and cleanup chain. The module MUST keep its admission context
@@ -124,6 +129,11 @@ access through the request context.
 
 An aborted HTTP client MUST execute the cleanup path without a later timeout
 callback, double decrement, use-after-free, or worker loss.
+
+The log-phase handler MUST call `r_client_report_latency` only for the explicit
+valid-allow outcome. It MUST suppress reporting for every other outcome and
+for a connection marked timed out, failed, or destroyed, including when an
+otherwise valid allow preceded that client abort.
 
 ## Response and phase resumption
 
@@ -170,7 +180,9 @@ The required public gate MUST cover at least:
 - dependency bootstrap, lock verification, and immutable workflow pins;
 - SRV target conversion and strict public DNS fixture behavior;
 - allow/deny, outage policy, malformed response, and exact-cardinality cases;
-- guard decisions and post-response latency-report suppression after denial;
+- guard decisions and post-response latency reporting only after a valid allow,
+  including suppression after denial, startup failure, timeout fail-open, and
+  client abort;
 - timeout, aborted client, source-port steering, reload, and shutdown lifecycle;
 - missing SRV, invalid SRV target, DNS timeout, and same-worker recovery;
 - HTTP-scope resolver selection despite a location-level override;
