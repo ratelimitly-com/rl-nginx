@@ -28,11 +28,14 @@ Supported builds use immutable inputs:
 The authoritative C-client lock is
 [`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). Without an
 override, every supported entrypoint fetches or verifies that exact public tag
-and commit under `./_deps/rl-c-client`. It never selects a sibling checkout.
+and commit under `./_deps/rl-c-client`. The locked checkout must also be clean;
+ignored compiler outputs are allowed, but local tracked or untracked source
+changes fail resolution. It never selects a sibling checkout.
 
 `RCLIENT_DIR=/path/to/rl-c-client` is an intentional development or packaging
 override. It does not change the supported release combination, and the caller
-is responsible for the revision and build flags in that checkout.
+is responsible for the revision, local modifications, build flags, and
+compatibility of that checkout.
 
 ## Prerequisites
 

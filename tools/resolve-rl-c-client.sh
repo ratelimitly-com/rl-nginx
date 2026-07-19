@@ -8,9 +8,10 @@ Usage: ./tools/resolve-rl-c-client.sh
 Prints the absolute rl-c-client checkout path for build and test helpers.
 
 With no RCLIENT_DIR override, the helper fetches or verifies the exact public
-release locked by dependencies/rl-c-client.env under ./_deps/rl-c-client.
+release and clean working tree locked by dependencies/rl-c-client.env under
+./_deps/rl-c-client.
 An explicit RCLIENT_DIR is treated as an intentional development or packaging
-override and must name an existing directory.
+override, may contain local changes, and must name an existing directory.
 EOF
 }
 

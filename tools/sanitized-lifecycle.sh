@@ -64,6 +64,9 @@ restore_rclient() {
 }
 trap restore_rclient EXIT
 
+export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=0:strict_string_checks=1}"
+export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}"
+
 echo "[sanitizers] building rl-c-client and responder"
 make -C "${RCLIENT_DIR}" clean
 RCLIENT_REBUILT=1
@@ -71,6 +74,10 @@ make -C "${RCLIENT_DIR}" \
   CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   all test-responder
+CFLAGS="${SANITIZER_CFLAGS}" \
+  LDFLAGS="${SANITIZER_LDFLAGS}" \
+  RCLIENT_DIR="${RCLIENT_DIR}" \
+  "${RN_ROOT}/tests/test-c-client-contract.sh"
 CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   "${RN_ROOT}/tests/test-numeric.sh"
@@ -84,9 +91,6 @@ RN_TEST_FAULT_INJECTION=1 \
 RCLIENT_DIR="${RCLIENT_DIR}" \
   "${RN_ROOT}/tools/build-nginx.sh" "${NGINX_SRC}" \
   --clean --debug --sanitize --skip-rclient-build
-
-export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=0:strict_string_checks=1}"
-export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}"
 
 for (( run = 1; run <= SANITIZER_RUNS; run++ )); do
   run_artifacts="${ARTIFACT_ROOT}/run-${run}"

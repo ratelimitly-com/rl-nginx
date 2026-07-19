@@ -90,6 +90,16 @@ or verify that revision under `./_deps/rl-c-client`; they MUST NOT select an
 adjacent checkout implicitly. An intentional development or packaging override
 MUST set `RCLIENT_DIR=/path/to/rl-c-client` explicitly.
 
+The default locked checkout MUST have a clean working tree in addition to the
+locked `HEAD`. Ignored build products do not make it dirty. Tracked or untracked
+local changes MUST fail dependency resolution. The explicit `RCLIENT_DIR`
+override MAY be dirty because selecting it is an intentional opt-out from the
+release lock.
+
+The default `upstream-nginx` gitlink MUST equal the mainline commit declared by
+every required CI nginx matrix. A meta-test MUST derive the gitlink from the
+index and turn red if a matrix copy diverges.
+
 The module MUST use the C client as the owner of protocol encoding, encryption,
 authentication, request IDs, DNS policy, multi-endpoint dispatch, response
 selection, and decoding. It MUST NOT duplicate those implementations.
@@ -104,6 +114,12 @@ specification and test review.
 For post-response reports, the module MUST use `r_client_report_latency` and
 MUST treat its result as observability only.
 
+The selected C client MUST satisfy every create, borrowed-input, start,
+deadline, callback, cancellation, destruction, DNS-cancellation, and steering
+guarantee in [`docs/c-client.md`](../docs/c-client.md#required-lifecycle-contract).
+The direct compatibility probe MUST run against both the locked release and the
+scheduled `rl-c-client/main` checkout before a dependency update is accepted.
+
 ## Request ownership
 
 Arrays and strings passed to the borrowed C-client API are owned by the nginx
@@ -115,6 +131,12 @@ deny, fail-open, fail-close, internal nginx error, and client abort are distinct
 outcomes, while a valid verdict, request-start failure, dependency error,
 timeout, cardinality mismatch, internal nginx error, and client abort are
 distinct causes.
+
+An unsuccessful borrowed start MUST return an error without a callback or live
+request handle. A successful start MUST publish the handle before any
+completion callback. The module MAY release the borrowed arrays only after the
+exactly-once callback, synchronous cancellation, or callback-free client
+destruction retires that handle.
 
 nginx clears module-context slots during an internal redirect but preserves the
 main request pool and cleanup chain. The module MUST keep its admission context

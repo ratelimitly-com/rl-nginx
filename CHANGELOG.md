@@ -37,6 +37,13 @@ Changes since `v0.1.0-rc.1`:
   activation to a real disabled value;
 - compacted resolver addresses before reporting their successful count to the
   C client and added a unit oracle for skipped oversized addresses;
+- made the C-client callback, cancellation, ownership, timeout, and destruction
+  assumptions explicit and executable against both the lock and scheduled
+  `rl-c-client/main` probes;
+- rejected modified default C-client checkouts while preserving dirty explicit
+  development overrides, tied the nginx gitlink to every mainline CI matrix,
+  and added red-case guards for drift-workflow permissions, local actions, and
+  container image pins;
 - fixed nginx resolver-context ownership across allocation failures,
   synchronous completion, start failure, cancellation, and worker shutdown;
 - made partial worker initialization transactional, including destruction of a

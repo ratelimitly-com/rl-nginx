@@ -25,7 +25,10 @@ notes.
 The C-client row is intentionally not a floating branch. The authoritative tag
 and full SHA live in
 [`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env); public CI and
-the fetch helper consume that lock and fail if the tag resolves elsewhere.
+the fetch helper consume that lock and fail if the tag resolves elsewhere or
+the default checkout contains local changes. The direct
+[C-client lifecycle probe](c-client.md#executable-compatibility-probe) binds the
+callback and ownership behavior required by the nginx adapter.
 
 ## Initial nginx matrix validation
 
@@ -39,6 +42,9 @@ A37 validation on 2026-07-17 established the initial source-build matrix:
 This confirms source-build and public behavioral compatibility for the two
 nginx releases named above. Current required CI enforces static and dynamic
 builds, dynamic-module relocation, and the sanitizer lifecycle gate.
+The CI meta-test reads the `upstream-nginx` gitlink directly and requires every
+mainline matrix copy to declare that same commit, so changing either side alone
+turns required CI red.
 
 ## Compatibility rules
 
@@ -88,6 +94,9 @@ CI. A failure is an early incompatibility signal that maintainers must
 investigate; it does not change the supported matrix, the repository locks, or
 the result of an ordinary reproducible build. Support changes still require a
 reviewed lock and compatibility-document update with complete release evidence.
+The workflow has top-level read-only repository permissions, disables persisted
+checkout credentials, and receives no secrets because it executes floating
+upstream code; executable meta-tests preserve those restrictions.
 
 ## Explicit non-goals for `0.1.x`
 
