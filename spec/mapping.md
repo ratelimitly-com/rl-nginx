@@ -11,7 +11,7 @@ group order:
 
 | C-client field | Value |
 | --- | --- |
-| `bucket_id` | BLAKE2s-128 hash produced by `r_client_hash_id` from the rendered bucket |
+| `bucket_id` | first 16 bytes of the BLAKE2s-256 digest produced by `r_client_hash_id` from the rendered bucket |
 | `window_size_ms` | rendered rate period converted to milliseconds |
 | `rate_limit` | rendered decimal rate |
 | `tokens_requested` | `1` |
@@ -20,6 +20,10 @@ The module copies the rendered bucket to request-pool storage, appends a NUL
 terminator, and passes it to the C-client hash helper. An embedded NUL therefore
 terminates the hashed identity early. Configuration MUST obey the safe-input
 requirements in [`ratelimitly_zone`](dsl.md#ratelimitly_zone).
+The executable boundary oracle pins the rendered text
+`boundary:known-bucket` to identifier
+`adad04e30132078dd71e82746cbfe92d` and requires the responder to observe the
+same one-resource request.
 
 Repeated zone references are not deduplicated. Each occurrence produces a
 separate ResourceBlock on the wire.
@@ -31,7 +35,7 @@ first-seen order:
 
 | C-client field | Value |
 | --- | --- |
-| `service_id` | BLAKE2s-128 hash produced by `r_client_hash_id` from the rendered service |
+| `service_id` | first 16 bytes of the BLAKE2s-256 digest produced by `r_client_hash_id` from the rendered service |
 | `threshold_ms` | rendered threshold converted to milliseconds |
 | `ttl_ms` | configured guard TTL in milliseconds |
 | `max_samples` | configured value |

@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lifecycle-oracles.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the complete required public lifecycle matrix against the locked
 rl-c-client test responder. Every case pins the original nginx worker PID,
@@ -46,7 +46,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -61,6 +61,7 @@ ALL_PUBLIC_GROUPS=(
   worker-resolver-scope
   admission-contract
   enforcement-boundary
+  rendered-values
   outage-policy
   dns-policy
   guard-latency
@@ -245,6 +246,30 @@ run_cardinality() {
     return 1
   fi
   log "all response-cardinality regressions passed"
+}
+
+run_rendered_values() {
+  local failures=0
+  local policy
+
+  prepare_binaries
+  for policy in close open; do
+    if ARTIFACT_ROOT="${ARTIFACT_ROOT}/rendered-values/${policy}" \
+        FAIL_POLICY="${policy}" \
+        SKIP_BUILD=1 \
+        "${SELF}" "rendered-values-${policy}"; then
+      printf 'PASS %s/rendered-values\n' "${policy}"
+    else
+      printf 'FAIL %s/rendered-values (see %s/rendered-values/%s)\n' \
+        "${policy}" "${ARTIFACT_ROOT}" "${policy}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+  if (( failures > 0 )); then
+    echo "${failures} rendered-value policy regression(s) failed" >&2
+    return 1
+  fi
+  log "all rendered-value policy regressions passed"
 }
 
 run_admission_contract() {
@@ -527,10 +552,10 @@ write_nginx_config() {
     zone_rate="${ENFORCEMENT_ALLOW_COUNT}r/h"
   fi
   if is_guard_case; then
-    guard_defs='  ratelimitly_guard lifecycle_guard service="svc:lifecycle:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+    guard_defs='  ratelimitly_guard lifecycle_guard "service=svc:lifecycle:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
     ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard;"
     if [[ "${MODE}" == "guard-multiple" ]]; then
-      guard_defs="${guard_defs}"$'\n''  ratelimitly_guard lifecycle_guard_secondary service="svc:lifecycle:secondary:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      guard_defs="${guard_defs}"$'\n''  ratelimitly_guard lifecycle_guard_secondary "service=svc:lifecycle:secondary:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
       ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard guard=lifecycle_guard_secondary;"
     fi
   fi
@@ -571,8 +596,12 @@ http {
   ratelimitly_debug on;
 ${fault_directive}
 
-  ratelimitly_zone lifecycle_zone bucket="lifecycle:\$uri" rate=${zone_rate};
-  ratelimitly_zone redirect_zone bucket="redirect:one-request" rate=10000r/s;
+  ratelimitly_zone lifecycle_zone "bucket=lifecycle:\$uri" rate=${zone_rate};
+  ratelimitly_zone redirect_zone "bucket=redirect:one-request" rate=10000r/s;
+  ratelimitly_zone rendered_bucket_zone "bucket=\$arg_value" rate=10000r/s;
+  ratelimitly_zone boundary_zone "bucket=boundary:\$arg_value" rate=10000r/s;
+  ratelimitly_guard rendered_service_guard "service=\$arg_value" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_guard rendered_threshold_guard service=rendered-threshold threshold=\$arg_value ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
 ${guard_defs}
 
   server {
@@ -585,6 +614,41 @@ ${guard_defs}
     location = /limited {
       ratelimitly_label "LIFECYCLE:\$uri";
       ${ratelimitly_rule}
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /rendered-bucket {
+      ratelimitly_label "RENDERED-BUCKET";
+      ratelimitly zone=rendered_bucket_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /rendered-service {
+      ratelimitly_label "RENDERED-SERVICE";
+      ratelimitly zone=redirect_zone guard=rendered_service_guard;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /rendered-threshold {
+      ratelimitly_label "RENDERED-THRESHOLD";
+      ratelimitly zone=redirect_zone guard=rendered_threshold_guard;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /rendered-label {
+      ratelimitly_label "\$arg_value";
+      ratelimitly zone=redirect_zone;
+      root ${RN_ROOT}/tests;
+      try_files /ok.txt =404;
+    }
+
+    location = /bucket-boundary {
+      ratelimitly_label "BUCKET-BOUNDARY";
+      ratelimitly zone=boundary_zone;
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
     }
@@ -1177,6 +1241,125 @@ run_enforcement_boundary_case() {
   check_follow_up "exact enforcement boundary"
 }
 
+run_rendered_values_case() {
+  local after
+  local before
+  local code
+  local expected_failure_code
+  local log_start
+  local max_identifier
+  local max_label
+  local oversized_identifier
+  local oversized_label
+  local -a failure_markers
+  local -a failure_paths
+  local -a failure_values
+  local index
+
+  if [[ "${FAIL_POLICY}" == "open" ]]; then
+    expected_failure_code="200"
+  else
+    expected_failure_code="429"
+  fi
+  printf -v max_identifier '%*s' 1024 ''
+  max_identifier="${max_identifier// /i}"
+  oversized_identifier="${max_identifier}i"
+  printf -v max_label '%*s' 256 ''
+  max_label="${max_label// /l}"
+  oversized_label="${max_label}l"
+
+  failure_paths=(
+    /rendered-bucket
+    /rendered-service
+    /rendered-bucket
+    /rendered-service
+    /rendered-label
+    /rendered-threshold
+  )
+  failure_values=(
+    ""
+    ""
+    "${oversized_identifier}"
+    "${oversized_identifier}"
+    "${oversized_label}"
+    0
+  )
+  failure_markers=(
+    'rn: zone_build_failed zone=rendered_bucket_zone'
+    'rn: guard_build_failed guard=rendered_service_guard'
+    'rn: zone_build_failed zone=rendered_bucket_zone'
+    'rn: guard_build_failed guard=rendered_service_guard'
+    'rn: label_build_failed uri=/ok.txt reason=too_long len=257 max=256'
+    'rn: guard_build_failed guard=rendered_threshold_guard'
+  )
+
+  for index in "${!failure_paths[@]}"; do
+    before="$(responder_rate_request_count)"
+    log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
+    if [[ -n "${failure_values[index]}" ]]; then
+      code="$(request_path_code \
+        "${failure_paths[index]}?value=${failure_values[index]}" \
+        "${CLIENT_TIMEOUT_SEC}")"
+    else
+      code="$(request_path_code "${failure_paths[index]}" \
+        "${CLIENT_TIMEOUT_SEC}")"
+    fi
+    if [[ "${code}" != "${expected_failure_code}" ]]; then
+      record_failure "${failure_paths[index]} invalid value returned ${code}, expected fail-${FAIL_POLICY} ${expected_failure_code}"
+    fi
+    after="$(responder_rate_request_count)"
+    if [[ "${after}" != "${before}" ]]; then
+      record_failure "${failure_paths[index]} invalid value reached the responder"
+    fi
+    tail -n "+$((log_start + 1))" "${NGINX_ERROR_LOG}" \
+      >"${ARTIFACT_DIR}/rendered-value-${index}.log"
+    if ! grep -Fq "${failure_markers[index]}" \
+        "${ARTIFACT_DIR}/rendered-value-${index}.log"; then
+      record_failure "${failure_paths[index]} invalid value did not record its build failure"
+    fi
+  done
+
+  before="$(responder_rate_request_count)"
+  code="$(request_path_code "/rendered-label" "${CLIENT_TIMEOUT_SEC}")"
+  [[ "${code}" == "200" ]] \
+    || record_failure "empty optional label returned ${code}, expected 200"
+  wait_for_log '"label":""' "${RESPONDER_LOG}" 20 \
+    || record_failure "empty optional label was not omitted at the responder"
+  code="$(request_path_code "/rendered-bucket?value=${max_identifier}" \
+    "${CLIENT_TIMEOUT_SEC}")"
+  [[ "${code}" == "200" ]] \
+    || record_failure "1024-byte bucket returned ${code}, expected 200"
+  code="$(request_path_code "/rendered-service?value=${max_identifier}" \
+    "${CLIENT_TIMEOUT_SEC}")"
+  [[ "${code}" == "200" ]] \
+    || record_failure "1024-byte service returned ${code}, expected 200"
+  code="$(request_path_code "/rendered-label?value=${max_label}" \
+    "${CLIENT_TIMEOUT_SEC}")"
+  [[ "${code}" == "200" ]] \
+    || record_failure "256-byte label returned ${code}, expected 200"
+  code="$(request_path_code "/rendered-threshold?value=1" \
+    "${CLIENT_TIMEOUT_SEC}")"
+  [[ "${code}" == "200" ]] \
+    || record_failure "unitless one-second threshold returned ${code}, expected 200"
+  wait_for_log 'rn: guard=rendered_threshold_guard .* threshold_ms=1000' \
+    "${NGINX_ERROR_LOG}" 20 \
+    || record_failure "unitless threshold did not render as 1000ms"
+  code="$(request_path_code "/bucket-boundary?value=known-bucket" \
+    "${CLIENT_TIMEOUT_SEC}")"
+  [[ "${code}" == "200" ]] \
+    || record_failure "known bucket boundary request returned ${code}, expected 200"
+  wait_for_log 'rn: bucket zone=boundary_zone id=adad04e30132078dd71e82746cbfe92d' \
+    "${NGINX_ERROR_LOG}" 20 \
+    || record_failure "known bucket did not produce the locked wire identifier"
+  after="$(responder_rate_request_count)"
+  if [[ "${after}" != "$((before + 6))" ]]; then
+    record_failure "valid boundary requests produced $((after - before)) responder events, expected 6"
+  fi
+
+  check_worker_survival "rendered-value fail-${FAIL_POLICY} policy"
+  check_follow_up "rendered-value fail-${FAIL_POLICY} policy"
+}
+
 run_admission_contract_case() {
   local after
   local before
@@ -1517,6 +1700,8 @@ run_one() {
     log "skipping healthy warm-up before fault injection ${FAULT_POINT}"
   elif [[ "${MODE}" == "worker-resolver-scope" ]]; then
     log "skipping healthy warm-up so the resolver-override location initializes the worker"
+  elif [[ "${MODE}" == rendered-values-* ]]; then
+    log "skipping healthy warm-up before rendered-value boundary checks"
   elif dns_failure_mode >/dev/null 2>&1; then
     log "skipping healthy warm-up before ${MODE}; DNS starts in failure mode"
   else
@@ -1532,6 +1717,7 @@ run_one() {
     guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open) run_guard_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
+    rendered-values-close|rendered-values-open) run_rendered_values_case ;;
     worker-resolver-scope) run_worker_resolver_scope_case ;;
     admission-contract-close|admission-contract-open) run_admission_contract_case ;;
     count-empty|count-short|count-extra) run_count_mismatch_case ;;
@@ -1556,6 +1742,8 @@ elif [[ "${MODE}" == "admission-contract" ]]; then
   run_admission_contract
 elif [[ "${MODE}" == "cardinality" ]]; then
   run_cardinality
+elif [[ "${MODE}" == "rendered-values" ]]; then
+  run_rendered_values
 elif [[ "${MODE}" == "protocol-policy" ]]; then
   run_protocol_policy
 elif [[ "${MODE}" == "outage-policy" ]]; then

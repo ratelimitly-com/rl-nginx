@@ -22,7 +22,7 @@ http {
   ratelimitly_fail     close;
 
   ratelimitly_zone api_per_ip
-    bucket="v1|scope=api|ip=$remote_addr"
+    "bucket=v1|scope=api|ip=$remote_addr"
     rate=100r/s;
 
   server {
@@ -103,11 +103,11 @@ Avoid patterns such as:
 
 ```nginx
 # Unsafe: the user can choose the identity and create unlimited buckets.
-ratelimitly_zone bad_user bucket="user:$arg_user" rate=100r/s;
+ratelimitly_zone bad_user "bucket=user:$arg_user" rate=100r/s;
 
 # Unsafe: URI cardinality is unbounded and ':' can occur inside values.
 ratelimitly_zone bad_path
-  bucket="host:$host:method:$request_method:path:$uri"
+  "bucket=host:$host:method:$request_method:path:$uri"
   rate=100r/s;
 ```
 
@@ -141,7 +141,7 @@ map $request_method $rl_method_class {
 }
 
 ratelimitly_zone api_per_ip
-  bucket="v1|scope=api|route=$rl_route_class|method=$rl_method_class|ip=$remote_addr"
+  "bucket=v1|scope=api|route=$rl_route_class|method=$rl_method_class|ip=$remote_addr"
   rate=100r/s;
 ```
 
@@ -197,7 +197,10 @@ ratelimitly_fail open;
 ratelimitly_fail close;
 ```
 
-`ratelimitly_timeout` bounds how long a request waits for a decision.
+`ratelimitly_timeout` bounds how long a request waits for a decision. It must
+resolve to `1..4294967295ms`; zero is rejected. nginx duration units `w`, `d`,
+`h`, `m`, `s`, and `ms` are accepted, and a unitless value means seconds. Write
+`1ms` when one millisecond is intended.
 
 The default is `ratelimitly_fail open`, but production configurations should
 set the policy explicitly:
@@ -227,11 +230,17 @@ outputs are all valid.
 ## Zones and rates
 
 ```nginx
-ratelimitly_zone <name> bucket="<template>" rate=<rate>;
+ratelimitly_zone <name> "bucket=<template>" rate=<rate>;
 ```
 
 A zone defines one RateLimitly resource. `bucket` and `rate` are rendered per
 request using nginx complex values.
+
+Rendered buckets must contain `1..1024` bytes. Static oversized values fail
+`nginx -t`; empty or oversized dynamic values follow `ratelimitly_fail` without
+reaching the C client. If quoting is needed, quote the whole named argument as
+`"bucket=value"`. Do not write `bucket="value"`: nginx makes those inner quotes
+literal bucket bytes, and the module rejects that form.
 
 Use a finite map for a dynamic rate:
 
@@ -244,7 +253,7 @@ map "$rl_route_class:$rl_method_class" $rl_api_rate {
 }
 
 ratelimitly_zone api_per_ip
-  bucket="v1|scope=api|route=$rl_route_class|method=$rl_method_class|ip=$remote_addr"
+  "bucket=v1|scope=api|route=$rl_route_class|method=$rl_method_class|ip=$remote_addr"
   rate=$rl_api_rate;
 ```
 
@@ -282,7 +291,7 @@ location /api/ {
 
 ```nginx
 ratelimitly_guard api_latency
-  service="v1|service=public-api"
+  "service=v1|service=public-api"
   threshold=100ms
   ttl=30s
   max_samples=128
@@ -315,7 +324,12 @@ location /api/ {
 ```
 
 Guard threshold and TTL milliseconds and the three sample-count fields must fit
-an unsigned 32-bit wire field. `max_samples` and `buffer_size` must be nonzero.
+an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
+unitless duration means seconds. `max_samples` and `buffer_size` must be
+nonzero. Rendered service keys must contain `1..1024` bytes; static oversized
+values fail `nginx -t`, while empty or oversized dynamic values follow the
+failure policy. Quote the complete `"service=value"` argument when needed,
+never only the value.
 The tuning fields are static and validated while loading configuration.
 
 A static invalid `threshold` makes `nginx -t` fail. A dynamic threshold is
@@ -334,7 +348,9 @@ ratelimitly_label "route=$rl_route_class|method=$rl_method_class";
 ```
 
 Labels are transmitted for observability rather than hashed into a resource
-ID. Keep their values low-cardinality and non-sensitive. Do not include raw
+ID. A rendered label may contain at most 256 bytes; static oversized values
+fail `nginx -t`, dynamic oversized values follow the failure policy, and an
+empty label is omitted. Keep values low-cardinality and non-sensitive. Do not include raw
 paths, query arguments, headers, cookies, API keys, session tokens, user IDs,
 email addresses, or source IPs. Finite map outputs and fixed policy names are
 appropriate label values.

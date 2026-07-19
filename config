@@ -23,6 +23,7 @@ fi
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_rn_module
 ngx_module_srcs="$ngx_addon_dir/src/ngx_http_ratelimitly_module.c \
+                  $ngx_addon_dir/src/rn_addr_records.c \
                   $ngx_addon_dir/src/rn_async_state.c \
                   $ngx_addon_dir/src/rn_numeric.c \
                   $ngx_addon_dir/src/rn_srv_records.c"

@@ -29,10 +29,12 @@ handler internally redirects before producing the response. Subrequests remain
 unprotected by this module and MUST NOT create an independent admission.
 
 The effective label, zone bucket/rate values, and guard service/threshold
-values are rendered for the request. Invalid dynamic values, an empty rendered
-guard service, or a C-client request-construction error MUST follow the
-configured failure policy. Internal nginx allocation or event-registration
-failures MAY return `500 Internal Server Error` instead.
+values are rendered for the request. An empty bucket or service, a bucket or
+service over 1024 bytes, a label over 256 bytes, another invalid dynamic value,
+or a C-client request-construction error MUST follow the configured failure
+policy. An empty label omits the label from the request. Internal nginx
+allocation or event-registration failures MAY return `500 Internal Server
+Error` instead.
 
 The worker-local UDP socket and C client are created lazily by the first
 protected request handled by that worker. A running nginx worker therefore

@@ -86,7 +86,7 @@ http {
   ratelimitly_fail     close;
 
   ratelimitly_zone api
-    bucket="v1|scope=api|ip=$remote_addr"
+    "bucket=v1|scope=api|ip=$remote_addr"
     rate=100r/s;
 
   server {
@@ -148,11 +148,16 @@ missing verdict, timeout, or client abort does not contribute a latency sample.
 - `ratelimitly_fail open|close;`
 - `ratelimitly_bind <ip>;`
 - `ratelimitly_debug on|off;`
-- `ratelimitly_zone <name> bucket="<template>" rate=<rate>;`
+- `ratelimitly_zone <name> "bucket=<template>" rate=<rate>;`
 - `ratelimitly_group <name> zone=<zone> ...;`
-- `ratelimitly_guard <name> service="<template>" threshold=<duration> ...;`
+- `ratelimitly_guard <name> "service=<template>" threshold=<duration> ...;`
 - `ratelimitly zone=<name>|group=<name> [guard=<name>] ...;`
 - `ratelimitly_label "<template>";`
+
+Rendered bucket and service keys are limited to 1024 bytes; labels are limited
+to 256 bytes. Quote a complete named argument (`"bucket=value"` or
+`"service=value"`), not only its value. Empty/oversized dynamic identifiers
+follow `ratelimitly_fail`, while invalid static values fail `nginx -t`.
 
 See the [configuration guide](docs/configuration.md) for directive behavior and
 the [DSL reference](spec/dsl.md) for complete syntax.

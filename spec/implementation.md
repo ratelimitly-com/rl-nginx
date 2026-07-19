@@ -28,6 +28,14 @@ Configuration definitions, credentials, timeout, failure policy, bind address,
 and debug flag live in HTTP main configuration. Effective rules and labels
 live in location configuration and follow the inheritance contract in
 [Configuration DSL](dsl.md).
+Unconfigured server and location activation flags MUST merge to `0`, never the
+truthy `NGX_CONF_UNSET` sentinel.
+
+The module MUST reject static bucket/service templates over 1024 bytes and
+static labels over 256 bytes during configuration loading. The same limits,
+plus nonempty bucket and service requirements, MUST be checked after dynamic
+rendering and before request-pool copying or C-client invocation. Dynamic
+violations follow the configured failure policy.
 
 ## Worker lifecycle and non-blocking I/O
 
@@ -67,6 +75,9 @@ the client can retire its lookup state.
 
 The resolver adapter MUST preserve SRV target port, server-ID association, and
 TTL information when converting nginx resolver answers into C-client records.
+It MUST compact accepted A/AAAA addresses and report only the compacted count;
+if every address is unusable, it MUST return resolver failure rather than a
+successful array containing zeroed entries.
 The C client owns endpoint caching, refresh scheduling, supported SRV
 discovery, and its explicitly unsupported compatibility fallback described in
 [Request behavior](behavior.md#discovery-dispatch-and-selection).
