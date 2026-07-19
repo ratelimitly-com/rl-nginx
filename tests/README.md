@@ -123,6 +123,9 @@ Guard test path note:
 - This makes guard tests measure end-to-end proxy latency instead of local static-file serving only.
 - The backend endpoint `/backend/ok.txt` returns explicit HTTP `200` for clean burst-test accounting.
 - Latency reports sent by the nginx module clamp observed latency to minimum `1ms` (avoids `0ms` artifacts).
+- The module sends those reports only after a valid RateLimitly allow; denial,
+  fail-open/fail-close errors, missing verdicts, timeouts, and aborted clients
+  do not add latency samples.
 
 ## 6) Smoke diagnostic helper
 

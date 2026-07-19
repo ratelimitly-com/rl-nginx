@@ -16,6 +16,9 @@ Changes since `v0.1.0-rc.1`:
   outside independent RateLimitly accounting;
 - drained nginx posted requests after asynchronous verdict callbacks so
   resumed content cannot remain pinned awaiting an unrelated client event;
+- made guard latency feedback require an explicit valid allow and suppress it
+  after denial, request-start failure, dependency fail-open/fail-close,
+  timeout, cardinality mismatch, or client abort;
 - made the HTTP-scope resolver and timeout deterministic for each worker,
   validated bind addresses at configuration time, and bounded failed worker
   initialization retries;

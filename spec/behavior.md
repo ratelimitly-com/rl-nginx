@@ -140,9 +140,19 @@ a usable worker into an outage.
 
 ## Latency reporting
 
-For a main request that used at least one distinct guard and was not denied by
-the module, the nginx log-phase handler MUST attempt one fire-and-forget
-latency report. A module-denied `429` MUST NOT produce a latency report.
+For a main request that used at least one distinct guard, the nginx log-phase
+handler MUST attempt one fire-and-forget latency report only when RateLimitly
+returned a valid, exact-cardinality allow and the admitted request reached log
+phase without a client connection error, timeout, or destruction. Reaching log
+phase represents the request processing that follows consumed admission; the
+resulting HTTP status does not refund or invalidate that admission.
+
+A valid deny, request-start failure, absent or invalid verdict, dependency
+fail-open or fail-close result, response timeout, cardinality mismatch, and
+client abort MUST NOT produce or attempt a latency report. In particular,
+fail-open continuation preserves availability but is not evidence that
+RateLimitly admitted or consumed the request, so it MUST NOT add a guard
+latency sample.
 
 The observed duration starts at the nginx request timestamp and ends when the
 log-phase handler runs. It is clamped to the inclusive unsigned 32-bit range

@@ -297,6 +297,14 @@ route-to-service map. Do not use raw `$host`, `$uri`, request arguments,
 headers, cookies, or user IDs; doing so creates attacker-controlled service
 cardinality and fragments latency history.
 
+The module reports a post-response latency sample only after RateLimitly has
+returned a valid allow and the admitted request reaches nginx log phase without
+a client abort. It does not report valid denials, request-start failures,
+missing or invalid verdicts, dependency fail-open/fail-close outcomes,
+timeouts, cardinality mismatches, or aborted clients. A fail-open request may
+reach content, but it did so without a RateLimitly admission and therefore must
+not affect guard history.
+
 Attach a guard to a protected location:
 
 ```nginx

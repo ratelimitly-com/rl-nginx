@@ -7,7 +7,7 @@ SELF="${SCRIPT_DIR}/lifecycle-regressions.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|admission-contract|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the public lifecycle, outage-policy, enforcement-boundary, and response-cardinality
 regressions against the locked rl-c-client test responder. Every case pins the
@@ -44,7 +44,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|admission-contract|admission-contract-close|admission-contract-open|cardinality|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -350,11 +350,20 @@ run_dns_policy() {
 
 run_guard_latency() {
   local failures=0
+  local fail_policy
   local scenario
 
   prepare_binaries
-  for scenario in guard-pass guard-deny guard-multiple; do
+  for scenario in guard-pass guard-deny guard-multiple \
+      guard-start-fail-open guard-timeout-fail-open guard-aborted-client; do
+    fail_policy=close
+    case "${scenario}" in
+      guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client)
+        fail_policy=open
+        ;;
+    esac
     if ARTIFACT_ROOT="${ARTIFACT_ROOT}/guard" \
+        FAIL_POLICY="${fail_policy}" \
         SKIP_BUILD=1 \
         "${SELF}" "${scenario}"; then
       printf 'PASS %s\n' "${scenario}"
@@ -455,7 +464,7 @@ set_dns_mode() {
 
 dns_failure_mode() {
   case "${MODE}" in
-    dns-missing-srv) printf 'missing-srv\n' ;;
+    dns-missing-srv|guard-start-fail-open) printf 'missing-srv\n' ;;
     dns-bad-target) printf 'bad-target\n' ;;
     dns-timeout) printf 'timeout\n' ;;
     *) return 1 ;;
@@ -464,7 +473,7 @@ dns_failure_mode() {
 
 is_guard_case() {
   case "${MODE}" in
-    guard-pass|guard-deny|guard-multiple) return 0 ;;
+    guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -910,6 +919,14 @@ run_aborted_client_case() {
   if grep -q 'rn: timeout tick' "${ARTIFACT_DIR}/aborted-client-trigger.log"; then
     record_failure "request timer fired after the clients reset their connections"
   fi
+  if [[ "${MODE}" == "guard-aborted-client" ]] \
+      && grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
+    record_failure "client abort without an admission verdict sent a latency report"
+  fi
+  if [[ "${MODE}" == "guard-aborted-client" ]] \
+      && grep -q 'rn: latency_report' "${ARTIFACT_DIR}/aborted-client-trigger.log"; then
+    record_failure "client abort without an admission verdict attempted a latency report"
+  fi
   check_worker_survival "aborted-client cleanup and timer expiry"
   check_rebind_follow_up "aborted-client cleanup"
   check_follow_up "aborted-client cleanup"
@@ -989,14 +1006,17 @@ run_dns_failure_case() {
 
 run_guard_case() {
   local code
+  local error_log_start
   local expected_code
   local expected_guards
   local expected_reports
+  local expect_rate_request
   local scenario
 
   expected_code="200"
   expected_guards=1
   expected_reports=1
+  expect_rate_request=1
   scenario="${MODE}"
 
   case "${MODE}" in
@@ -1013,16 +1033,30 @@ run_guard_case() {
       expected_guards=2
       expected_reports=2
       ;;
+    guard-start-fail-open)
+      scenario="allow"
+      expected_reports=0
+      expect_rate_request=0
+      ;;
+    guard-timeout-fail-open)
+      scenario="drop"
+      expected_reports=0
+      ;;
   esac
 
+  error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
   start_responder "${scenario}" keep 0
   code="$(request_code)"
   if [[ "${code}" != "${expected_code}" ]]; then
     record_failure "${MODE} returned ${code}, expected ${expected_code}"
   fi
-  wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
-    || record_failure "${MODE} responder did not observe the rate request"
-  if ! awk -v guards="${expected_guards}" '
+  if (( expect_rate_request > 0 )); then
+    wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
+      || record_failure "${MODE} responder did not observe the rate request"
+  elif grep -q '"event":"rate_request"' "${RESPONDER_LOG}"; then
+    record_failure "${MODE} unexpectedly reached the responder"
+  fi
+  if (( expect_rate_request > 0 )) && ! awk -v guards="${expected_guards}" '
       /"event":"rate_request"/ {
         count++
         if (index($0, "\"guards\":" guards ",\"resources\":1,") == 0) bad = 1
@@ -1046,9 +1080,25 @@ run_guard_case() {
     fi
   else
     sleep 0.2
+    tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
+      >"${ARTIFACT_DIR}/guard-trigger.log"
     if grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
-      record_failure "${MODE} sent a latency report after a denied request"
+      record_failure "${MODE} sent a latency report without a valid allow verdict"
     fi
+    if grep -q 'rn: latency_report' "${ARTIFACT_DIR}/guard-trigger.log"; then
+      record_failure "${MODE} attempted a latency report without a valid allow verdict"
+    fi
+  fi
+
+  if [[ "${MODE}" == "guard-start-fail-open" ]]; then
+    if ! grep -q 'rn: async_start_failed' "${NGINX_ERROR_LOG}"; then
+      record_failure "${MODE} did not exercise asynchronous request startup failure"
+    fi
+    set_dns_mode normal
+    sleep "${DNS_REFRESH_SEC}"
+  elif [[ "${MODE}" == "guard-timeout-fail-open" ]] \
+      && ! grep -q 'rn: result error status=-2' "${NGINX_ERROR_LOG}"; then
+    record_failure "${MODE} did not complete through the timeout callback"
   fi
 
   check_worker_survival "${MODE} decision"
@@ -1477,11 +1527,11 @@ run_one() {
 
   case "${MODE}" in
     timeout) run_timeout_case ;;
-    aborted-client) run_aborted_client_case ;;
+    aborted-client|guard-aborted-client) run_aborted_client_case ;;
     steering-rebind) run_steering_rebind_case ;;
     outage) run_outage_case ;;
     dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;
-    guard-pass|guard-deny|guard-multiple) run_guard_case ;;
+    guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open) run_guard_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     worker-resolver-scope) run_worker_resolver_scope_case ;;
