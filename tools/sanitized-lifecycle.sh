@@ -67,7 +67,10 @@ restore_rclient() {
 trap restore_rclient EXIT
 
 export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=1:strict_string_checks=1}"
-export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1:print_stacktrace=1}"
+# Keep UBSan recoverable so the exact report scanner, rather than process exit
+# timing, decides which diagnostics are accepted. Every report outside the
+# reviewed upstream-nginx signatures still fails the gate.
+export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=0:print_stacktrace=1}"
 # nginx -t and nginx -s control commands exit without tearing down the
 # configuration-cycle pools they initialized. Suppress leak detection only for
 # those short-lived subprocesses; the runtime master, workers, and standalone

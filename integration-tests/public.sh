@@ -49,6 +49,7 @@ case "${SKIP_BUILD}" in
 esac
 
 RCLIENT_DIR="$("${RN_ROOT}/tools/resolve-rl-c-client.sh")"
+make -C "${RCLIENT_DIR}" test-responder
 if [[ ! -f "${NGINX_SRC}/auto/configure" ]]; then
   echo "nginx source not initialized: ${NGINX_SRC}" >&2
   echo "Run: git submodule update --init upstream-nginx" >&2

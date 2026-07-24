@@ -188,8 +188,9 @@ nginx master/worker shutdown. It is disabled only for short-lived `nginx -t`
 and `nginx -s` processes, whose upstream exits retain the entire
 configuration-cycle pool and would otherwise report the same non-runtime
 allocations for every case. UBSan's `nonnull-attribute` category remains
-enabled. The final scan accepts only the exact, reviewed upstream-nginx
-zero-length-copy report at `src/core/ngx_string.c:586`; every other UBSan
+enabled and reports remain recoverable until the final scan. That scan accepts
+only the exact, reviewed upstream-nginx diagnostics at
+`src/core/ngx_string.c:84` and `src/core/ngx_string.c:586`; every other UBSan
 report remains fatal.
 
 The sanitizer build alone enables the non-public

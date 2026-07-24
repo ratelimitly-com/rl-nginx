@@ -350,9 +350,9 @@ make sanitizers
 ASan, UBSan, and LeakSanitizer cover runtime shutdown. Only short-lived
 `nginx -t` and `nginx -s` subprocesses disable leak detection because upstream
 configuration pools are not destroyed on those exit paths. UBSan remains fully
-enabled; the artifact scan accepts only the reviewed upstream-nginx
-`src/core/ngx_string.c:586` zero-length-copy diagnostic and rejects every other
-runtime error.
+enabled and recoverable until the artifact scan. That scan accepts only the
+reviewed upstream-nginx `src/core/ngx_string.c:84` and
+`src/core/ngx_string.c:586` diagnostics and rejects every other runtime error.
 
 The optional full-stack gate is:
 

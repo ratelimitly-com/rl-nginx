@@ -16,9 +16,11 @@ RUNNER = ROOT / "tools" / "sanitized-lifecycle.sh"
 LIFECYCLE = ROOT / "integration-tests" / "lifecycle-regressions.sh"
 SCANNER = ROOT / "tools" / "check-sanitizer-reports.sh"
 ALLOWLIST = ROOT / "tools" / "sanitizer-known-reports.txt"
-KNOWN_UPSTREAM_REPORT = (
+KNOWN_UPSTREAM_REPORTS = (
+    "src/core/ngx_string.c:84:5: runtime error: null pointer passed as "
+    "argument 2, which is declared to never be null",
     "src/core/ngx_string.c:586:19: runtime error: null pointer passed as "
-    "argument 2, which is declared to never be null"
+    "argument 2, which is declared to never be null",
 )
 
 
@@ -52,6 +54,11 @@ def validate(documents: dict[str, str]) -> list[str]:
     if default_asan not in runner:
         failures.append("runtime LeakSanitizer is not enabled by default")
     if (
+        'export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=0:print_stacktrace=1}"'
+        not in runner
+    ):
+        failures.append("UBSan does not defer acceptance to the exact report scanner")
+    if (
         'RN_NGINX_ONESHOT_ASAN_OPTIONS="${ASAN_OPTIONS}:detect_leaks=0"'
         not in runner
     ):
@@ -82,8 +89,8 @@ def validate(documents: dict[str, str]) -> list[str]:
     accepted = [
         line for line in allowlist.splitlines() if line and not line.startswith("#")
     ]
-    if accepted != [KNOWN_UPSTREAM_REPORT]:
-        failures.append("sanitizer allowlist is not the one exact reviewed nginx report")
+    if accepted != list(KNOWN_UPSTREAM_REPORTS):
+        failures.append("sanitizer allowlist is not the exact reviewed nginx reports")
     return failures
 
 
@@ -103,6 +110,17 @@ def negative_fixture_failures(documents: dict[str, str]) -> list[str]:
         (
             "global sanitizer exclusion",
             {**documents, "build": documents["build"] + "\n-fno-sanitize=nonnull-attribute\n"},
+        ),
+        (
+            "premature UBSan halt",
+            {
+                **documents,
+                "runner": documents["runner"].replace(
+                    "halt_on_error=0:print_stacktrace=1",
+                    "halt_on_error=1:print_stacktrace=1",
+                    1,
+                ),
+            },
         ),
         (
             "divergent nginx sanitizer flags",
@@ -182,7 +200,9 @@ def scanner_fixture_failures() -> list[str]:
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="rl-nginx-sanitizer-policy-") as tmp:
         log = Path(tmp) / "nginx-error.log"
-        log.write_text(f"prefix: {KNOWN_UPSTREAM_REPORT}\n")
+        log.write_text(
+            "".join(f"prefix: {report}\n" for report in KNOWN_UPSTREAM_REPORTS)
+        )
         accepted = subprocess.run(
             [str(SCANNER), tmp], capture_output=True, text=True, check=False
         )
@@ -220,7 +240,7 @@ def main() -> int:
         return 1
     print(
         "PASS sanitizer policy is shared and narrowly scoped "
-        "(9 red-case mutations, 2 scanner fixtures)"
+        "(10 red-case mutations, 2 scanner fixtures)"
     )
     return 0
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+PUBLIC_SUITE = ROOT / "integration-tests" / "public.sh"
 
 
 def run(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -107,6 +108,12 @@ def check_committed_whitespace_failure() -> None:
 
 
 def check_public_test_reuses_requested_build() -> None:
+    public_suite = PUBLIC_SUITE.read_text()
+    if 'make -C "${RCLIENT_DIR}" test-responder' not in public_suite:
+        raise SystemExit(
+            "FAIL Makefile gate oracle: public suite does not materialize its responder"
+        )
+
     dry_check = run(
         "make",
         "--no-print-directory",
@@ -149,7 +156,7 @@ def main() -> None:
     check_public_test_reuses_requested_build()
     print(
         "PASS Makefile failure propagation and build reuse "
-        "(fetch, syntax, whitespace, static check)"
+        "(fetch, syntax, whitespace, static check, responder fixture)"
     )
 
 

@@ -14,9 +14,11 @@ Changes since `v0.1.0-rc.1`:
   and made dynamic relocation exercise four representative behavior groups;
 - enabled LeakSanitizer for probes and nginx runtime shutdown with a narrow
   one-shot nginx config/control exception, removed the build-wide UBSan
-  category exclusion, replaced it with one exact reviewed upstream-nginx
-  report signature, and centralized sanitizer flags across dependency, module,
-  and nginx builds;
+  category exclusion, replaced it with exact reviewed upstream-nginx report
+  signatures, and centralized sanitizer flags across dependency, module, and
+  nginx builds;
+- made the public suite materialize its locked responder fixture explicitly so
+  clean checkouts exercise the same retained nginx binary as existing trees;
 - moved RateLimitly enforcement to the final pre-content admission point so
   nginx access rejection and routing happen before resource consumption;
 - defined a valid allow as consumed admission directly into content processing

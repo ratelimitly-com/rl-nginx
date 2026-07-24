@@ -85,10 +85,12 @@ anonymous, clean checkouts:
    exclusion. Leak detection is disabled only in short-lived `nginx -t` and
    `nginx -s` subprocesses, where upstream nginx intentionally exits without
    destroying configuration pools; real runtime shutdown and standalone C
-   probes retain leak detection. The report scanner accepts only the known
-   upstream `src/core/ngx_string.c:586` zero-length-copy `nonnull-attribute`
-   diagnostic shared by the two locked nginx releases; the check remains
-   enabled and every other UBSan report fails the gate.
+   probes retain leak detection. UBSan remains recoverable until the artifact
+   scan so acceptance does not depend on process-exit timing. The scanner
+   accepts only the reviewed upstream `src/core/ngx_string.c:84` and
+   `src/core/ngx_string.c:586` `nonnull-attribute` diagnostics present across
+   the two locked nginx releases; the check remains enabled and every other
+   UBSan report fails the gate.
 4. Keep `make test-internal` optional. It requires private service credentials
    and may supplement a release decision, but neither contributors nor public
    CI need it and its absence cannot fail the public release.

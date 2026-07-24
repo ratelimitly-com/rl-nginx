@@ -154,9 +154,11 @@ runtime shutdown. Leak detection is disabled only for short-lived `nginx -t`
 and `nginx -s` subprocesses, which exit without tearing down upstream nginx's
 configuration-cycle pools; no allocator-stack suppression hides runtime
 module allocations. The `nonnull-attribute` check also remains enabled. The
-artifact scan accepts one exact upstream-nginx zero-length-copy diagnostic at
-`src/core/ngx_string.c:586`; any other UBSan diagnostic, including one in
-module or C-client code, fails the gate.
+artifact scan accepts only the exact reviewed upstream-nginx diagnostics at
+`src/core/ngx_string.c:84` and `src/core/ngx_string.c:586`; any other UBSan
+diagnostic, including one in module or C-client code, fails the gate. UBSan
+reports remain recoverable until that scan so known upstream diagnostics do not
+prevent the lifecycle suite from running.
 
 These targets have distinct acceptance roles:
 
