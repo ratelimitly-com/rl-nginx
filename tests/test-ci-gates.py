@@ -29,6 +29,7 @@ REQUIRED_MARKERS = {
     "supported-build": ("module_mode:", "release-1.30.2", "release-1.31.1"),
     "architecture": (
         "runs-on: ubuntu-24.04-arm",
+        "fetch-depth: 0",
         'test "$(uname -m)" = "aarch64"',
     ),
 }
@@ -278,6 +279,16 @@ def negative_fixture_failures(text: str, nginx_gitlink: str) -> list[str]:
     if not validate(shallow_hygiene, nginx_gitlink):
         failures.append("validator accepted a whitespace job without revision history")
 
+    shallow_architecture = mutate_job(
+        text, "architecture", "          fetch-depth: 0\n", ""
+    )
+    if shallow_architecture == text:
+        failures.append("negative fixture could not make the architecture checkout shallow")
+    elif not validate(shallow_architecture, nginx_gitlink):
+        failures.append(
+            "validator accepted an architecture check without revision history"
+        )
+
     no_whitespace_base = re.sub(
         r"\n        env:\n          WHITESPACE_BASE:.*(?=\n        run: make whitespace)",
         "",
@@ -355,7 +366,7 @@ def main() -> int:
 
     mutation_count = (
         len({target for targets in REQUIRED_COMMANDS.values() for target in targets})
-        + 11
+        + 12
     )
     print(
         "PASS named CI gates execute and propagate failures: "

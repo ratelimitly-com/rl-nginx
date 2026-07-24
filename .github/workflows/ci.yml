@@ -200,6 +200,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+          fetch-depth: 0
 
       - name: Verify native architecture
         run: test "$(uname -m)" = "aarch64"
