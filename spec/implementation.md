@@ -207,7 +207,7 @@ The module does not implement a metrics exporter or health endpoint.
 
 ## Conformance tests
 
-The required public gate MUST cover at least:
+The required static contributor gate (`make check`) MUST cover at least:
 
 - directive parsing, defaults, inheritance, and invalid configuration;
 - dependency bootstrap, lock verification, and immutable workflow pins;
@@ -218,9 +218,15 @@ The required public gate MUST cover at least:
   client abort;
 - timeout, aborted client, source-port steering, reload, and shutdown lifecycle;
 - missing SRV, invalid SRV target, DNS timeout, and same-worker recovery;
-- HTTP-scope resolver selection despite a location-level override;
-- dynamic-module relocation; and
+- HTTP-scope resolver selection despite a location-level override; and
 - whitespace and script syntax.
+
+That gate MUST reject dynamic `BUILD_FLAGS` and MUST exercise the same static
+nginx binary it builds from the caller-supplied flags. Release validation MUST
+separately build and load a relocated dynamic module for every supported nginx
+line and architecture. The relocated module MUST pass final-admission,
+resolver-scope, enforcement-boundary, and guard/latency behavior, not only
+`nginx -t` or a load smoke test.
 
 Required gate implementations MUST have a negative fixture that removes or
 invalidates the behavior they claim to protect and observes a non-zero result.
@@ -229,7 +235,8 @@ comments or substrings. Source-backed specification checks MUST ignore comments
 and disabled preprocessor blocks. Whitespace validation MUST inspect committed
 revision content as well as working-tree changes.
 
-ASan/UBSan lifecycle runs MUST additionally exercise repeated timeout,
+ASan/UBSan/LSan lifecycle runs MUST cover both supported nginx releases and
+MUST additionally exercise repeated timeout,
 cancellation, steering, reload, and shutdown behavior. A test-only build MUST
 inject every module-owned resolver allocation failure, resolver-start failure,
 partial worker-initialization failure, C-client creation failure, and candidate
@@ -238,5 +245,12 @@ that an SSI subrequest posted during asynchronous phase resumption is drained
 without another client event. It MUST verify same-worker survival, stable
 socket counts, bounded worker-initialization retries, transactional rebind
 retention, exact fail-close `429` outcomes for admission-affecting faults, and
-clean shutdown without `SIGKILL`. Optional
-internal full-stack validation is not part of the public conformance boundary.
+clean shutdown without `SIGKILL`. Leak detection MAY be disabled for the
+short-lived `nginx -t` and `nginx -s` subprocesses because upstream nginx
+retains its configuration-cycle pools there, but it MUST remain enabled for
+standalone probes and real master/worker shutdown. A build-wide
+sanitizer-category exclusion MUST NOT be used for module sources. Optional
+report filtering MUST match a check and upstream-nginx source location exactly;
+it MUST NOT accept a report from module or C-client code. Optional internal
+full-stack validation is supplemental and is not part of the public conformance
+boundary.

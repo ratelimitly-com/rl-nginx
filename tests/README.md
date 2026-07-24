@@ -2,9 +2,9 @@
 
 This optional manual harness shows how to build nginx with the rl-nginx module,
 run it with a test config, and validate traffic against a running RateLimitly
-service. It is not the public release gate: use `make check
-BUILD_FLAGS="--clean"` for deterministic tests that need no service, tenant, or
-credential.
+service. It is not a public acceptance gate: use `make check` for deterministic
+static contributor tests that need no service, tenant, or credential, then use
+the separately documented dynamic and sanitizer gates for release evidence.
 
 This requires the locked public `rl-c-client` release so nginx can link against
 the compiled C client library. Build and test helpers fetch or verify that
@@ -95,11 +95,13 @@ required CI and against `rl-c-client/main` in the scheduled drift workflow.
 prove an invalid early shell script, failed explicit client resolution, and
 committed whitespace all fail; reject a dirty default client while allowing an
 explicit dirty override; remove each required CI command, diverge the nginx
-gitlink from its matrix, weaken drift permissions, float an action/container,
-and disable executable C defaults to prove the meta-checks reject those
-mutations; and exercise exact HTTP-status, forced-shutdown, complete
-lifecycle-manifest, and DNS-timeout oracles. These tests require no nginx
-worker or remote service.
+gitlink from its matrix, remove native Arm or stable-line sanitizer coverage,
+weaken drift permissions, float an action/container, disable runtime leak
+detection or broaden a sanitizer exclusion, and disable executable C defaults
+to prove the meta-checks reject those mutations. They also require `make check`
+to reuse its requested static binary and exercise exact HTTP-status,
+forced-shutdown, complete lifecycle-manifest, and DNS-timeout oracles. These
+tests require no nginx worker or remote service.
 
 ## 3) Run nginx with the test config
 

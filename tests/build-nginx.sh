@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${RN_DIR}/tools/sanitizer-flags.env"
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   echo "Usage: $0 /path/to/nginx-src [--dynamic] [--compat] [--clean] [--debug] [--sanitize]"
   exit 0
@@ -31,7 +35,6 @@ for arg in "${@:2}"; do
       ;;
   esac
 done
-RN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 C_CLIENT="$("$RN_DIR/tools/resolve-rl-c-client.sh")"
 
 if [[ ! -d "$NGX_SRC" ]]; then
@@ -55,17 +58,9 @@ fi
 FLAGS=()
 CC_OPT=()
 if [[ "$SANITIZE" == "--sanitize" ]]; then
-  # nginx formats an empty query string by passing a null source and zero
-  # length to ngx_cpymem(). GCC's nonnull-attribute check reports that upstream
-  # idiom on every request, so disable only that UBSan category for nginx.
-  CC_OPT+=(
-    -O1
-    -g
-    -fsanitize=address,undefined
-    -fno-sanitize=nonnull-attribute
-    -fno-omit-frame-pointer
-  )
-  FLAGS+=("--with-ld-opt=-fsanitize=address,undefined")
+  read -r -a sanitizer_compile_flags <<<"${RN_SANITIZER_COMPILE_FLAGS}"
+  CC_OPT+=("${sanitizer_compile_flags[@]}")
+  FLAGS+=("--with-ld-opt=${RN_SANITIZER_LINK_FLAGS}")
 fi
 if [[ "${RN_TEST_FAULT_INJECTION:-0}" == "1" ]]; then
   CC_OPT+=(-DRN_TEST_FAULT_INJECTION=1)

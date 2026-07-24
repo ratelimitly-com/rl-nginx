@@ -10,7 +10,9 @@ KEEP_SANITIZED_BUILD ?= 0
 SH_SCRIPTS := \
 	tools/fetch-rl-c-client.sh \
 	tools/resolve-rl-c-client.sh \
+	tools/sanitizer-flags.env \
 	tools/build-nginx.sh \
+	tools/check-sanitizer-reports.sh \
 	tools/sanitized-lifecycle.sh \
 	tests/build-nginx.sh \
 	tests/test-config.sh \
@@ -39,26 +41,28 @@ PY_SCRIPTS := \
 	tests/test-dependency-drift-workflow.py \
 	tests/test-workflow-pins.py \
 	tests/test-ci-gates.py \
+	tests/test-sanitizer-policy.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test dynamic-relocation-test test sanitizers test-internal whitespace
+.PHONY: help check check-build-flags fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test public-test-built dynamic-relocation-test test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make check          required public-readiness gate' \
+		'  make check          required static contributor gate' \
 		'  make build          resolve C client and build nginx/module' \
 		'  make dependency-bootstrap-test  deterministic dependency gate' \
 		'  make dependency-drift-workflow-test  scheduled-probe isolation gate' \
 		'  make workflow-pin-test  immutable GitHub Actions gate' \
 		'  make ci-gates-test  named CI gate structure test' \
+		'  make sanitizer-policy-test  sanitizer scope and suppression test' \
 		'  make spec-consistency-test  source-backed specification gate' \
 		'  make make-gates-test  negative tests for Makefile failure propagation' \
 		'  make lifecycle-oracles-test  negative tests for lifecycle assertions' \
 		'  make test           unit, config, and public integration tests' \
-		'  make dynamic-relocation-test  relocated dynamic-module gate' \
-		'  make sanitizers     ASan/UBSan lifecycle gate' \
-		'  make test-internal  optional private full-stack validation' \
+		'  make dynamic-relocation-test  required release-only dynamic gate' \
+		'  make sanitizers     required release-only ASan/UBSan/LSan gate' \
+		'  make test-internal  optional supplemental private validation' \
 		'' \
 		'Variables:' \
 		'  RCLIENT_DIR=<intentional override; default is locked ./_deps checkout>' \
@@ -67,7 +71,13 @@ help:
 		'  BUILD_FLAGS="--clean --debug"' \
 		'  SANITIZER_RUNS=3 KEEP_SANITIZED_BUILD=0'
 
-check: fetch syntax unit build config-test public-test whitespace
+check: check-build-flags fetch syntax unit build config-test public-test-built whitespace
+
+check-build-flags:
+	@if [[ -n "$(filter --dynamic,$(BUILD_FLAGS))" ]]; then \
+		echo 'make check validates a static build; use make build with --dynamic followed by make dynamic-relocation-test' >&2; \
+		exit 2; \
+	fi
 
 fetch:
 	@set -e; if [[ -n "$(RCLIENT_DIR)" ]]; then \
@@ -96,6 +106,9 @@ workflow-pin-test:
 ci-gates-test:
 	python3 tests/test-ci-gates.py
 
+sanitizer-policy-test:
+	python3 tests/test-sanitizer-policy.py
+
 spec-consistency-test:
 	python3 tests/test-spec-consistency.py
 
@@ -105,7 +118,7 @@ make-gates-test:
 lifecycle-oracles-test:
 	./tests/test-lifecycle-oracles.sh
 
-unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test spec-consistency-test make-gates-test lifecycle-oracles-test
+unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test spec-consistency-test make-gates-test lifecycle-oracles-test
 	python3 integration-tests/test_local_dns_server.py
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-c-client-contract.sh
 	./tests/test-addr-records.sh
@@ -120,7 +133,10 @@ config-test:
 	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_BIN="$(NGINX_BIN)" ./tests/test-config.sh
 
 public-test: fetch
-	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" ./integration-tests/public.sh
+	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" NGINX_BIN="$(NGINX_BIN)" SKIP_BUILD=0 ./integration-tests/public.sh
+
+public-test-built: fetch
+	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" NGINX_BIN="$(NGINX_BIN)" SKIP_BUILD=1 ./integration-tests/public.sh
 
 dynamic-relocation-test: fetch
 	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" ./integration-tests/dynamic-module-relocation.sh

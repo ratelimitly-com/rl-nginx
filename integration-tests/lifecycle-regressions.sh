@@ -131,6 +131,15 @@ record_failure() {
   CASE_FAILED=1
 }
 
+run_nginx_oneshot() {
+  local -a oneshot_env=()
+
+  if [[ -n "${RN_NGINX_ONESHOT_ASAN_OPTIONS:-}" ]]; then
+    oneshot_env+=("ASAN_OPTIONS=${RN_NGINX_ONESHOT_ASAN_OPTIONS}")
+  fi
+  env "${oneshot_env[@]}" "${NGINX_BIN}" "$@"
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
@@ -144,7 +153,7 @@ stop_nginx() {
   local attempt
 
   if [[ -n "${NGINX_PID}" ]] && kill -0 "${NGINX_PID}" 2>/dev/null; then
-    "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s quit \
+    run_nginx_oneshot -p "${PREFIX}/" -c "${NGINX_CONF}" -s quit \
       >/dev/null 2>&1 || true
     for (( attempt = 0; attempt < 30; attempt++ )); do
       if ! kill -0 "${NGINX_PID}" 2>/dev/null; then
@@ -744,7 +753,7 @@ start_nginx() {
   local attempt
   local code
 
-  "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -t \
+  run_nginx_oneshot -p "${PREFIX}/" -c "${NGINX_CONF}" -t \
     >"${NGINX_CONFIG_LOG}" 2>&1 \
     || fail "nginx configuration failed; see ${NGINX_CONFIG_LOG}"
 
@@ -892,7 +901,7 @@ check_reload() {
   local old_worker="${ORIGINAL_WORKER_PID}"
   local new_worker=""
 
-  "${NGINX_BIN}" -p "${PREFIX}/" -c "${NGINX_CONF}" -s reload \
+  run_nginx_oneshot -p "${PREFIX}/" -c "${NGINX_CONF}" -s reload \
     >/dev/null 2>&1 \
     || {
       record_failure "nginx reload command failed"

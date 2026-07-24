@@ -179,10 +179,69 @@ jobs:
       - name: Public integration suite
         run: make public-test
 
+  architecture:
+    name: architecture (aarch64, ${{ matrix.nginx.line }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          submodules: true
+          fetch-depth: 0
+
+      - name: Verify native architecture
+        run: test "$(uname -m)" = "aarch64"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
+      - name: Static contributor gate
+        run: make check BUILD_FLAGS="--clean --debug"
+
+      - name: Dynamic module build
+        run: make build BUILD_FLAGS="--dynamic --compat --clean --debug"
+
+      - name: Dynamic module relocation and behavior
+        run: make dynamic-relocation-test
+
   sanitizers:
-    name: sanitizers
+    name: sanitizers (${{ matrix.nginx.line }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
 
     steps:
       - name: Check out rl-nginx
@@ -198,6 +257,12 @@ jobs:
 
       - name: Fetch locked rl-c-client release
         run: make fetch
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
 
       - name: Run sanitized lifecycle gate
         run: SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 make sanitizers

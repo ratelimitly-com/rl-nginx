@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+DYNAMIC_RELOCATION = ROOT / "integration-tests" / "dynamic-module-relocation.sh"
 JOB_HEADER = re.compile(r"^  ([A-Za-z][A-Za-z0-9-]*):$")
 
 REQUIRED_COMMANDS = {
@@ -19,12 +20,18 @@ REQUIRED_COMMANDS = {
     "supported-build": ("build", "dynamic-relocation-test"),
     "configuration": ("config-test",),
     "public-behavior": ("public-test",),
+    "architecture": ("check", "build", "dynamic-relocation-test"),
     "sanitizers": ("sanitizers",),
 }
 
 REQUIRED_MARKERS = {
     "hygiene": ("fetch-depth: 0", "WHITESPACE_BASE:"),
     "supported-build": ("module_mode:", "release-1.30.2", "release-1.31.1"),
+    "architecture": (
+        "runs-on: ubuntu-24.04-arm",
+        "fetch-depth: 0",
+        'test "$(uname -m)" = "aarch64"',
+    ),
 }
 
 RUN_LINE = re.compile(r"^(\s*)(?:-\s*)?run:\s*(.*)$")
@@ -162,16 +169,27 @@ def validate(text: str, nginx_gitlink: str) -> list[str]:
             if fragment not in block:
                 failures.append(f"job {name!r} lacks {fragment!r}")
 
-    for name in ("supported-build", "configuration", "public-behavior"):
-        block = blocks.get(name, "")
-        entries = NGINX_MATRIX_ENTRY.findall(block)
-        mainline = [entry for entry in entries if entry[0] == "mainline"]
-        if len(mainline) != 1:
-            failures.append(f"job {name!r} must declare one mainline nginx entry")
-        elif mainline[0][2] != nginx_gitlink:
-            failures.append(
-                f"job {name!r} mainline commit does not match the nginx gitlink"
-            )
+    matrix_jobs = (
+        "supported-build",
+        "configuration",
+        "public-behavior",
+        "architecture",
+        "sanitizers",
+    )
+    expected_entries = NGINX_MATRIX_ENTRY.findall(blocks.get("supported-build", ""))
+    if len(expected_entries) != 2 or {entry[0] for entry in expected_entries} != {
+        "stable",
+        "mainline",
+    }:
+        failures.append("supported-build must declare exactly stable and mainline nginx")
+    for name in matrix_jobs:
+        entries = NGINX_MATRIX_ENTRY.findall(blocks.get(name, ""))
+        if entries != expected_entries:
+            failures.append(f"job {name!r} nginx matrix diverges from supported-build")
+
+    mainline = [entry for entry in expected_entries if entry[0] == "mainline"]
+    if len(mainline) != 1 or mainline[0][2] != nginx_gitlink:
+        failures.append("required nginx matrices do not match the nginx gitlink")
 
     if "permissions:\n  contents: read" not in text:
         failures.append("workflow must retain least-privilege contents: read permissions")
@@ -188,6 +206,43 @@ def validate(text: str, nginx_gitlink: str) -> list[str]:
     ):
         failures.append("workflow must cancel superseded runs using a PR/ref concurrency group")
 
+    return failures
+
+
+def mutate_job(text: str, name: str, old: str, new: str) -> str:
+    lines = text.splitlines(keepends=True)
+    start = next(
+        (index for index, line in enumerate(lines) if line == f"  {name}:\n"),
+        None,
+    )
+    if start is None:
+        return text
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if JOB_HEADER.match(lines[index].rstrip("\n")) is not None
+        ),
+        len(lines),
+    )
+    block = "".join(lines[start:end])
+    mutated = block.replace(old, new, 1)
+    return "".join((*lines[:start], mutated, *lines[end:]))
+
+
+def validate_dynamic_relocation(text: str) -> list[str]:
+    failures: list[str] = []
+    if 'NGINX_LOAD_MODULE="${RUNTIME_MODULE}"' not in text:
+        failures.append("dynamic behavior does not load the relocated module")
+    for case in (
+        "admission-contract",
+        "worker-resolver-scope",
+        "enforcement-boundary",
+        "guard-latency",
+    ):
+        command = f'"${{SCRIPT_DIR}}/lifecycle-regressions.sh" {case}'
+        if command not in text:
+            failures.append(f"dynamic behavior omits {case!r}")
     return failures
 
 
@@ -224,6 +279,16 @@ def negative_fixture_failures(text: str, nginx_gitlink: str) -> list[str]:
     if not validate(shallow_hygiene, nginx_gitlink):
         failures.append("validator accepted a whitespace job without revision history")
 
+    shallow_architecture = mutate_job(
+        text, "architecture", "          fetch-depth: 0\n", ""
+    )
+    if shallow_architecture == text:
+        failures.append("negative fixture could not make the architecture checkout shallow")
+    elif not validate(shallow_architecture, nginx_gitlink):
+        failures.append(
+            "validator accepted an architecture check without revision history"
+        )
+
     no_whitespace_base = re.sub(
         r"\n        env:\n          WHITESPACE_BASE:.*(?=\n        run: make whitespace)",
         "",
@@ -238,12 +303,48 @@ def negative_fixture_failures(text: str, nginx_gitlink: str) -> list[str]:
         failures.append("negative fixture could not mutate the nginx matrix commit")
     elif not validate(mismatched_gitlink, nginx_gitlink):
         failures.append("validator accepted an nginx matrix that omitted the gitlink")
+
+    x64_architecture = mutate_job(
+        text, "architecture", "runs-on: ubuntu-24.04-arm", "runs-on: ubuntu-latest"
+    )
+    if x64_architecture == text:
+        failures.append("negative fixture could not remove native aarch64 execution")
+    elif not validate(x64_architecture, nginx_gitlink):
+        failures.append("validator accepted an architecture job on x86_64")
+
+    stable_entry = (
+        "          - line: stable\n"
+        "            ref: release-1.30.2\n"
+        "            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c\n"
+    )
+    one_line_sanitizers = mutate_job(text, "sanitizers", stable_entry, "")
+    if one_line_sanitizers == text:
+        failures.append("negative fixture could not remove stable sanitizers")
+    elif not validate(one_line_sanitizers, nginx_gitlink):
+        failures.append("validator accepted sanitizers for only one nginx line")
+    return failures
+
+
+def dynamic_negative_fixture_failures(text: str) -> list[str]:
+    failures: list[str] = []
+    for case in (
+        "admission-contract",
+        "worker-resolver-scope",
+        "enforcement-boundary",
+        "guard-latency",
+    ):
+        command = f'"${{SCRIPT_DIR}}/lifecycle-regressions.sh" {case}'
+        mutated = text.replace(command, f"# removed {case}", 1)
+        if mutated == text:
+            failures.append(f"negative fixture could not remove dynamic {case!r}")
+        elif not validate_dynamic_relocation(mutated):
+            failures.append(f"validator accepted dynamic behavior without {case!r}")
     return failures
 
 
 def main() -> int:
-    if not WORKFLOW.is_file():
-        print(f"FAIL CI gates: missing {WORKFLOW}", file=sys.stderr)
+    if not WORKFLOW.is_file() or not DYNAMIC_RELOCATION.is_file():
+        print("FAIL CI gates: workflow or dynamic relocation script is missing", file=sys.stderr)
         return 1
 
     nginx_gitlink = nginx_gitlink_commit()
@@ -252,15 +353,21 @@ def main() -> int:
         return 1
 
     text = WORKFLOW.read_text()
+    dynamic_relocation = DYNAMIC_RELOCATION.read_text()
     failures = validate(text, nginx_gitlink)
     failures.extend(negative_fixture_failures(text, nginx_gitlink))
+    failures.extend(validate_dynamic_relocation(dynamic_relocation))
+    failures.extend(dynamic_negative_fixture_failures(dynamic_relocation))
 
     if failures:
         for failure in failures:
             print(f"FAIL CI gates: {failure}", file=sys.stderr)
         return 1
 
-    mutation_count = len({target for targets in REQUIRED_COMMANDS.values() for target in targets}) + 5
+    mutation_count = (
+        len({target for targets in REQUIRED_COMMANDS.values() for target in targets})
+        + 12
+    )
     print(
         "PASS named CI gates execute and propagate failures: "
         f"{', '.join(REQUIRED_COMMANDS)} ({mutation_count} red-case mutations)"

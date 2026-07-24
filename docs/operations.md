@@ -320,10 +320,10 @@ and prove a valid decision after recovery. Do not publish raw configuration,
 
 ## Public and internal validation boundary
 
-The required public gate is:
+The required static contributor gate is:
 
 ```sh
-make check BUILD_FLAGS="--clean"
+make check
 ```
 
 It uses the locked public C-client test responder, strict local DNS fixture,
@@ -334,13 +334,25 @@ same-worker recovery, timeouts, aborted clients, steering rebinds, guards,
 malformed responses, response cardinality, reload, and clean shutdown. The
 responder's `--listen` option exists only to bind that local UDP test fixture;
 it is not a RateLimitly server option or a deployable server-address feature.
+The target tests the exact static binary produced from its `BUILD_FLAGS` and
+rejects dynamic mode.
 
-Run the sanitizer lifecycle gate separately when changing request ownership or
-asynchronous behavior:
+Release validation additionally runs relocated dynamic behavior on both
+supported architectures and nginx lines, and runs the sanitizer lifecycle gate
+against both nginx lines on `x86_64`:
 
 ```sh
+make build BUILD_FLAGS="--dynamic --compat --clean --debug"
+make dynamic-relocation-test
 make sanitizers
 ```
+
+ASan, UBSan, and LeakSanitizer cover runtime shutdown. Only short-lived
+`nginx -t` and `nginx -s` subprocesses disable leak detection because upstream
+configuration pools are not destroyed on those exit paths. UBSan remains fully
+enabled and recoverable until the artifact scan. That scan accepts only the
+reviewed upstream-nginx `src/core/ngx_string.c:84` and
+`src/core/ngx_string.c:586` diagnostics and rejects every other runtime error.
 
 The optional full-stack gate is:
 
@@ -350,7 +362,8 @@ make test-internal
 
 Its default local mode requires the private sibling `rl` workspace and tenant
 management tooling. Its external mode can target an existing test server and
-tenant. It is not required for public contributors or the public release gate,
+tenant. It is supplemental and is not required for public contributors or the
+public release matrix,
 and its credential-bearing artifacts require the handling described above.
 See the [integration-test guide](../integration-tests/README.md) for exact
 commands, prerequisites, environment variables, and artifact locations.
