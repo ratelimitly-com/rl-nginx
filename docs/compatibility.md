@@ -77,8 +77,8 @@ anonymous, clean checkouts:
 2. On both architectures and nginx releases, build the dynamic module, relocate
    it with its matching nginx binary, reject RPATH/RUNPATH and a shared
    `librclient.so`, and run final-admission, resolver-scope,
-   enforcement-boundary, and guard/latency behavior through that relocated
-   module.
+   enforcement-boundary, bounded-UDP-ingress, steering/latency ordering, and
+   guard/latency behavior through that relocated module.
 3. On `x86_64`, run the complete lifecycle and fault-injection suite under
    ASan, UBSan, and LeakSanitizer against both supported nginx releases. The
    category set applies to nginx and module code without a build-wide
@@ -103,6 +103,21 @@ dynamic build and relocation sequence.
 The release notes must list the exact nginx release, C-client tag and SHA,
 operating system, architecture, compiler, module mode, and sanitizer result
 used for the release decision.
+
+## Deliberate validation boundaries
+
+The public-preview gates make source and protocol inputs immutable where they
+define the supported artifact, but they do not claim bit-reproducible hosted
+toolchains or make private infrastructure a public prerequisite. The
+rl-nginx maintainers own each accepted boundary below and its reevaluation
+condition.
+
+| Boundary | Current control and rationale | Reevaluate when |
+| --- | --- | --- |
+| Hosted CI toolchain | Required workflows use mutable GitHub-hosted runner images (`ubuntu-latest` and `ubuntu-24.04-arm`) and distribution packages without snapshot pinning. Every release records the exact OS, architecture, and compiler evidence; immutable nginx and C-client revisions define the supported source inputs. Maintaining a package snapshot or build image is not justified for a source-only public preview. | Binary artifacts are published, reproducible-build policy becomes a support requirement, or runner/package drift prevents a result from being reproduced. |
+| Explicit C-client checkout | `RCLIENT_DIR` and `RN_RCLIENT_DIR` intentionally opt out of the default clean locked checkout for development and packaging. Such a build is unsupported until its exact client revision and the complete compatibility matrix are independently recorded. Silently falling back to an adjacent checkout remains forbidden. | Packaging needs a verified external-source manifest, or accidental use of the override appears in release evidence. |
+| Floating dependency probes | The scheduled workflow deliberately tests `rl-c-client/main` and nginx `master`. It is isolated from release gates, has read-only repository permissions, persists no checkout credential, receives no secrets, and records the exact tested revisions. Pinning it would defeat drift detection. | The job needs any secret or write permission, consumes untrusted artifacts outside its isolated build, or its result is promoted into the supported release matrix. |
+| Private full-stack validation | `make test-internal` is optional supplemental evidence because it requires private service credentials and infrastructure. The locked public responder and DNS fixture are the reproducible acceptance authority for module behavior. | A public end-to-end server fixture becomes available, or a release requirement cannot be exercised faithfully by the public protocol fixture. |
 
 ## Scheduled dependency drift detection
 

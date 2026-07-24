@@ -51,6 +51,12 @@ LIMIT_STATEMENTS = (
     "#define RN_MAX_LABEL_LEN 256",
 )
 
+UDP_BATCH_STATEMENTS = (
+    "#define RN_UDP_READ_BATCH_MAX 64",
+    "received == RN_UDP_READ_BATCH_MAX",
+    "ngx_post_event(ev, &ngx_posted_next_events);",
+)
+
 ENABLED_MERGE_STATEMENT = "ngx_conf_merge_value(conf->enabled, prev->enabled, 0);"
 
 
@@ -211,6 +217,32 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "wire bucket boundary oracle",
         failures,
     )
+    udp_handler = function_body(source, "rn_udp_read_handler")
+    require(
+        source,
+        UDP_BATCH_STATEMENTS[0],
+        "executable UDP receive budget",
+        failures,
+    )
+    for fragment in UDP_BATCH_STATEMENTS[1:]:
+        require(
+            udp_handler,
+            fragment,
+            "executable UDP receive yield",
+            failures,
+        )
+    require(
+        implementation,
+        "at most 64 datagrams",
+        "UDP batching contract",
+        failures,
+    )
+    require(
+        implementation,
+        "next-event queue",
+        "UDP event-loop yield contract",
+        failures,
+    )
 
     for filename in ("dsl.md", "behavior.md", "mapping.md", "implementation.md", "roadmap.md"):
         require(index, f"({filename})", "specification index", failures)
@@ -247,6 +279,7 @@ def negative_fixture_failures(source: str) -> list[str]:
         *PHASE_STATEMENTS,
         *VERDICT_STATEMENTS,
         *LIMIT_STATEMENTS,
+        *UDP_BATCH_STATEMENTS,
     )
     for statement in statements:
         mutated = source.replace(statement, f"/* disabled: {statement} */", 1)
@@ -294,6 +327,7 @@ def main() -> int:
         + len(C_CLIENT_STATEMENTS)
         + len(PHASE_STATEMENTS)
         + len(LIMIT_STATEMENTS)
+        + len(UDP_BATCH_STATEMENTS)
         + 3
     )
     print(

@@ -17,8 +17,9 @@ Validates a previously configured and built dynamic rl-nginx module by:
   - copying the binary and module into an isolated runtime tree;
   - rejecting RPATH/RUNPATH and a shared librclient dependency;
   - running nginx -t, final-admission ordering, deterministic resolver scope,
-    deterministic enforcement, and admission-aware guard latency feedback
-    through the relocated module without LD_LIBRARY_PATH.
+    deterministic enforcement, bounded UDP ingress, steering/latency ordering,
+    and admission-aware guard latency feedback through the relocated module
+    without LD_LIBRARY_PATH.
 
 Environment overrides:
   RCLIENT_DIR             C-client checkout (default: locked ./_deps checkout)
@@ -141,6 +142,26 @@ env -u LD_LIBRARY_PATH \
   ARTIFACT_ROOT="${RUNTIME_ROOT}/artifacts" \
   SKIP_BUILD=1 \
   "${SCRIPT_DIR}/lifecycle-regressions.sh" enforcement-boundary
+
+echo "[dynamic-relocation] running bounded UDP ingress"
+env -u LD_LIBRARY_PATH \
+  RCLIENT_DIR="${RCLIENT_DIR}" \
+  NGINX_SRC="${NGINX_SRC}" \
+  NGINX_BIN="${RUNTIME_NGINX}" \
+  NGINX_LOAD_MODULE="${RUNTIME_MODULE}" \
+  ARTIFACT_ROOT="${RUNTIME_ROOT}/artifacts" \
+  SKIP_BUILD=1 \
+  "${SCRIPT_DIR}/lifecycle-regressions.sh" udp-ingress-fairness
+
+echo "[dynamic-relocation] running steering with independent latency feedback"
+env -u LD_LIBRARY_PATH \
+  RCLIENT_DIR="${RCLIENT_DIR}" \
+  NGINX_SRC="${NGINX_SRC}" \
+  NGINX_BIN="${RUNTIME_NGINX}" \
+  NGINX_LOAD_MODULE="${RUNTIME_MODULE}" \
+  ARTIFACT_ROOT="${RUNTIME_ROOT}/artifacts" \
+  SKIP_BUILD=1 \
+  "${SCRIPT_DIR}/lifecycle-regressions.sh" steering-rebind
 
 echo "[dynamic-relocation] running admission-aware guard latency feedback"
 env -u LD_LIBRARY_PATH \

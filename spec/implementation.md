@@ -193,6 +193,17 @@ forbidden. Rebinding MUST open and register a candidate endpoint before
 publishing it and closing the old endpoint. Candidate failure MUST retain the
 working endpoint, leave rebinding pending, and schedule a bounded retry.
 
+The unconnected worker socket can receive any UDP datagram addressed to its
+ephemeral port; authentication determines whether a datagram can affect a
+RateLimitly request only after the module receives it. One UDP read-handler
+invocation MUST process at most 64 datagrams. If the budget is exhausted, the
+read event MUST be posted to nginx's next-event queue and the handler MUST
+return. This limits work in one event-loop turn and lets HTTP, timer, and other
+connection events run under sustained invalid ingress. It does not promise
+that an unprotected UDP endpoint can preserve RateLimitly response delivery
+under a volumetric flood; network policy and host-level controls remain part
+of the deployment boundary.
+
 ## Error and logging boundary
 
 Configuration errors MUST fail `nginx -t`/configuration loading. Runtime

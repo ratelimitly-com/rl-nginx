@@ -16,6 +16,7 @@
 #define RN_REBIND_RETRY_MS 1000
 #define RN_INIT_RETRY_INITIAL_MS 1000
 #define RN_INIT_RETRY_MAX_MS 5000
+#define RN_UDP_READ_BATCH_MAX 64
 #define RN_MAX_BUCKET_LEN 1024
 #define RN_MAX_SERVICE_LEN 1024
 #define RN_MAX_LABEL_LEN 256
@@ -2776,6 +2777,8 @@ rn_rebind_handler(ngx_event_t *ev) {
 
 static void
 rn_udp_read_handler(ngx_event_t *ev) {
+    ngx_uint_t received;
+
     if (ev == NULL || ev->data == NULL) {
         return;
     }
@@ -2785,6 +2788,7 @@ rn_udp_read_handler(ngx_event_t *ev) {
         return;
     }
     worker->udp_read_active = 1;
+    received = 0;
 
     for (;;) {
         u_char buf[2048];
@@ -2834,6 +2838,15 @@ rn_udp_read_handler(ngx_event_t *ev) {
             }
         }
         (void) r_client_on_datagram(worker->client, buf, (size_t) n, &from);
+        received++;
+        if (received == RN_UDP_READ_BATCH_MAX) {
+            worker->udp_read_active = 0;
+            ngx_log_debug1(NGX_LOG_DEBUG_EVENT, worker->log, 0,
+                "rn: UDP receive batch exhausted; yielding after %ui datagrams",
+                received);
+            ngx_post_event(ev, &ngx_posted_next_events);
+            return;
+        }
     }
 }
 

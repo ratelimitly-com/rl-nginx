@@ -155,6 +155,21 @@ and every invalid or absent admission suppresses both attempted and delivered
 latency reports. Each case still requires worker survival, a valid follow-up,
 reload, and clean shutdown.
 
+Run the invalid-UDP ingress fairness case separately while changing the worker
+socket handler:
+
+```sh
+./integration-tests/lifecycle-regressions.sh udp-ingress-fairness
+```
+
+The fixture continuously sends non-RateLimitly datagrams to the worker's
+ephemeral UDP port. The case requires the handler to exhaust its 64-datagram
+budget and yield through nginx's next-event queue, while an HTTP health request
+completes before the flood ends. It then requires the original worker to serve
+a normal rate-limited follow-up, reload, and shut down cleanly. This proves
+event-loop fairness; it does not claim that application-level batching replaces
+network flood controls.
+
 Run the malformed-protocol matrix separately while working on response parsing
 and fail-policy behavior:
 
@@ -219,7 +234,9 @@ oracle even when cleanup can subsequently remove the process. The aborted
 client case uses delayed responder output so clients close while requests are
 in flight; the timeout case uses `drop`; the steering case requests a source
 port rebind through response feedback and verifies the port through Linux
-`/proc` socket metadata.
+`/proc` socket metadata. Its guarded delayed-content probe observes the new
+port before log phase, then requires the independent latency report to arrive;
+the rebind never waits for source-port continuity with the rate request.
 
 These are acceptance regressions, not an expected-failure wrapper. Each case
 must return zero and protects a specific ownership invariant that previously
@@ -230,8 +247,11 @@ failed:
 - `aborted-client`: resetting a connection must cancel the C-client request and
   timer while balancing the nginx and worker request counts, with no later
   timeout completion;
+- `udp-ingress-fairness`: one read callback must not drain unbounded candidate
+  datagrams before returning control to nginx;
 - `steering-rebind`: source-port replacement must run in a deferred worker
-  event after the UDP read callback unwinds.
+  event after the UDP read callback unwinds, and an independent latency report
+  remains valid after that replacement.
 
 Run the response-cardinality matrix separately while working on result
 validation:

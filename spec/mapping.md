@@ -113,4 +113,7 @@ met, the module calls `r_client_report_latency` with one
 The C client creates the report request ID, tenant/authentication framing, and
 wire blocks and sends the packet to every currently usable endpoint. The call
 is fire-and-forget: no response is awaited and its result cannot change the
-HTTP decision.
+HTTP decision. A report has no request-level relationship to the rate request
+that admitted the HTTP operation, and the server does not correlate the two by
+UDP source port. A steering-driven source-port replacement therefore neither
+invalidates a report nor waits for one.

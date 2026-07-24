@@ -222,9 +222,9 @@ make sanitizers
 
 The public integration suite uses the locked C-client responder and local DNS
 fixture. It covers enforcement boundaries, fail-open/fail-closed outages, DNS
-failure and recovery, timeouts, aborted clients, steering rebinds, guards,
-malformed responses, response cardinality, reload, worker survival, and clean
-shutdown. It requires no real tenant or credential.
+failure and recovery, timeouts, aborted clients, bounded invalid-UDP ingress,
+steering rebinds, guards, malformed responses, response cardinality, reload,
+worker survival, and clean shutdown. It requires no real tenant or credential.
 
 The unit gate also runs negative oracle fixtures. They deliberately break each
 required Make/CI/specification control and require its checker to turn red;
