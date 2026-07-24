@@ -1038,8 +1038,8 @@ run_udp_ingress_fairness_case() {
   python3 "${UDP_FLOOD_HELPER}" \
     --host "${NGINX_HOST}" \
     --port "${port}" \
-    --duration 1 \
-    --workers 8 \
+    --duration 2 \
+    --workers 32 \
     >"${flood_log}" 2>&1 &
   FLOOD_PID=$!
 
