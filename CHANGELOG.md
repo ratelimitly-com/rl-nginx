@@ -3,7 +3,7 @@
 All notable changes to `rl-nginx` will be documented here. Release candidates
 remain preview software and must not be treated as ABI-stable versions.
 
-## Unreleased — next release candidate
+## 0.1.0-rc.2 — 2026-07-24
 
 Changes since `v0.1.0-rc.1`:
 
@@ -11,7 +11,7 @@ Changes since `v0.1.0-rc.1`:
   supported nginx releases and extended sanitizers to both nginx lines;
 - made `make check` preserve and exercise its caller-selected static build,
   separated contributor, release-only, and optional-private gate contracts,
-  and made dynamic relocation exercise four representative behavior groups;
+  and made dynamic relocation exercise six representative behavior groups;
 - enabled LeakSanitizer for probes and nginx runtime shutdown with a narrow
   one-shot nginx config/control exception, removed the build-wide UBSan
   category exclusion, replaced it with exact reviewed upstream-nginx report
@@ -63,7 +63,19 @@ Changes since `v0.1.0-rc.1`:
 - made steering rebinds transactional: the current UDP endpoint stays active
   until its replacement is registered, and failed replacements retry later;
 - added test-only resolver, worker-initialization, and rebind fault injection to
-  the ASan/UBSan lifecycle gate.
+  the ASan/UBSan lifecycle gate;
+- removed request-controlled cookies, hosts, raw URIs, and query values from
+  default RateLimitly identities and policy examples, and added a bounded
+  `$ratelimitly_verdict` production warmup oracle;
+- bounded each UDP read-handler turn to 64 candidate datagrams and added
+  public, relocated-dynamic, and sanitizer fairness coverage under sustained
+  invalid ingress;
+- made the steering contract explicit that `keep_port=false` replaces the
+  source port as soon as safely possible and does not wait for an independent
+  fire-and-forget latency report; and
+- documented accepted credential-memory, hosted-toolchain,
+  development-override, dependency-drift, private-test, and latency-measurement
+  boundaries with owners or named trackers and concrete reevaluation triggers.
 
 ## 0.1.0-rc.1 — 2026-07-17
 
