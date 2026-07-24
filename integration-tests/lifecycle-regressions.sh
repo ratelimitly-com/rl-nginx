@@ -594,7 +594,8 @@ events {
 }
 
 http {
-  access_log off;
+  log_format ratelimitly_test '\$status \$ratelimitly_verdict';
+  access_log ${NGINX_ACCESS_LOG} ratelimitly_test;
   resolver ${DNS_SERVER}:${DNS_PORT} valid=1s ipv6=off;
   resolver_timeout 1s;
 
@@ -1009,6 +1010,7 @@ run_steering_rebind_case() {
 }
 
 run_outage_case() {
+  local access_log_start
   local code
   local error_log_start
   local expected_code
@@ -1019,6 +1021,7 @@ run_outage_case() {
     expected_code="429"
   fi
 
+  access_log_start="$(wc -l <"${NGINX_ACCESS_LOG}")"
   error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
   start_responder drop keep 0
   code="$(request_code)"
@@ -1034,6 +1037,11 @@ run_outage_case() {
     >"${ARTIFACT_DIR}/outage-trigger.log"
   if ! grep -q 'rn: result error status=-2' "${ARTIFACT_DIR}/outage-trigger.log"; then
     record_failure "outage did not complete through the C-client timeout callback"
+  fi
+  tail -n "+$((access_log_start + 1))" "${NGINX_ACCESS_LOG}" \
+    >"${ARTIFACT_DIR}/outage-verdict.log"
+  if ! grep -qx "${expected_code} -" "${ARTIFACT_DIR}/outage-verdict.log"; then
+    record_failure "fail-${FAIL_POLICY} outage was not logged without a valid verdict"
   fi
   check_worker_survival "outage fail-${FAIL_POLICY} decision"
   check_follow_up "outage fail-${FAIL_POLICY} decision"
@@ -1211,11 +1219,13 @@ run_malformed_protocol_case() {
 }
 
 run_enforcement_boundary_case() {
+  local access_log_start
   local code
   local event_count
   local request_number
   local expected_code
 
+  access_log_start="$(wc -l <"${NGINX_ACCESS_LOG}")"
   start_responder quota keep 0 "${ENFORCEMENT_ALLOW_COUNT}"
   for (( request_number = 1; request_number <= ENFORCEMENT_TOTAL_REQUESTS;
       request_number++ )); do
@@ -1243,6 +1253,16 @@ run_enforcement_boundary_case() {
       END { exit count == expected && !bad ? 0 : 1 }
     ' "${RESPONDER_LOG}"; then
     record_failure "quota responder events were not the exact ordered one-resource sequence"
+  fi
+  tail -n "+$((access_log_start + 1))" "${NGINX_ACCESS_LOG}" \
+    >"${ARTIFACT_DIR}/enforcement-verdicts.log"
+  if [[ "$(grep -c '^200 allow$' "${ARTIFACT_DIR}/enforcement-verdicts.log" || true)" \
+      != "${ENFORCEMENT_ALLOW_COUNT}" ]]; then
+    record_failure "access log did not expose one valid allow verdict per admitted request"
+  fi
+  if [[ "$(grep -c '^429 deny$' "${ARTIFACT_DIR}/enforcement-verdicts.log" || true)" \
+      != "$((ENFORCEMENT_TOTAL_REQUESTS - ENFORCEMENT_ALLOW_COUNT))" ]]; then
+    record_failure "access log did not expose one valid deny verdict per rejected request"
   fi
 
   log "exact boundary passed: ${ENFORCEMENT_ALLOW_COUNT} allow, $((ENFORCEMENT_TOTAL_REQUESTS - ENFORCEMENT_ALLOW_COUNT)) deny"
@@ -1682,6 +1702,7 @@ run_one() {
   PREFIX="${ARTIFACT_DIR}/nginx-prefix"
   NGINX_CONF="${ARTIFACT_DIR}/nginx.conf"
   NGINX_ERROR_LOG="${ARTIFACT_DIR}/nginx-error.log"
+  NGINX_ACCESS_LOG="${ARTIFACT_DIR}/nginx-access.log"
   NGINX_STDOUT_LOG="${ARTIFACT_DIR}/nginx-stdout.log"
   NGINX_CONFIG_LOG="${ARTIFACT_DIR}/nginx-config.log"
   AUTH_FILE="${ARTIFACT_DIR}/htpasswd"

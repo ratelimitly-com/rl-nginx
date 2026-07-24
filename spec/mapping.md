@@ -20,6 +20,15 @@ The module copies the rendered bucket to request-pool storage, appends a NUL
 terminator, and passes it to the C-client hash helper. An embedded NUL therefore
 terminates the hashed identity early. Configuration MUST obey the safe-input
 requirements in [`ratelimitly_zone`](dsl.md#ratelimitly_zone).
+
+The complete rendered bucket is one opaque flat string. The module does not
+escape components, add length prefixes, or otherwise make an ambiguous
+template structurally unique. Operators MUST construct a canonical,
+unambiguous string from fixed values and bounded finite-map outputs. Changing
+that text schema changes the hashed resource IDs and starts new logical bucket
+state; a future length-aware or structured hash boundary therefore requires an
+explicit identity migration rather than a silent implementation change.
+
 The executable boundary oracle pins the rendered text
 `boundary:known-bucket` to identifier
 `adad04e30132078dd71e82746cbfe92d` and requires the responder to observe the
@@ -42,9 +51,12 @@ first-seen order:
 | `buffer_size` | configured value |
 | `min_sample_threshold` | configured value |
 
-The service hash uses the same NUL-terminated boundary as the bucket hash.
-Configuration MUST obey the bounded, operator-controlled input requirements in
-[`ratelimitly_guard`](dsl.md#ratelimitly_guard).
+The service hash uses the same opaque, flat, NUL-terminated boundary as the
+bucket hash. Configuration MUST obey the canonical, unambiguous, bounded, and
+operator-controlled input requirements in
+[`ratelimitly_guard`](dsl.md#ratelimitly_guard). A service-key schema change
+similarly creates different service IDs and separates subsequent latency
+history from the old identity.
 
 The locked C-client encoder writes `current_latency = 0` in every rate-request
 GuardBlock. Current latency is learned from server responses; rl-nginx does not

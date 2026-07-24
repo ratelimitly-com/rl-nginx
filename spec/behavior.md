@@ -53,6 +53,13 @@ The resolver and `resolver_timeout` are captured from the `http` context and
 apply process-wide to the worker client. Server and location resolver overrides
 do not change RateLimitly discovery.
 
+rl-nginx does not choose a single commit target and does not deduplicate
+resource consumption across those endpoints. A supported deployment MUST
+therefore provide a RateLimitly server topology and protocol contract in which
+that fan-out represents one logical admission/consumption. This commit-safety
+property is external to the nginx module. Operators MUST NOT assume there is a
+hidden single-target fallback when a discovered topology lacks that property.
+
 The module starts from the locked C-client request-policy defaults, overrides
 the attempt timeout with `ratelimitly_timeout`, and sets retry attempts to zero.
 For the currently locked revision this means one attempt, waiting until all
@@ -88,6 +95,20 @@ consumption of the requested resources and MUST advance directly to nginx
 content processing without another pre-content handler. The admitted client,
 content handler, or upstream can still fail afterward; such failures do not
 reverse the consumption.
+
+## Verdict variable
+
+The module registers the nginx variable `$ratelimitly_verdict`. It MUST evaluate
+to `allow` only after a valid result satisfies the complete allow contract
+above, and to `deny` only after a valid result fails that contract. It MUST be
+not found (rendered as `-` by normal nginx log formats) for an unprotected or
+bypassed request, a request still awaiting a result, and every fail-open,
+fail-close, internal-error, or aborted outcome.
+
+This variable is a decision provenance signal, not the final HTTP status. An
+`allow` can be followed by a content/upstream error, while a `deny` produces
+`429`. Operations MAY include it in an access-log format to prove warmup
+without enabling debug logging.
 
 ## Failure policy
 

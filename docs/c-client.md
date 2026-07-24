@@ -21,8 +21,17 @@ only supported way to opt into a dirty development tree.
 
 ## Key Assumptions
 
-- Multi-target send is allowed only when commit safety is guaranteed; otherwise use a single deterministic commit target for mutating requests.
-- DNS refresh interval MUST NOT exceed the minimum SRV TTL.
+- The C client sends a mutating rate request to every currently usable
+  discovered endpoint. rl-nginx neither selects one deterministic commit target
+  nor deduplicates writes across targets. Supported deployments must supply a
+  RateLimitly topology whose server/protocol semantics make that fan-out one
+  logical consumption. There is no nginx-module fallback for a topology that
+  lacks this external commit-safety property.
+- DNS discovery and refresh behavior is owned by the locked C client.
+  rl-nginx supplies nginx resolver adapters and `resolver_timeout` but exposes
+  no refresh-interval or TTL policy directive. A lock update that changes this
+  behavior requires the compatibility review and specification update described
+  below.
 - Use `r_client_check_rate_limit_async_borrowed` to avoid per-request copies.
 - Timeouts and retries are set by nginx (default timeout 20ms, retries disabled).
 - Steering feedback is evaluated per response; rebind the UDP socket only after

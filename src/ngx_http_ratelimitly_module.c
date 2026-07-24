@@ -173,6 +173,7 @@ typedef struct {
     ngx_flag_t lat_report_sent;
 } rn_req_ctx_t;
 
+static ngx_int_t ngx_http_rn_add_variables(ngx_conf_t *cf);
 static ngx_int_t ngx_http_rn_init(ngx_conf_t *cf);
 static void rn_exit_process(ngx_cycle_t *cycle);
 
@@ -218,6 +219,11 @@ static ngx_flag_t rn_test_fault_active(rn_worker_ctx_t *worker, const char *name
 #endif
 static void rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_result_t *result);
 static ngx_int_t ngx_http_rn_log_handler(ngx_http_request_t *r);
+static ngx_int_t ngx_http_rn_verdict_variable(
+    ngx_http_request_t *r,
+    ngx_http_variable_value_t *v,
+    uintptr_t data
+);
 static void rn_hex16(const uint8_t in[16], u_char out[33]);
 static void rn_hex_id(const uint8_t in[16], u_char out[33]);
 static const char *rn_rclient_status_name(int status);
@@ -336,8 +342,15 @@ static ngx_command_t ngx_http_rn_commands[] = {
     ngx_null_command
 };
 
+static ngx_http_variable_t ngx_http_rn_variables[] = {
+    { ngx_string("ratelimitly_verdict"), NULL,
+      ngx_http_rn_verdict_variable, 0, NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    ngx_http_null_variable
+};
+
 static ngx_http_module_t ngx_http_rn_module_ctx = {
-    NULL,                 /* preconfiguration */
+    ngx_http_rn_add_variables, /* preconfiguration */
     ngx_http_rn_init,     /* postconfiguration */
 
     ngx_http_rn_create_main_conf, /* create main configuration */
@@ -364,6 +377,23 @@ ngx_module_t ngx_http_rn_module = {
     NULL,                 /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+static ngx_int_t
+ngx_http_rn_add_variables(ngx_conf_t *cf) {
+    ngx_http_variable_t *var;
+    ngx_http_variable_t *v;
+
+    for (v = ngx_http_rn_variables; v->name.len; v++) {
+        var = ngx_http_add_variable(cf, &v->name, v->flags);
+        if (var == NULL) {
+            return NGX_ERROR;
+        }
+        var->get_handler = v->get_handler;
+        var->data = v->data;
+    }
+
+    return NGX_OK;
+}
 
 static rn_req_ctx_t *
 rn_get_request_ctx(ngx_http_request_t *r) {
@@ -397,6 +427,43 @@ rn_get_request_ctx(ngx_http_request_t *r) {
     }
 
     return NULL;
+}
+
+static ngx_int_t
+ngx_http_rn_verdict_variable(
+    ngx_http_request_t *r,
+    ngx_http_variable_value_t *v,
+    uintptr_t data
+) {
+    static ngx_str_t allow = ngx_string("allow");
+    static ngx_str_t deny = ngx_string("deny");
+    ngx_str_t *value;
+    rn_req_ctx_t *ctx;
+
+    (void) data;
+
+    ctx = rn_get_request_ctx(r);
+    if (ctx == NULL) {
+        v->not_found = 1;
+        return NGX_OK;
+    }
+
+    if (ctx->admission_outcome == RN_ADMISSION_VALID_ALLOW) {
+        value = &allow;
+    } else if (ctx->admission_outcome == RN_ADMISSION_VALID_DENY) {
+        value = &deny;
+    } else {
+        v->not_found = 1;
+        return NGX_OK;
+    }
+
+    v->valid = 1;
+    v->no_cacheable = 0;
+    v->not_found = 0;
+    v->len = value->len;
+    v->data = value->data;
+
+    return NGX_OK;
 }
 
 static ngx_int_t

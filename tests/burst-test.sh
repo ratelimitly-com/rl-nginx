@@ -29,14 +29,12 @@ Arguments:
 
 Scenarios:
   1) /api/static/test
-  2) /api/dynamic/test?user=alice
-  3) /api/dynamic/test?user=wojtek
-  4) /api/dynamic/test?user=wojtek with cookie session=s1
-  5) /api/dynamic/test?user=wojtek with cookie session=s2
-  6) /api/group/test?user=wojtek with cookie session=s1
-  7) /api/guard/test?user=wojtek
-  8) /api/guard-isolated/test?user=wojtek (high-rate zone, permissive threshold)
-  9) /api/guard-isolated/test?user=wojtek&guard_mode=strict (high-rate zone, strict threshold)
+  2) GET /api/dynamic/read
+  3) POST /api/dynamic/write
+  4) /api/group/test
+  5) /api/guard/test
+  6) /api/guard-isolated/permissive (high-rate zone, permissive threshold)
+  7) /api/guard-isolated/strict (high-rate zone, strict threshold)
 EOF
 }
 
@@ -59,7 +57,7 @@ NGINX_ERR_LOG="${4:-$DEFAULT_ERR_LOG}"
 run_burst() {
   local name="$1"
   local url="$2"
-  local cookie="${3:-}"
+  local method="${3:-GET}"
   local tmp
   local err_tmp
   local ok
@@ -85,15 +83,11 @@ run_burst() {
 
   seq "$BURST_SIZE" | xargs -P "$PARALLELISM" -I{} bash -c '
     url="$1"
-    cookie="$2"
+    method="$2"
     code=""
-    if [[ -n "$cookie" ]]; then
-      code="$(curl -s -o /dev/null -w "%{http_code}" --cookie "$cookie" "$url" || true)"
-    else
-      code="$(curl -s -o /dev/null -w "%{http_code}" "$url" || true)"
-    fi
+    code="$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "$url" || true)"
     printf "%s\n" "${code:-000}"
-  ' _ "$url" "$cookie" > "$tmp"
+  ' _ "$url" "$method" > "$tmp"
 
   ok="$(grep -c "^200$" "$tmp" || true)"
   non_ok="$((BURST_SIZE - ok))"
@@ -140,11 +134,9 @@ fi
 echo
 
 run_burst "static" "$BASE_URL/api/static/test"
-run_burst "dynamic user=alice" "$BASE_URL/api/dynamic/test?user=alice"
-run_burst "dynamic user=wojtek" "$BASE_URL/api/dynamic/test?user=wojtek"
-run_burst "dynamic wojtek sess=s1" "$BASE_URL/api/dynamic/test?user=wojtek" "session=s1"
-run_burst "dynamic wojtek sess=s2" "$BASE_URL/api/dynamic/test?user=wojtek" "session=s2"
-run_burst "group wojtek sess=s1" "$BASE_URL/api/group/test?user=wojtek" "session=s1"
-run_burst "guard user=wojtek" "$BASE_URL/api/guard/test?user=wojtek"
-run_burst "guard-isolated permissive" "$BASE_URL/api/guard-isolated/test?user=wojtek"
-run_burst "guard-isolated strict" "$BASE_URL/api/guard-isolated/test?user=wojtek&guard_mode=strict"
+run_burst "dynamic read" "$BASE_URL/api/dynamic/read"
+run_burst "dynamic write" "$BASE_URL/api/dynamic/write" "POST"
+run_burst "group" "$BASE_URL/api/group/test"
+run_burst "guard" "$BASE_URL/api/guard/test"
+run_burst "guard-isolated permissive" "$BASE_URL/api/guard-isolated/permissive"
+run_burst "guard-isolated strict" "$BASE_URL/api/guard-isolated/strict"

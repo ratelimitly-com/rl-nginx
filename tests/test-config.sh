@@ -104,7 +104,7 @@ OVERSIZED_LABEL="${MAX_LABEL}l"
 
 run_case representative accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'\
-$'  ratelimitly_timeout 50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency "service=service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
+$'  log_format ratelimitly_test "$status $ratelimitly_verdict";\n  access_log off;\n  ratelimitly_timeout 50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency "service=service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
 
 run_case min_sample_zero accept \
   $'  ratelimitly_guard zero "service=service:zero" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'

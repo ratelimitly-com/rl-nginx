@@ -139,19 +139,29 @@ Use A/AAAA records only for the SRV target hostnames returned by that lookup, an
 
 ```sh
 curl -v 'http://127.0.0.1:8088/api/static/test'
-curl -v 'http://127.0.0.1:8088/api/dynamic/test?user=alice'
-curl -v 'http://127.0.0.1:8088/api/dynamic/test?user=wojtek'
-curl -v --cookie 'session=s1' 'http://127.0.0.1:8088/api/dynamic/test?user=wojtek'
-curl -v 'http://127.0.0.1:8088/api/guard/test?user=wojtek'
-curl -v 'http://127.0.0.1:8088/api/guard-isolated/test?user=wojtek'
-curl -v 'http://127.0.0.1:8088/api/guard-isolated/test?user=wojtek&guard_mode=strict'
+curl -v 'http://127.0.0.1:8088/api/dynamic/read'
+curl -v -X POST 'http://127.0.0.1:8088/api/dynamic/write'
+curl -v 'http://127.0.0.1:8088/api/group/test'
+curl -v 'http://127.0.0.1:8088/api/guard/test'
+curl -v 'http://127.0.0.1:8088/api/guard-isolated/permissive'
+curl -v 'http://127.0.0.1:8088/api/guard-isolated/strict'
 ```
+
+The fixture deliberately does not put raw URI, host, query-argument, header,
+or cookie values into RateLimitly buckets, services, rates, thresholds, or
+labels. Its original-request-target and method maps have finite
+operator-controlled outputs, so the examples remain bounded even though a
+client chooses the request path and method. Using `$request_uri` only as the
+map input also keeps the selected class stable after `try_files` rewrites
+`$uri`; the raw value itself never reaches RateLimitly. The access log writes
+`rl_verdict=allow` or `rl_verdict=deny` only for a valid RateLimitly verdict;
+`rl_verdict=-` is not a successful warmup.
 
 If `ratelimitly_debug on` is set, you will see detailed `rn:` logs in the nginx
 error log (SRV targets, A/AAAA addresses, bucket IDs, UDP recv/decisions).
 
 Guard test path note:
-- `/api/guard/test` and `/api/guard-isolated/test` now `proxy_pass` to a local backend on `127.0.0.1:18089` defined in `./tests/nginx.conf`.
+- `/api/guard/test` and both `/api/guard-isolated/*` locations `proxy_pass` to a local backend on `127.0.0.1:18089` defined in `./tests/nginx.conf`.
 - This makes guard tests measure end-to-end proxy latency instead of local static-file serving only.
 - The backend endpoint `/backend/ok.txt` returns explicit HTTP `200` for clean burst-test accounting.
 - Latency reports sent by the nginx module clamp observed latency to minimum `1ms` (avoids `0ms` artifacts).
@@ -207,12 +217,10 @@ Interpretation note:
 
 Current default scenarios in script:
 - `static`
-- `dynamic user=alice`
-- `dynamic user=wojtek`
-- `dynamic wojtek sess=s1`
-- `dynamic wojtek sess=s2`
-- `group wojtek sess=s1`
-- `guard user=wojtek`
+- `dynamic read`
+- `dynamic write`
+- `group`
+- `guard`
 - `guard-isolated permissive` (high-rate zone to reduce rate-limit noise)
 - `guard-isolated strict` (same high-rate zone with strict guard threshold)
 
@@ -239,7 +247,7 @@ ps -ef | rg 'nginx: master process'
 
 ```sh
 stat -c '%y %s' ./logs/error.log
-curl -s -o /dev/null 'http://127.0.0.1:8088/api/group/test?user=wojtek'
+curl -s -o /dev/null 'http://127.0.0.1:8088/api/group/test'
 stat -c '%y %s' ./logs/error.log
 ```
 
