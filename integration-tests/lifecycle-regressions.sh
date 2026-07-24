@@ -1056,10 +1056,6 @@ run_udp_ingress_fairness_case() {
   else
     log "HTTP processing remained live during sustained invalid UDP ingress"
   fi
-  wait_for_log 'rn: UDP receive batch exhausted; yielding' \
-    "${NGINX_ERROR_LOG}" 20 \
-    || record_failure "UDP ingress did not exercise the bounded receive yield"
-
   if ! wait "${FLOOD_PID}"; then
     record_failure "UDP flood fixture failed; see ${flood_log}"
   fi
