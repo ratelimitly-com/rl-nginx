@@ -1074,12 +1074,15 @@ check_rebind_latency_report() {
   local attempt
   local code="000"
   local code_file="${ARTIFACT_DIR}/steering-latency-code.txt"
+  local error_log_start
   local port_after=""
   local port_before
   local current_port
+  local rebind_log="${ARTIFACT_DIR}/steering-latency-rebind.log"
 
   port_before="$(worker_udp_port)" \
     || fail "could not determine the UDP port before the guarded steering request"
+  error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
   start_responder guard-pass rebind 0
 
   curl --max-time 5 -s -o /dev/null -w '%{http_code}' \
@@ -1099,10 +1102,8 @@ check_rebind_latency_report() {
   done
   if [[ -z "${port_after}" ]]; then
     record_failure "guarded steering request did not replace UDP source port ${port_before} before content completed"
-  elif grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
-    record_failure "guarded steering latency report arrived before the source-port replacement was observed"
   else
-    log "guarded request changed UDP source port before latency reporting: ${port_before} -> ${port_after}"
+    log "guarded steering request changed UDP source port: ${port_before} -> ${port_after}"
   fi
 
   if ! wait "${HTTP_PROBE_PID}"; then
@@ -1118,6 +1119,14 @@ check_rebind_latency_report() {
 
   wait_for_log '"event":"latency_report"' "${RESPONDER_LOG}" 40 \
     || record_failure "guarded steering request did not send its independent latency report"
+  tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" >"${rebind_log}"
+  if ! awk '
+      /rn: UDP source socket rebound/ && rebound == 0 { rebound = NR }
+      /rn: latency_report count=/ && report == 0 { report = NR }
+      END { exit(rebound > 0 && report > rebound ? 0 : 1) }
+    ' "${rebind_log}"; then
+    record_failure "guarded steering did not complete source-port replacement before attempting its latency report"
+  fi
   if ! awk '
       /"event":"rate_request"/ { rate_count++; rate_sequence = index($0, "\"sequence\":1") }
       /"event":"latency_report"/ { report_count++; report_sequence = index($0, "\"sequence\":2") }
@@ -1128,7 +1137,7 @@ check_rebind_latency_report() {
     ' "${RESPONDER_LOG}"; then
     record_failure "guarded steering did not produce exactly one rate request followed by one independent latency report"
   else
-    log "latency report succeeded after steering replaced the rate request's source port"
+    log "latency report succeeded after the worker completed its steering rebind"
   fi
   check_worker_survival "steering before independent latency reporting"
 }

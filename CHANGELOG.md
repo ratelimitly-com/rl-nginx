@@ -72,7 +72,8 @@ Changes since `v0.1.0-rc.1`:
   invalid ingress;
 - made the steering contract explicit that `keep_port=false` replaces the
   source port as soon as safely possible and does not wait for an independent
-  fire-and-forget latency report; and
+  fire-and-forget latency report, and made its ordering oracle compare
+  module-completion events instead of racing an external process observer; and
 - documented accepted credential-memory, hosted-toolchain,
   development-override, dependency-drift, private-test, and latency-measurement
   boundaries with owners or named trackers and concrete reevaluation triggers.

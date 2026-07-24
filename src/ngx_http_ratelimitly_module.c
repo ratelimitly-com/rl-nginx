@@ -2500,6 +2500,10 @@ rn_rebind_socket(rn_worker_ctx_t *worker) {
     worker->udp_conn = new_conn;
     worker->rebind_pending = 0;
     rn_close_udp_endpoint(old_conn, old_fd);
+    if (worker->debug) {
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: UDP source socket rebound");
+    }
     return NGX_OK;
 }
 
