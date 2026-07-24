@@ -90,7 +90,10 @@ into authenticated identity.
 `$binary_remote_addr` must not be used in current bucket or service templates.
 The current C-client hash interface accepts NUL-terminated text; a binary
 address can contain an embedded NUL and be truncated. Use textual
-`$remote_addr` instead.
+`$remote_addr` instead. The module cannot reliably reject
+`$binary_remote_addr` at configuration load and does not reject an embedded
+NUL at request time, so this remains an explicit operator precondition until a
+separately designed length-aware hash migration is available.
 
 ## Construct canonical, bounded bucket keys
 
@@ -98,6 +101,12 @@ The rendered bucket string is hashed locally to a 128-bit resource ID. Hashing
 does not correct an ambiguous or attacker-controlled input. Two templates that
 render the same text intentionally produce the same bucket, and raw user input
 can create a practically unlimited set of distinct buckets.
+
+The module hashes the complete rendered value as one opaque string; it does not
+escape fields or length-prefix components. Template authors therefore own both
+cardinality and structural uniqueness. A template-schema change produces new
+resource IDs and starts new bucket state, so version and roll out such a change
+as an identity migration.
 
 Avoid patterns such as:
 
@@ -118,8 +127,8 @@ Prefer these rules:
    vocabulary.
 3. Restrict every identity component to a canonical alphabet and maximum
    length before rl-nginx sees it.
-4. Use delimiters that cannot occur in the bounded components, or place the
-   one variable-length value last.
+4. Use a delimiter that cannot occur in fixed or finite-map components. If one
+   other bounded textual value can contain it, place that value last.
 5. Reject missing or invalid authenticated identity. Do not silently put it in
    a shared bucket that might grant broader access.
 6. Do not include credentials, session tokens, email addresses, or other
@@ -146,7 +155,8 @@ ratelimitly_zone api_per_ip
 ```
 
 The map outputs have a fixed alphabet and cardinality. `$remote_addr` is last,
-so IPv6 colons cannot be confused with another field boundary.
+so IPv6 colons cannot be confused with another field boundary, and none of the
+components can contain `|`.
 
 ## Tenant, credential, and DNS trust
 

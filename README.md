@@ -129,6 +129,8 @@ read the [configuration guide](docs/configuration.md) before deploying. Treat
 - Enforces allow and deny decisions before proxying or serving content.
 - Applies a configured fail-open or fail-closed policy when no valid decision
   is available.
+- Exposes `$ratelimitly_verdict` for access-log proof of valid `allow`/`deny`
+  decisions without enabling debug logging.
 
 When a protected request arrives, the module expands the configured nginx
 variables, hashes bucket and service names into protocol identifiers, and sends
@@ -164,6 +166,11 @@ follow `ratelimitly_fail`, while invalid static values fail `nginx -t`.
 
 See the [configuration guide](docs/configuration.md) for directive behavior and
 the [DSL reference](spec/dsl.md) for complete syntax.
+
+`$ratelimitly_verdict` is `allow` or `deny` only for a valid RateLimitly
+decision. It is not found (normally logged as `-`) for fail-open, fail-close,
+bypassed, unfinished, internal-error, and aborted requests. It reports
+decision provenance, not the final upstream/content status.
 
 ## Supported Dependency Policy
 

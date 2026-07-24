@@ -109,20 +109,30 @@ Use this sequence for a new deployment and every nginx reload:
 
 1. Run `nginx -t` with the exact configuration, module artifact, include files,
    and runtime user intended for deployment.
-2. Start or reload nginx and verify an unprotected endpoint. This proves only
+2. Include the decision provenance and worker PID in the normal production
+   access log. This needs neither `ratelimitly_debug` nor an nginx debug build:
+
+   ```nginx
+   log_format production
+     '$remote_addr $request $status worker=$pid rl_verdict=$ratelimitly_verdict';
+   access_log /var/log/nginx/access.log production;
+   ```
+
+3. Start or reload nginx and verify an unprotected endpoint. This proves only
    nginx process readiness.
-3. Send a low-impact request through a protected canary location. Retry while
+4. Send a low-impact request through a protected canary location. Retry while
    DNS discovery is in progress.
-4. Require both the expected HTTP outcome and a new valid-decision log marker,
-   such as `rn: result success=... server_id=...`. A fail-open `2xx` or a
-   fail-closed `429` without that marker is not a successful warmup.
-5. Where the test tenant supports it, exercise one known-allow and one
+5. Require the expected HTTP outcome and `rl_verdict=allow` or
+   `rl_verdict=deny` on the corresponding access-log line. A dash means the
+   request had no valid RateLimitly decision: a fail-open `2xx` or fail-closed
+   `429` with `rl_verdict=-` is not a successful warmup.
+6. Where the test tenant supports it, exercise one known-allow and one
    known-deny request. Confirm the deny is a valid RateLimitly decision rather
    than a fail-closed dependency error.
-6. Repeat until every nginx worker has processed a valid decision. Client and
+7. Repeat until every nginx worker PID has logged a valid decision. Client and
    DNS state are worker-local; one warmup request may reach only one worker.
-   Use the nginx PID prefix on each decision log line to distinguish workers.
-7. Shift traffic gradually while watching dependency errors, `429` rates,
+   Use the `worker=$pid` access-log field to distinguish them.
+8. Shift traffic gradually while watching dependency errors, `429` rates,
    upstream status, worker restarts, and latency.
 
 Keep a deliberately unprotected liveness/recovery endpoint available when the
@@ -169,19 +179,34 @@ record.
 
 ## Observability and log handling
 
-The module currently exposes log-based diagnostics, not Prometheus counters or
-a module-specific health endpoint. For a bounded integration or incident
-window, enable both the module flag and an nginx error-log level that records
-debug entries:
+The module exposes log-based diagnostics, not Prometheus counters or a
+module-specific health endpoint. `$ratelimitly_verdict` provides the
+low-volume production signal described above. It reports valid decision
+provenance only: `allow`, `deny`, or no value (`-`), and does not replace the
+HTTP status or upstream timing fields in an access log.
+
+For a bounded integration or incident window, enable both the module flag and
+an nginx error-log level that records debug entries. Put `error_log` in the
+main context, before `events` and `http`, so worker-client and resolver messages
+written through the nginx cycle log reach the same destination:
 
 ```nginx
 error_log /var/log/nginx/error.log debug;
-ratelimitly_debug on;
+
+events {
+}
+
+http {
+  ratelimitly_debug on;
+}
 ```
 
 The nginx binary must support debug logging; verify `nginx -V` includes
-`--with-debug`. Module warnings can still appear at higher log levels, but the
-decision and discovery markers below use debug-level entries.
+`--with-debug`. A server- or location-level `error_log` can redirect
+request-context messages, but it does not replace the main-context destination
+used by worker-client, DNS, UDP, and scheduled-event logs. Module warnings can
+still appear at higher log levels, but the detailed decision and discovery
+markers below use debug-level entries.
 
 Useful markers include:
 
@@ -210,8 +235,8 @@ Debug logging can be high-volume and includes request URIs through nginx log
 context, tenant names, key IDs, resolver targets, target addresses, server IDs,
 and hashed bucket/service identifiers. Restrict log access, retention, and
 support-bundle collection accordingly. Disable debug mode after the diagnostic
-window; normal access/error logging and external log-derived metrics should
-carry ongoing production monitoring.
+window; the access-log verdict variable, normal error logging, and external
+log-derived metrics should carry ongoing production monitoring.
 
 ## Credential handling
 

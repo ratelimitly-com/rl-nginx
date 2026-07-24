@@ -39,6 +39,12 @@ PHASE_STATEMENTS = (
     "ngx_memmove(&h[1], &h[0]",
 )
 
+VERDICT_STATEMENTS = (
+    'ngx_string("ratelimitly_verdict")',
+    "ctx->admission_outcome == RN_ADMISSION_VALID_ALLOW",
+    "ctx->admission_outcome == RN_ADMISSION_VALID_DENY",
+)
+
 LIMIT_STATEMENTS = (
     "#define RN_MAX_BUCKET_LEN 1024",
     "#define RN_MAX_SERVICE_LEN 1024",
@@ -103,6 +109,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         re.findall(r'ngx_string\("(ratelimitly(?:_[a-z_]+)?)"\)', source)
     )
     source_directives.discard("ratelimitly_test_fault")
+    source_directives.discard("ratelimitly_verdict")
     documented_directives = set(re.findall(r"^### `([^`]+)`$", dsl, re.MULTILINE))
     if source_directives != documented_directives:
         missing = sorted(source_directives - documented_directives)
@@ -181,6 +188,16 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "consumption contract",
         failures,
     )
+    verdict_getter = function_body(source, "ngx_http_rn_verdict_variable")
+    for fragment in VERDICT_STATEMENTS:
+        scope = source if fragment.startswith("ngx_string") else verdict_getter
+        require(scope, fragment, "executable verdict variable", failures)
+    require(
+        behavior,
+        "$ratelimitly_verdict",
+        "verdict-variable contract",
+        failures,
+    )
     mapping = (SPEC_DIR / "mapping.md").read_text(encoding="utf-8")
     require(
         mapping,
@@ -228,6 +245,7 @@ def negative_fixture_failures(source: str) -> list[str]:
         *DEFAULT_STATEMENTS.values(),
         *C_CLIENT_STATEMENTS,
         *PHASE_STATEMENTS,
+        *VERDICT_STATEMENTS,
         *LIMIT_STATEMENTS,
     )
     for statement in statements:

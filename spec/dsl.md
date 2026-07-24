@@ -131,7 +131,17 @@ and bounded and MUST NOT treat request arguments, headers, cookies, or raw
 paths as authenticated identity. `$binary_remote_addr` MUST NOT be used: the
 current text hash boundary is NUL-terminated and embedded NUL bytes can truncate
 the identity. Use textual `$remote_addr` with correctly configured real-IP or
-proxy-protocol trust.
+proxy-protocol trust. This is an operator precondition, not a parser guarantee:
+nginx complex-value compilation does not expose enough type information for
+rl-nginx to reject that variable name reliably, and the module does not scan
+rendered values for embedded NUL bytes before hashing.
+
+The rendered bucket is one flat string, not a framed list of components.
+Configuration MUST make field boundaries unambiguous by using fixed values and
+finite-map outputs whose allowed alphabet excludes the chosen delimiter. At
+most one other bounded textual component MAY contain the delimiter, and then
+it MUST be last. A change to the rendered text schema changes the hashed
+resource identity and MUST be treated as a bucket-state migration.
 
 The rendered bucket MUST contain `1..1024` bytes. An oversized static template
 is a configuration error. An empty or oversized dynamic result follows

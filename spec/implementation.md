@@ -200,10 +200,12 @@ decision failures MUST follow `ratelimitly_fail`, except that internal nginx
 allocation and event errors MAY return `500`. Latency-report failure MUST NOT
 change the request status.
 
-Normal operational observability is log-based. Debug decision/discovery output
-requires both `ratelimitly_debug on` and an nginx build/log configuration that
-records debug messages. Logs MUST NOT include the full authentication secret.
-The module does not implement a metrics exporter or health endpoint.
+Normal operational observability is log-based. The
+`$ratelimitly_verdict` access-log variable MUST distinguish valid allows and
+denies from every outcome without a valid decision. Debug decision/discovery
+output requires both `ratelimitly_debug on` and an nginx build/log configuration
+that records debug messages. Logs MUST NOT include the full authentication
+secret. The module does not implement a metrics exporter or health endpoint.
 
 ## Conformance tests
 

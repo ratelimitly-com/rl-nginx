@@ -42,9 +42,10 @@ PY_SCRIPTS := \
 	tests/test-workflow-pins.py \
 	tests/test-ci-gates.py \
 	tests/test-sanitizer-policy.py \
+	tests/test-public-example-safety.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check check-build-flags fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test public-test-built dynamic-relocation-test test sanitizers test-internal whitespace
+.PHONY: help check check-build-flags fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test public-example-safety-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test public-test-built dynamic-relocation-test test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
@@ -56,6 +57,7 @@ help:
 		'  make workflow-pin-test  immutable GitHub Actions gate' \
 		'  make ci-gates-test  named CI gate structure test' \
 		'  make sanitizer-policy-test  sanitizer scope and suppression test' \
+		'  make public-example-safety-test  bounded public fixture/documentation gate' \
 		'  make spec-consistency-test  source-backed specification gate' \
 		'  make make-gates-test  negative tests for Makefile failure propagation' \
 		'  make lifecycle-oracles-test  negative tests for lifecycle assertions' \
@@ -109,6 +111,9 @@ ci-gates-test:
 sanitizer-policy-test:
 	python3 tests/test-sanitizer-policy.py
 
+public-example-safety-test:
+	python3 tests/test-public-example-safety.py
+
 spec-consistency-test:
 	python3 tests/test-spec-consistency.py
 
@@ -118,7 +123,7 @@ make-gates-test:
 lifecycle-oracles-test:
 	./tests/test-lifecycle-oracles.sh
 
-unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test spec-consistency-test make-gates-test lifecycle-oracles-test
+unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test public-example-safety-test spec-consistency-test make-gates-test lifecycle-oracles-test
 	python3 integration-tests/test_local_dns_server.py
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-c-client-contract.sh
 	./tests/test-addr-records.sh
