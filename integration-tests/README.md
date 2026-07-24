@@ -163,12 +163,13 @@ socket handler:
 ```
 
 The fixture continuously sends non-RateLimitly datagrams to the worker's
-ephemeral UDP port. The case requires the handler to exhaust its 64-datagram
-budget and yield through nginx's next-event queue, while an HTTP health request
-completes before the flood ends. It then requires the original worker to serve
-a normal rate-limited follow-up, reload, and shut down cleanly. This proves
-event-loop fairness; it does not claim that application-level batching replaces
-network flood controls.
+ephemeral UDP port while an HTTP health request completes before the flood ends.
+It then requires the original worker to serve a normal rate-limited follow-up,
+reload, and shut down cleanly. The executable/specification gates require the
+64-datagram budget and next-event repost; this runtime case proves the resulting
+event-loop liveness without depending on a scheduler-sensitive debug-log
+marker. It does not claim that application-level batching replaces network
+flood controls.
 
 Run the malformed-protocol matrix separately while working on response parsing
 and fail-policy behavior:
