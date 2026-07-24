@@ -231,6 +231,7 @@ Useful markers include:
 | `rn: worker initialization failed; retrying after ...` | Worker-client setup failed and entered bounded backoff. Check bind availability and resource pressure; intervening requests follow the failure policy. |
 | `rn: resolve_srv start ... timeout_ms=...` | SRV discovery started with the HTTP-scope `resolver_timeout`. |
 | `rn: steering_feedback=0 (rebind pending)` | The server requested a deferred UDP source-port rebind. This is normal steering behavior, not an outage by itself. |
+| `rn: UDP source socket rebound` | The replacement UDP endpoint is installed and subsequent sends use its source port. This debug marker confirms successful steering completion. |
 | `rn: UDP socket rebind failed; retaining current endpoint and retrying` | A replacement source-port socket could not be prepared. The existing socket remains active; investigate local socket/connection exhaustion or bind failures if retries continue. |
 
 Numeric C-client statuses are `-1` I/O, `-2` timeout, `-3` protocol, `-4`
