@@ -7,6 +7,8 @@ source "${RN_ROOT}/tools/sanitizer-flags.env"
 NGINX_SRC="${NGINX_SRC:-${RN_ROOT}/upstream-nginx}"
 SANITIZER_RUNS="${SANITIZER_RUNS:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${RN_ROOT}/integration-tests/artifacts/lifecycle-sanitized}"
+PROBE_ARTIFACTS="${ARTIFACT_ROOT}/standalone-probes"
+PROBE_LOG="${PROBE_ARTIFACTS}/sanitizer.log"
 SANITIZER_CFLAGS="${RN_SANITIZER_COMPILE_FLAGS} ${RN_SANITIZER_PROBE_FLAGS}"
 SANITIZER_LDFLAGS="${RN_SANITIZER_LINK_FLAGS}"
 RCLIENT_REBUILT=0
@@ -66,6 +68,10 @@ restore_rclient() {
 }
 trap restore_rclient EXIT
 
+run_sanitized_probe() {
+  "$@" 2>&1 | tee -a "${PROBE_LOG}"
+}
+
 export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:detect_leaks=1:strict_string_checks=1}"
 # Keep UBSan recoverable so the exact report scanner, rather than process exit
 # timing, decides which diagnostics are accepted. Every report outside the
@@ -84,17 +90,26 @@ make -C "${RCLIENT_DIR}" \
   CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   all test-responder
-CFLAGS="${SANITIZER_CFLAGS}" \
+mkdir -p "${PROBE_ARTIFACTS}"
+: >"${PROBE_LOG}"
+run_sanitized_probe env \
+  CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   RCLIENT_DIR="${RCLIENT_DIR}" \
   "${RN_ROOT}/tests/test-c-client-contract.sh"
-CFLAGS="${SANITIZER_CFLAGS}" \
+run_sanitized_probe env \
+  CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   "${RN_ROOT}/tests/test-numeric.sh"
-CFLAGS="${SANITIZER_CFLAGS}" \
+run_sanitized_probe env \
+  CFLAGS="${SANITIZER_CFLAGS}" \
   LDFLAGS="${SANITIZER_LDFLAGS}" \
   RCLIENT_DIR="${RCLIENT_DIR}" \
   "${RN_ROOT}/tests/test-srv-records.sh"
+if ! "${RN_ROOT}/tools/check-sanitizer-reports.sh" "${PROBE_ARTIFACTS}"; then
+  echo "[sanitizers] sanitizer report found in standalone probes" >&2
+  exit 1
+fi
 
 echo "[sanitizers] building nginx and rl-nginx"
 RN_TEST_FAULT_INJECTION=1 \

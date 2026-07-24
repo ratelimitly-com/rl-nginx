@@ -58,6 +58,13 @@ def validate(documents: dict[str, str]) -> list[str]:
         not in runner
     ):
         failures.append("UBSan does not defer acceptance to the exact report scanner")
+    if runner.count("run_sanitized_probe env") != 3:
+        failures.append("standalone sanitizer probes are not all captured")
+    if (
+        '"${RN_ROOT}/tools/check-sanitizer-reports.sh" "${PROBE_ARTIFACTS}"'
+        not in runner
+    ):
+        failures.append("standalone sanitizer probe reports are not scanned")
     if (
         'RN_NGINX_ONESHOT_ASAN_OPTIONS="${ASAN_OPTIONS}:detect_leaks=0"'
         not in runner
@@ -118,6 +125,29 @@ def negative_fixture_failures(documents: dict[str, str]) -> list[str]:
                 "runner": documents["runner"].replace(
                     "halt_on_error=0:print_stacktrace=1",
                     "halt_on_error=1:print_stacktrace=1",
+                    1,
+                ),
+            },
+        ),
+        (
+            "uncaptured standalone probe",
+            {
+                **documents,
+                "runner": documents["runner"].replace(
+                    "run_sanitized_probe env",
+                    "env",
+                    1,
+                ),
+            },
+        ),
+        (
+            "unscanned standalone probes",
+            {
+                **documents,
+                "runner": documents["runner"].replace(
+                    '"${RN_ROOT}/tools/check-sanitizer-reports.sh" '
+                    '"${PROBE_ARTIFACTS}"',
+                    "true",
                     1,
                 ),
             },
@@ -240,7 +270,7 @@ def main() -> int:
         return 1
     print(
         "PASS sanitizer policy is shared and narrowly scoped "
-        "(10 red-case mutations, 2 scanner fixtures)"
+        "(12 red-case mutations, 2 scanner fixtures)"
     )
     return 0
 
