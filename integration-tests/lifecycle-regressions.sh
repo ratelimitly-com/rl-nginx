@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lifecycle-oracles.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the complete required public lifecycle matrix against the locked
 rl-c-client test responder. Every case pins the original nginx worker PID,
@@ -46,7 +46,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -57,6 +57,7 @@ esac
 ALL_PUBLIC_GROUPS=(
   timeout
   aborted-client
+  udp-ingress-fairness
   steering-rebind
   worker-resolver-scope
   admission-contract
@@ -98,12 +99,15 @@ CLIENT_TIMEOUT_SEC="${CLIENT_TIMEOUT_SEC:-3}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${SCRIPT_DIR}/artifacts/lifecycle}"
 ABORT_CLIENT_HELPER="${SCRIPT_DIR}/abort_http_clients.py"
 UDP_PORT_HELPER="${SCRIPT_DIR}/worker_udp_port.py"
+UDP_FLOOD_HELPER="${SCRIPT_DIR}/udp_flood.py"
 ENFORCEMENT_ALLOW_COUNT=3
 ENFORCEMENT_TOTAL_REQUESTS=5
 
 RESPONDER_PID=""
 DNS_PID=""
 NGINX_PID=""
+FLOOD_PID=""
+HTTP_PROBE_PID=""
 ORIGINAL_WORKER_PID=""
 CASE_FAILED=0
 RESPONDER_RUN=0
@@ -180,6 +184,10 @@ check_clean_nginx_shutdown() {
 }
 
 cleanup() {
+  rn_terminate_pid "${FLOOD_PID}" "UDP flood fixture" || true
+  FLOOD_PID=""
+  rn_terminate_pid "${HTTP_PROBE_PID}" "HTTP probe" || true
+  HTTP_PROBE_PID=""
   stop_nginx
   stop_responder
   rn_terminate_pid "${DNS_PID}" "local DNS server" || true
@@ -188,6 +196,7 @@ cleanup() {
 prepare_binaries() {
   need_cmd bash
   need_cmd curl
+  need_cmd dd
   need_cmd dig
   need_cmd make
   need_cmd ps
@@ -509,7 +518,7 @@ dns_failure_mode() {
 
 is_guard_case() {
   case "${MODE}" in
-    guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
+    steering-rebind|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -550,6 +559,7 @@ synthetic_auth_key() {
 
 write_nginx_config() {
   local auth_key
+  local debug_mode="on"
   local fault_directive=""
   local guard_defs=""
   local load_module_directive=""
@@ -559,6 +569,9 @@ write_nginx_config() {
   [[ -n "${auth_key}" ]] || fail "could not obtain the responder's synthetic nginx key"
   if [[ "${MODE}" == "enforcement-boundary" ]]; then
     zone_rate="${ENFORCEMENT_ALLOW_COUNT}r/h"
+  fi
+  if [[ "${MODE}" == "udp-ingress-fairness" ]]; then
+    debug_mode="off"
   fi
   if is_guard_case; then
     guard_defs='  ratelimitly_guard lifecycle_guard "service=svc:lifecycle:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
@@ -580,6 +593,8 @@ write_nginx_config() {
     >"${PREFIX}/html/admission-redirect/index.html"
   printf 'before <!--# include virtual="/admission-include" --> after\n' \
     >"${PREFIX}/html/admission-posted"
+  dd if=/dev/zero of="${PREFIX}/html/steering-latency.bin" \
+    bs=8192 count=1 status=none
 
   cat >"${NGINX_CONF}" <<EOF
 ${load_module_directive}
@@ -603,7 +618,7 @@ http {
   ratelimitly_auth_key ${auth_key};
   ratelimitly_timeout ${REQUEST_TIMEOUT};
   ratelimitly_fail ${FAIL_POLICY};
-  ratelimitly_debug on;
+  ratelimitly_debug ${debug_mode};
 ${fault_directive}
 
   ratelimitly_zone lifecycle_zone "bucket=lifecycle:\$uri" rate=${zone_rate};
@@ -626,6 +641,15 @@ ${guard_defs}
       ${ratelimitly_rule}
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
+    }
+
+    location = /steering-latency {
+      ratelimitly_label "STEERING-LATENCY:\$uri";
+      ${ratelimitly_rule}
+      limit_rate_after 1k;
+      limit_rate 4k;
+      root ${PREFIX}/html;
+      try_files /steering-latency.bin =404;
     }
 
     location = /rendered-bucket {
@@ -1004,7 +1028,113 @@ run_aborted_client_case() {
   check_follow_up "aborted-client cleanup"
 }
 
+run_udp_ingress_fairness_case() {
+  local code
+  local flood_log="${ARTIFACT_DIR}/udp-flood.jsonl"
+  local port
+
+  port="$(worker_udp_port)" \
+    || fail "could not determine the UDP port before the ingress flood"
+  python3 "${UDP_FLOOD_HELPER}" \
+    --host "${NGINX_HOST}" \
+    --port "${port}" \
+    --duration 1 \
+    --workers 8 \
+    >"${flood_log}" 2>&1 &
+  FLOOD_PID=$!
+
+  wait_for_log '"event": "ready"' "${flood_log}" 40 \
+    || fail "UDP flood fixture did not become ready; see ${flood_log}"
+  kill -0 "${FLOOD_PID}" 2>/dev/null \
+    || fail "UDP flood fixture exited before the fairness probe"
+
+  code="$(request_path_code /health 0.5)"
+  if [[ "${code}" != "204" ]]; then
+    record_failure "health request under sustained invalid UDP ingress returned ${code}, expected 204"
+  elif ! kill -0 "${FLOOD_PID}" 2>/dev/null; then
+    record_failure "health request completed only after the UDP flood ended"
+  else
+    log "HTTP processing remained live during sustained invalid UDP ingress"
+  fi
+  wait_for_log 'rn: UDP receive batch exhausted; yielding' \
+    "${NGINX_ERROR_LOG}" 20 \
+    || record_failure "UDP ingress did not exercise the bounded receive yield"
+
+  if ! wait "${FLOOD_PID}"; then
+    record_failure "UDP flood fixture failed; see ${flood_log}"
+  fi
+  FLOOD_PID=""
+  wait_for_log '"event": "complete"' "${flood_log}" 20 \
+    || record_failure "UDP flood fixture did not record its send count"
+  check_worker_survival "bounded UDP receive processing"
+  check_follow_up "bounded UDP receive processing"
+}
+
+check_rebind_latency_report() {
+  local attempt
+  local code="000"
+  local code_file="${ARTIFACT_DIR}/steering-latency-code.txt"
+  local port_after=""
+  local port_before
+  local current_port
+
+  port_before="$(worker_udp_port)" \
+    || fail "could not determine the UDP port before the guarded steering request"
+  start_responder guard-pass rebind 0
+
+  curl --max-time 5 -s -o /dev/null -w '%{http_code}' \
+    "http://${NGINX_HOST}:${NGINX_PORT}/steering-latency" \
+    >"${code_file}" &
+  HTTP_PROBE_PID=$!
+
+  wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 40 \
+    || record_failure "guarded steering responder did not observe the rate request"
+  for (( attempt = 0; attempt < 100; attempt++ )); do
+    current_port="$(worker_udp_port 2>/dev/null || true)"
+    if [[ -n "${current_port}" && "${current_port}" != "${port_before}" ]]; then
+      port_after="${current_port}"
+      break
+    fi
+    sleep 0.02
+  done
+  if [[ -z "${port_after}" ]]; then
+    record_failure "guarded steering request did not replace UDP source port ${port_before} before content completed"
+  elif grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
+    record_failure "guarded steering latency report arrived before the source-port replacement was observed"
+  else
+    log "guarded request changed UDP source port before latency reporting: ${port_before} -> ${port_after}"
+  fi
+
+  if ! wait "${HTTP_PROBE_PID}"; then
+    record_failure "guarded steering HTTP request failed"
+  fi
+  HTTP_PROBE_PID=""
+  if [[ -s "${code_file}" ]]; then
+    code="$(<"${code_file}")"
+  fi
+  if [[ "${code}" != "200" ]]; then
+    record_failure "guarded steering HTTP request returned ${code}, expected 200"
+  fi
+
+  wait_for_log '"event":"latency_report"' "${RESPONDER_LOG}" 40 \
+    || record_failure "guarded steering request did not send its independent latency report"
+  if ! awk '
+      /"event":"rate_request"/ { rate_count++; rate_sequence = index($0, "\"sequence\":1") }
+      /"event":"latency_report"/ { report_count++; report_sequence = index($0, "\"sequence\":2") }
+      END {
+        ok = rate_count == 1 && report_count == 1 && rate_sequence && report_sequence
+        exit(ok ? 0 : 1)
+      }
+    ' "${RESPONDER_LOG}"; then
+    record_failure "guarded steering did not produce exactly one rate request followed by one independent latency report"
+  else
+    log "latency report succeeded after steering replaced the rate request's source port"
+  fi
+  check_worker_survival "steering before independent latency reporting"
+}
+
 run_steering_rebind_case() {
+  check_rebind_latency_report
   check_rebind_follow_up "steering trigger" 1
   check_follow_up "steering rebind"
 }
@@ -1741,6 +1871,7 @@ run_one() {
   case "${MODE}" in
     timeout) run_timeout_case ;;
     aborted-client|guard-aborted-client) run_aborted_client_case ;;
+    udp-ingress-fairness) run_udp_ingress_fairness_case ;;
     steering-rebind) run_steering_rebind_case ;;
     outage) run_outage_case ;;
     dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;

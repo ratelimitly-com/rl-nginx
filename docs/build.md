@@ -132,7 +132,8 @@ make dynamic-relocation-test NGINX_SRC=/path/to/nginx-src
 That gate copies the nginx binary and module into an isolated runtime, rejects
 RPATH/RUNPATH and a shared `librclient.so` dependency, runs `nginx -t`, and
 exercises final-admission ordering, worker resolver selection, the exact
-allow/deny boundary, and guard/latency behavior without `LD_LIBRARY_PATH`.
+allow/deny boundary, bounded invalid-UDP ingress, steering/latency ordering,
+and guard/latency behavior without `LD_LIBRARY_PATH`.
 
 ### Helper flags
 

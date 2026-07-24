@@ -48,7 +48,7 @@ if kill -0 "${stubborn_pid}" 2>/dev/null; then
   fail "forced termination left the fixture alive"
 fi
 
-expected_groups=$'timeout\naborted-client\nsteering-rebind\nworker-resolver-scope\nadmission-contract\nenforcement-boundary\nrendered-values\noutage-policy\ndns-policy\nguard-latency\nprotocol-policy\ncardinality'
+expected_groups=$'timeout\naborted-client\nudp-ingress-fairness\nsteering-rebind\nworker-resolver-scope\nadmission-contract\nenforcement-boundary\nrendered-values\noutage-policy\ndns-policy\nguard-latency\nprotocol-policy\ncardinality'
 actual_groups="$("${RN_ROOT}/integration-tests/lifecycle-regressions.sh" list-all)"
 if [[ "${actual_groups}" != "${expected_groups}" ]]; then
   fail "all-mode manifest does not cover the complete public lifecycle matrix"

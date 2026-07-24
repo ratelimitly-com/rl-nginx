@@ -161,6 +161,16 @@ current socket. If replacement setup fails, the current socket remains active
 and the module retries later; a failed steering rebind by itself MUST NOT turn
 a usable worker into an outage.
 
+A latency report is an independent fire-and-forget request. It is not related
+to the rate request that admitted the HTTP operation and does not require that
+request's source port. The module MUST NOT hold a requested rebind for a future
+latency report. After the C-client callback reports `keep_port = false` (wire
+`steering_feedback = 0`), it SHOULD use the replacement source port for
+subsequent sends as soon as nginx can safely replace the socket. A send
+completed reentrantly while the feedback datagram's UDP read callback is still
+active MAY use the old port; otherwise later sends use the replacement
+endpoint.
+
 ## Latency reporting
 
 For a main request that used at least one distinct guard, the nginx log-phase

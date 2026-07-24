@@ -72,6 +72,14 @@ address/port returned by the SRV and address lookups. `ratelimitly_bind`, when
 set, chooses only the local UDP source address; it is not a server address.
 Server or location resolver overrides do not affect RateLimitly discovery.
 
+The worker socket is unconnected and can receive any datagram addressed to its
+ephemeral port. Protocol authentication prevents invalid datagrams from
+producing a verdict, while a 64-datagram handler budget prevents one UDP event
+from monopolizing the nginx event loop. This is defense in depth, not
+volumetric-DDoS protection: restrict ingress to expected RateLimitly networks
+where the deployment topology permits it, and use host or network controls for
+flood protection.
+
 Check discovery from the same network namespace as nginx:
 
 ```sh
@@ -254,6 +262,18 @@ production credential:
   model;
 - rotate the key in the RateLimitly control plane after suspected exposure,
   deploy the replacement, warm the new workers, and revoke the old key.
+
+nginx also retains the parsed directive value in configuration-cycle memory so
+the master can create replacement workers and a worker can retry lazy client
+initialization. Temporary worker-initialization copies are explicitly erased,
+but the configuration-cycle value and the active C-client credential remain
+plaintext process memory for their required lifetimes. There is no safe local
+zeroization point without changing that lifecycle. Reevaluate this boundary if
+nginx or the C client gains an opaque secret handle, protected allocator, or
+initialization model that permits erasure without breaking reload, worker
+replacement, or retry. Until then, process-memory and core-dump protection are
+required controls rather than optional hardening. The rl-nginx maintainers own
+this accepted boundary and its reevaluation.
 
 The optional internal full-stack harness writes a generated tenant key to its
 terminal/master log and tenant-registration log, then writes it into the nginx

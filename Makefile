@@ -43,6 +43,7 @@ PY_SCRIPTS := \
 	tests/test-ci-gates.py \
 	tests/test-sanitizer-policy.py \
 	tests/test-public-example-safety.py \
+	integration-tests/udp_flood.py \
 	integration-tests/worker_udp_port.py
 
 .PHONY: help check check-build-flags fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test public-example-safety-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test public-test-built dynamic-relocation-test test sanitizers test-internal whitespace

@@ -238,6 +238,8 @@ def validate_dynamic_relocation(text: str) -> list[str]:
         "admission-contract",
         "worker-resolver-scope",
         "enforcement-boundary",
+        "udp-ingress-fairness",
+        "steering-rebind",
         "guard-latency",
     ):
         command = f'"${{SCRIPT_DIR}}/lifecycle-regressions.sh" {case}'
@@ -331,6 +333,8 @@ def dynamic_negative_fixture_failures(text: str) -> list[str]:
         "admission-contract",
         "worker-resolver-scope",
         "enforcement-boundary",
+        "udp-ingress-fairness",
+        "steering-rebind",
         "guard-latency",
     ):
         command = f'"${{SCRIPT_DIR}}/lifecycle-regressions.sh" {case}'

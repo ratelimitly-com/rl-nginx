@@ -34,8 +34,11 @@ only supported way to opt into a dirty development tree.
   below.
 - Use `r_client_check_rate_limit_async_borrowed` to avoid per-request copies.
 - Timeouts and retries are set by nginx (default timeout 20ms, retries disabled).
-- Steering feedback is evaluated per response; rebind the UDP socket only after
-  the current request completes if any response requested a port change.
+- Steering feedback is evaluated per response; rebind the UDP socket after all
+  current in-flight RateLimitly requests complete if any response requested a
+  port change. Latency reports are independent fire-and-forget requests, not
+  continuations of those rate requests, so a rebind never waits for a later
+  report.
 
 ## Notes
 
@@ -79,7 +82,9 @@ not compatible until every item remains true:
    DNS callback without re-entering a half-destroyed client.
 8. Steering feedback may be delivered from the response-completion stack. The
    adapter therefore only records and schedules a rebind; it never replaces the
-   socket from either the rate callback or UDP read callback.
+   socket from either the rate callback or UDP read callback. The scheduled
+   event is the earliest safe source-port replacement point. A later latency
+   report has no source-port continuity requirement and must not delay it.
 
 These requirements deliberately state behavior that is not fully expressible
 through the C header types. They are compatibility requirements for
