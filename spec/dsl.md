@@ -271,7 +271,7 @@ source addresses MUST NOT be used as label values.
 | `ratelimitly_debug` | `off` |
 | `ratelimitly_guard ttl` | `30s` |
 | `ratelimitly_guard max_samples` | `128` |
-| `ratelimitly_guard buffer_size` | `128` |
+| `ratelimitly_guard buffer_size` | credential's `latency_buffer_size_max` |
 | `ratelimitly_guard min_sample_threshold` | `8` |
 
 Production configurations SHOULD set timeout and failure policy explicitly

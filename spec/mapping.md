@@ -48,7 +48,7 @@ first-seen order:
 | `threshold_ms` | rendered threshold converted to milliseconds |
 | `ttl_ms` | configured guard TTL in milliseconds |
 | `max_samples` | configured value |
-| `buffer_size` | configured value |
+| `buffer_size` | explicit configured value, or the API-key `latency_buffer_size_max` when omitted |
 | `min_sample_threshold` | configured value |
 
 The service hash uses the same opaque, flat, NUL-terminated boundary as the

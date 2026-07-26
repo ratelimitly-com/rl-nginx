@@ -22,7 +22,6 @@ DEFAULT_STATEMENTS = {
     "debug": "mcf->debug = 0;",
     "ttl": "uint32_t ttl_ms = 30000;",
     "max_samples": "uint32_t max_samples = 128;",
-    "buffer_size": "uint32_t buffer_size = 128;",
     "min_sample_threshold": "uint32_t min_sample_threshold = 8;",
 }
 
@@ -139,11 +138,17 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "| `ratelimitly_debug` | `off` |",
         "| `ratelimitly_guard ttl` | `30s` |",
         "| `ratelimitly_guard max_samples` | `128` |",
-        "| `ratelimitly_guard buffer_size` | `128` |",
+        "| `ratelimitly_guard buffer_size` | credential's `latency_buffer_size_max` |",
         "| `ratelimitly_guard min_sample_threshold` | `8` |",
     )
     for fragment in dsl_defaults:
         require(dsl, fragment, "DSL defaults table", failures)
+    require(guard_parser, "ngx_flag_t buffer_size_set = 0;",
+            "credential-derived buffer-size omission state", failures)
+    require(source, "out_guard->buffer_size = guard->buffer_size_set",
+            "credential-derived buffer-size selection", failures)
+    require(source, "mcf->latency_buffer_size_max",
+            "credential-derived buffer-size quota", failures)
 
     for fragment in LIMIT_STATEMENTS:
         require(source, fragment, "executable rendered-value limit", failures)
