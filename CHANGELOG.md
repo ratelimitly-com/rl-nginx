@@ -3,6 +3,15 @@
 All notable changes to `rl-nginx` will be documented here. Release candidates
 remain preview software and must not be treated as ABI-stable versions.
 
+## 0.1.0-rc.3 — 2026-07-26
+
+- updated the supported public `rl-c-client` dependency to `v0.4.0`, including
+  the oldest-trusted-server response strategy and retry behavior;
+- refreshed dependency, compatibility, security, and third-party release
+  documentation to record the immutable client tag and commit; and
+- reran the complete unit, integration, dynamic-relocation, architecture, and
+  sanitizer release gates against the new client release.
+
 ## 0.1.0-rc.2 — 2026-07-24
 
 Changes since `v0.1.0-rc.1`:

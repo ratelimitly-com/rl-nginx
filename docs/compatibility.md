@@ -14,7 +14,7 @@ gates below pass for the release candidate.
 | Architectures | `x86_64` and `aarch64` |
 | nginx module modes | Static and dynamic |
 | nginx releases | Stable `1.30.2` and mainline `1.31.1` |
-| `rl-c-client` | [`v0.2.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.2.0) at `6cafd3f5bea6ba2f8a791966a70b8ab8e56c485f` |
+| `rl-c-client` | [`v0.4.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.4.0) at `8ce572d48499ebca99e6b8bddda2dd4d149b68d8` |
 
 Public preview means the module is suitable for evaluation and controlled
 deployments after operators test their exact nginx build and failure policy. It
