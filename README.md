@@ -14,7 +14,7 @@ exact release scope is in [the compatibility guide](docs/compatibility.md).
 ## Quick Start
 
 The commands below use the repository's pinned nginx `1.31.1` submodule and
-automatically fetch the locked public `rl-c-client` `v0.2.0` release. No private
+automatically fetch the locked public `rl-c-client` `v0.4.0` release. No private
 repository, RateLimitly server, tenant, or API key is needed to build and run
 the public test suite.
 
@@ -180,7 +180,7 @@ Supported builds use immutable inputs:
 | --- | --- |
 | nginx stable | `release-1.30.2` at `a92a537860c7b87d3793d9eb41c9cf3ed833b53c` |
 | nginx mainline and default submodule | `release-1.31.1` at `d44205284fa41662da803b796d6056fc1e59b1f3` |
-| `rl-c-client` | `v0.2.0` at `6cafd3f5bea6ba2f8a791966a70b8ab8e56c485f` |
+| `rl-c-client` | `v0.4.0` at `8ce572d48499ebca99e6b8bddda2dd4d149b68d8` |
 
 Set `NGINX_SRC=/path/to/nginx-src` when testing another supported nginx source
 tree. Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally developing
