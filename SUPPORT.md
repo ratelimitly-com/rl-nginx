@@ -35,4 +35,3 @@ Issues are public by default. Do not put suspected vulnerabilities or
 credentials in an issue; follow [`SECURITY.md`](SECURITY.md) for security
 reports. For a sensitive non-security conduct concern, contact a repository
 maintainer through GitHub rather than publishing private details.
-

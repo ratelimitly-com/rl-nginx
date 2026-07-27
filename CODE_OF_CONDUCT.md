@@ -32,4 +32,3 @@ welcoming.
 Security vulnerabilities are handled separately under
 [`SECURITY.md`](SECURITY.md). This code of conduct is adapted from the
 [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/).
-
