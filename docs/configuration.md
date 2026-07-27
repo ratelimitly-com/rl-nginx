@@ -335,8 +335,10 @@ location /api/ {
 
 Guard threshold and TTL milliseconds and the three sample-count fields must fit
 an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
-unitless duration means seconds. `max_samples` and `buffer_size` must be
-nonzero. Rendered service keys must contain `1..1024` bytes; static oversized
+unitless duration means seconds. `max_samples` must be nonzero. When
+`buffer_size` is omitted, nginx uses the configured API key's
+`latency_buffer_size_max` quota. An explicit `buffer_size` must be nonzero and
+must not exceed that credential quota. Rendered service keys must contain `1..1024` bytes; static oversized
 values fail `nginx -t`, while empty or oversized dynamic values follow the
 failure policy. Quote the complete `"service=value"` argument when needed,
 never only the value.

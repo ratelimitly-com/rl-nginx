@@ -38,6 +38,7 @@ typedef struct {
     uint32_t ttl_ms;
     uint32_t max_samples;
     uint32_t buffer_size;
+    ngx_flag_t buffer_size_set;
     uint32_t min_sample_threshold;
 } rn_guard_t;
 
@@ -55,6 +56,7 @@ typedef struct {
     uint64_t key_id;
     r_auth_type_t auth_type;
     ngx_str_t auth_key;
+    uint32_t latency_buffer_size_max;
 
     ngx_msec_t timeout_ms;
     ngx_flag_t fail_open;
@@ -248,6 +250,7 @@ static ngx_flag_t rn_has_literal_value_quotes(ngx_str_t *value);
 static ngx_int_t rn_build_guard_entries(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
+    rn_main_conf_t *mcf,
     rn_guard_t *guard,
     r_latency_guard_t *out_guard,
     r_service_latency_report_t *out_report
@@ -599,7 +602,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             }
 
             ngx_int_t guard_rc = rn_build_guard_entries(
-                r, worker, guard, &guards[guard_idx], &lat_reports[guard_idx]);
+                r, worker, mcf, guard, &guards[guard_idx], &lat_reports[guard_idx]);
             if (guard_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
                 if (mcf->debug) {
                     ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
@@ -1011,6 +1014,7 @@ ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     mcf->auth_key = value[1];
     mcf->auth_type = info.type;
     mcf->key_id = info.key_id;
+    mcf->latency_buffer_size_max = info.latency_buffer_size_max;
     return NGX_CONF_OK;
 }
 
@@ -1186,6 +1190,7 @@ static ngx_int_t
 rn_build_guard_entries(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
+    rn_main_conf_t *mcf,
     rn_guard_t *guard,
     r_latency_guard_t *out_guard,
     r_service_latency_report_t *out_report
@@ -1195,7 +1200,7 @@ rn_build_guard_entries(
     uint32_t threshold_ms = 0;
     u_char *service_cstr;
 
-    if (r == NULL || worker == NULL || guard == NULL
+    if (r == NULL || worker == NULL || mcf == NULL || guard == NULL
         || out_guard == NULL || out_report == NULL) {
         return NGX_ERROR;
     }
@@ -1224,14 +1229,18 @@ rn_build_guard_entries(
     out_guard->threshold_ms = threshold_ms;
     out_guard->ttl_ms = guard->ttl_ms;
     out_guard->max_samples = guard->max_samples;
-    out_guard->buffer_size = guard->buffer_size;
+    out_guard->buffer_size = guard->buffer_size_set
+        ? guard->buffer_size : mcf->latency_buffer_size_max;
+    if (out_guard->buffer_size == 0) {
+        return NGX_ERROR;
+    }
     out_guard->min_sample_threshold = guard->min_sample_threshold;
 
     ngx_memcpy(out_report->service_id, out_guard->service_id, sizeof(out_report->service_id));
     out_report->observed_latency = 0;
     out_report->ttl_ms = guard->ttl_ms;
     out_report->max_samples = guard->max_samples;
-    out_report->buffer_size = guard->buffer_size;
+    out_report->buffer_size = out_guard->buffer_size;
     out_report->min_sample_threshold = guard->min_sample_threshold;
 
     if (worker->debug) {
@@ -1400,7 +1409,8 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_str_t threshold = ngx_null_string;
     uint32_t ttl_ms = 30000;
     uint32_t max_samples = 128;
-    uint32_t buffer_size = 128;
+    uint32_t buffer_size;
+    ngx_flag_t buffer_size_set = 0;
     uint32_t min_sample_threshold = 8;
     uint32_t static_threshold_ms;
 
@@ -1443,6 +1453,7 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
             {
                 return "invalid ratelimitly_guard buffer_size";
             }
+            buffer_size_set = 1;
         } else if (ngx_strncmp(value[i].data, "min_sample_threshold=", 21) == 0) {
             ngx_str_t n;
             n.data = value[i].data + 21;
@@ -1498,7 +1509,10 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     guard->threshold_template = threshold;
     guard->ttl_ms = ttl_ms;
     guard->max_samples = max_samples;
-    guard->buffer_size = buffer_size;
+    guard->buffer_size_set = buffer_size_set;
+    if (buffer_size_set) {
+        guard->buffer_size = buffer_size;
+    }
     guard->min_sample_threshold = min_sample_threshold;
 
     ngx_http_compile_complex_value_t ccv;
