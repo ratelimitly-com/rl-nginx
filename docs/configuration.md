@@ -6,6 +6,12 @@ are part of the enforcement boundary: an attacker-controlled identity can
 split traffic across unlimited buckets, while an unbounded label can create
 excessive telemetry cardinality or an oversized request.
 
+This guide explains how nginx directives construct those operations. For the
+underlying meanings of resource requests, latency reports, API-key quotas, and
+client policy, follow the versioned `rl-c-client` links in the relevant
+sections or start with its
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#operation-model).
+
 ## Minimal configuration
 
 The tenant and API key below are deliberately non-working placeholders. Replace
@@ -107,6 +113,11 @@ cardinality and structural uniqueness. A template-schema, rate, or window
 change produces a new resource ID and starts new bucket state, so version and
 roll out such a change as an identity migration.
 
+The exact, cross-client identity contract is defined by the C client's
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#content-defined-ids).
+`rl-nginx` owns only the rendered name and effective nginx rate/window values
+passed to those helpers.
+
 Avoid patterns such as:
 
 ```nginx
@@ -198,6 +209,12 @@ model, rotate an exposed key through the RateLimitly control plane, and redact
 it from support bundles. `nginx -T` prints included configuration; never share
 its unredacted output.
 
+The encoded fields, client-side checks, and server-enforced quota boundaries
+are documented in the C client's
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#credentials)
+section. DNS target naming and refresh behavior are client-owned; see
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh).
+
 ## Timeout and failure policy
 
 ```nginx
@@ -218,6 +235,13 @@ maximum 60ms wait. A valid response from the oldest discovered server can
 complete earlier. Keep the derived TTL within the credential's
 `dedup_ttl_ms_max`; an invalid policy makes request construction fail and the
 configured failure policy applies.
+
+This is a summary of the locked defaults, not a second policy definition. See
+the authoritative
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy)
+for schedules, response selection, completion delivery, deduplication, and
+validation rules. `rl-nginx` exposes only `U`; it does not expose the other
+policy parameters as directives.
 
 The default is `ratelimitly_fail open`, but production configurations should
 set the policy explicitly:
@@ -316,12 +340,12 @@ ratelimitly_guard api_latency
   min_sample_threshold=8;
 ```
 
-A guard hashes the rendered service key, sends latency metadata, and asks
-RateLimitly to shed requests when observed latency crosses the configured
-threshold. Prefer a fixed service name per protected application or a finite
-route-to-service map. Do not use raw `$host`, `$uri`, request arguments,
-headers, cookies, or user IDs; doing so creates attacker-controlled service
-cardinality and fragments latency history.
+A guard names a latency tracker, supplies its state-defining settings, and asks
+RateLimitly to reject the combined request when observed latency crosses the
+configured threshold. Prefer a fixed service name per protected application or
+a finite route-to-service map. Do not use raw `$host`, `$uri`, request
+arguments, headers, cookies, or user IDs; doing so creates attacker-controlled
+service cardinality and fragments latency history.
 
 The module reports a post-response latency sample only after RateLimitly has
 returned a valid allow and the admitted request reaches nginx log phase without
@@ -345,10 +369,10 @@ an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
 unitless duration means seconds. `max_samples` must be nonzero. When
 `buffer_size` is omitted, nginx uses the configured API key's
 `latency_buffer_size_max` quota. An explicit `buffer_size` must be nonzero and
-must not exceed that credential quota. Rendered service keys must contain `1..1024` bytes; static oversized
-values fail `nginx -t`, while empty or oversized dynamic values follow the
-failure policy. Quote the complete `"service=value"` argument when needed,
-never only the value.
+must not exceed that credential quota. Rendered service keys must contain
+`1..1024` bytes; static oversized values fail `nginx -t`, while empty or
+oversized dynamic values follow the failure policy. Quote the complete
+`"service=value"` argument when needed, never only the value.
 The tuning fields are static and validated while loading configuration.
 
 A static invalid `threshold` makes `nginx -t` fail. A dynamic threshold is
@@ -359,6 +383,12 @@ map for dynamic thresholds; never render them directly from client input.
 retained, non-expired sample is still required before minimum latency is
 available. A positive value requires the estimated insertion rate to reach
 that threshold. The default is `8`.
+
+Tracker fields and the independence of reports from resource requests are
+defined in the C client's
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#latency-guards-and-independent-reports).
+This module adds the HTTP-specific eligibility rule and the measurement from
+request start to nginx log phase described above.
 
 ## Labels and data exposure
 

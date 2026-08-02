@@ -14,6 +14,12 @@ BEHAVIOR = SPEC_DIR / "behavior.md"
 IMPLEMENTATION = SPEC_DIR / "implementation.md"
 INDEX = SPEC_DIR / "index.md"
 ROADMAP = SPEC_DIR / "roadmap.md"
+DEPENDENCY_LOCK = ROOT / "dependencies" / "rl-c-client.env"
+
+CLIENT_DOC_URL = re.compile(
+    r"https://github\.com/ratelimitly-com/rl-c-client/"
+    r"(?:blob|tree|releases/tag)/([^/#)]+)"
+)
 
 
 DEFAULT_STATEMENTS = {
@@ -99,6 +105,25 @@ def function_body(source: str, name: str) -> str:
 def require(text: str, fragment: str, location: str, failures: list[str]) -> None:
     if fragment not in text:
         failures.append(f"{location} is missing {fragment!r}")
+
+
+def client_documentation_link_failures(
+    documents: dict[Path, str], expected_tag: str
+) -> tuple[list[str], int]:
+    failures: list[str] = []
+    link_count = 0
+    for path, document in documents.items():
+        for match in CLIENT_DOC_URL.finditer(document):
+            link_count += 1
+            linked_tag = match.group(1)
+            if linked_tag != expected_tag:
+                failures.append(
+                    f"{path.relative_to(ROOT)} links rl-c-client {linked_tag}, "
+                    f"but the dependency lock selects {expected_tag}"
+                )
+    if link_count == 0:
+        failures.append("public documentation contains no versioned rl-c-client links")
+    return failures, link_count
 
 
 def validate(raw_source: str) -> tuple[list[str], int]:
@@ -323,6 +348,45 @@ def main() -> int:
     source = MODULE.read_text(encoding="utf-8")
     failures, directive_count = validate(source)
     failures.extend(negative_fixture_failures(source))
+
+    lock = DEPENDENCY_LOCK.read_text(encoding="utf-8")
+    tag_match = re.search(r'^RL_C_CLIENT_TAG="([^"]+)"$', lock, re.MULTILINE)
+    if tag_match is None:
+        failures.append("rl-c-client dependency lock contains no tag")
+        client_link_count = 0
+    else:
+        expected_tag = tag_match.group(1)
+        doc_paths = [
+            ROOT / "README.md",
+            ROOT / "SECURITY.md",
+            ROOT / "THIRD_PARTY_NOTICES.md",
+            *list((ROOT / "docs").glob("*.md")),
+            *list(SPEC_DIR.glob("*.md")),
+        ]
+        documents = {
+            path: path.read_text(encoding="utf-8") for path in doc_paths
+        }
+        link_failures, client_link_count = client_documentation_link_failures(
+            documents, expected_tag
+        )
+        failures.extend(link_failures)
+
+        mutated_documents = dict(documents)
+        for path, document in mutated_documents.items():
+            marker = f"/blob/{expected_tag}/"
+            if marker in document:
+                mutated_documents[path] = document.replace(
+                    marker, "/blob/v0.0.0/", 1
+                )
+                break
+        else:
+            failures.append("documentation-link red case found no versioned blob link")
+            mutated_documents = {}
+        if mutated_documents and not client_documentation_link_failures(
+            mutated_documents, expected_tag
+        )[0]:
+            failures.append("validator accepted a stale rl-c-client documentation link")
+
     if failures:
         for failure in failures:
             print(f"spec consistency: FAIL: {failure}", file=sys.stderr)
@@ -333,11 +397,12 @@ def main() -> int:
         + len(PHASE_STATEMENTS)
         + len(LIMIT_STATEMENTS)
         + len(UDP_BATCH_STATEMENTS)
-        + 3
+        + 4
     )
     print(
         "spec consistency: PASS "
-        f"({directive_count} directives, executable defaults, {mutation_count} red cases)"
+        f"({directive_count} directives, {client_link_count} locked client links, "
+        f"executable defaults, {mutation_count} red cases)"
     )
     return 0
 

@@ -4,6 +4,14 @@ This document defines how effective nginx configuration becomes input to the
 locked `rl-c-client` API and RateLimitly wire messages. Numeric grammar and
 configuration validation are defined in [Configuration DSL](dsl.md).
 
+The client structures and canonical derivation algorithms are defined by the
+locked C-client's
+[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-requests),
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#latency-guards-and-independent-reports),
+and
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#content-defined-ids).
+This document specifies which nginx values rl-nginx supplies to that API.
+
 ## Resource mapping
 
 Each expanded zone occurrence produces one `r_resource_request_t` in rule and

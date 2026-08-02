@@ -14,7 +14,10 @@ remain preview software and must not be treated as ABI-stable versions.
   derive latency-tracker IDs from the rendered service plus all tracker-state
   settings, using the canonical length-aware C-client helpers; and
 - removed the obsolete direct-DNS fallback description because `v0.5.0`
-  requires valid SRV membership.
+  requires valid SRV membership; and
+- restructured the public documentation around the RateLimitly operation
+  model, concrete nginx examples, an explicit nginx/client ownership boundary,
+  and version-locked links to the authoritative C-client documentation.
 
   This dependency update changes the wire IDs of existing buckets and latency
   trackers. During a rolling upgrade, old and new workers therefore address

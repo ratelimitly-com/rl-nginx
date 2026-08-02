@@ -37,6 +37,9 @@ IDs now include the rendered bucket, window, and rate; latency-tracker IDs
 include the rendered service, TTL, maximum samples, final effective buffer
 size, and minimum sample threshold. These canonical IDs prevent two different
 server-state definitions from accidentally sharing one counter or tracker.
+The derivation contract itself is owned by the C client and documented in
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#content-defined-ids);
+this section documents only the deployment impact of adopting it in rl-nginx.
 
 Consequently, the first v0.5.0 request for an existing configuration does not
 address the name-only state created by older rl-nginx revisions. A rolling

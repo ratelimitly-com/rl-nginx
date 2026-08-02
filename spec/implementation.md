@@ -4,6 +4,12 @@ This document defines conformance boundaries for the nginx-module and
 `rl-c-client` integration. It records implemented constraints, not proposed
 architecture.
 
+The locked C-client defines the core embedder boundary in
+[Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#choosing-an-integration-layer)
+and the host callbacks in its
+[Event-Loop Integration](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/IO_ABSTRACTION.md)
+contract. This specification defines how nginx satisfies that host side.
+
 ## nginx phase integration
 
 The module MUST register:

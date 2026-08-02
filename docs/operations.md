@@ -3,7 +3,9 @@
 This runbook describes the behavior operators must account for when deploying,
 warming, observing, recovering, and rolling back the RateLimitly nginx module.
 Read [Configuring rl-nginx](configuration.md) first for identity, credential,
-resolver, and failure-policy security guidance.
+resolver, and failure-policy security guidance. The
+[documentation ownership map](index.md#documentation-ownership) distinguishes
+nginx behavior from the client behavior linked to its locked release.
 
 ## Runtime contract
 
@@ -31,6 +33,11 @@ resolver, and failure-policy security guidance.
 - Internal nginx failures such as request-pool allocation or event-registration
   failure can return `500`. `ratelimitly_fail` is not a blanket conversion of
   every nginx failure.
+
+The C client's
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy)
+is authoritative for the summarized three-unit schedule, response selection,
+completion delivery, and deduplication semantics.
 
 After admission, the client can disconnect and a content handler or upstream
 can still fail. Those outcomes do not reverse resource consumption. Fail-open
@@ -73,6 +80,13 @@ nginx workers. Permit DNS traffic to that resolver and UDP traffic to every
 address/port returned by the SRV and address lookups. `ratelimitly_bind`, when
 set, chooses only the local UDP source address; it is not a server address.
 Server or location resolver overrides do not affect RateLimitly discovery.
+
+Target naming, membership validation, and refresh pacing are client-owned. See
+the version-matched C-client
+[DNS contract](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/IO_ABSTRACTION.md#dns)
+and
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh)
+instead of inferring client behavior from nginx resolver configuration alone.
 
 The worker socket is unconnected and can receive any datagram addressed to its
 ephemeral port. Protocol authentication prevents invalid datagrams from
@@ -185,6 +199,11 @@ The locked C client requires valid SRV membership. Failed, empty, or malformed
 SRV discovery produces no usable endpoint and follows `ratelimitly_fail`; it
 does not fall back to the tenant name on a fixed UDP port.
 
+For the exact distinction between synchronous submission errors, asynchronous
+timeouts, discarded packet-local errors, and server-side silent rejection, see
+the C-client
+[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#error-codes).
+
 ## Observability and log handling
 
 The module exposes log-based diagnostics, not Prometheus counters or a
@@ -264,6 +283,12 @@ production credential:
 - rotate the key in the RateLimitly control plane after suspected exposure,
   deploy the replacement, warm the new workers, and revoke the old key.
 
+The encoded credential fields and quota enforcement points are defined in the
+C-client
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#credentials)
+section. This runbook owns the additional nginx process-memory, configuration,
+reload, and support-bundle controls below.
+
 nginx also retains the parsed directive value in configuration-cycle memory so
 the master can create replacement workers and a worker can retry lazy client
 initialization. Temporary worker-initialization copies are explicitly erased,
@@ -319,7 +344,9 @@ Check whether the SRV target was discovered, whether a UDP send was logged,
 whether the target is reachable, and whether responses have the expected
 server ID, request ID, authentication, and protocol shape. Increase the timeout
 only after confirming the path is healthy but legitimately slower than the
-configured budget.
+configured budget. In particular, the client documents why a wrong credential,
+wrong key ID, skewed clock, or unusable authenticated response can all end as
+[`RCLIENT_ERR_TIMEOUT`](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#error-codes).
 
 ### Unexpected `429`
 

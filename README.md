@@ -1,11 +1,144 @@
 # rl-nginx
 
-`rl-nginx` is an nginx HTTP module that makes the final admission decision
-before content processing. After nginx access control and pre-content routing
-have succeeded, it turns nginx variables into rate-limit resources and sends
-them to RateLimitly through `rl-c-client`. A valid allow consumes those
-resources and advances directly to content processing; a deny returns
-`429 Too Many Requests`.
+## What RateLimitly and rl-nginx do
+
+[RateLimitly](https://ratelimitly.com/) is a distributed admission-control
+service. It decides whether an application may begin work that consumes
+configured resources. The decision may also depend on whether recently
+observed service latencies remain below application-defined thresholds.
+
+`rl-nginx` is the nginx HTTP integration for that decision. After nginx access
+control and pre-content routing have succeeded, the module turns configured
+nginx values into one RateLimitly resource request. A valid grant consumes the
+requested resources and nginx proceeds directly to content processing. A
+rejection consumes nothing and returns `429 Too Many Requests`.
+
+The module uses the public
+[`rl-c-client`](https://github.com/ratelimitly-com/rl-c-client) for credentials,
+DNS membership, packet encoding, request delivery, response selection, and
+canonical state identifiers. This repository documents what the nginx module
+adds: directives, nginx phase ordering, failure policy, request lifetime,
+latency measurement, and operations.
+
+## The operation model
+
+RateLimitly exposes two independent logical operations:
+
+- A **resource request** describes work nginx wants to admit as one or more
+  resource consumptions and zero or more latency guards. RateLimitly evaluates
+  the complete request atomically. A grant consumes every requested quantity;
+  a rejection consumes none.
+- A **latency report** contributes measured service latency to a tracker that
+  future latency guards can evaluate. It neither requests nor consumes a
+  resource and does not make an admission decision.
+
+A protected HTTP request that reaches the module's final admission point
+attempts the first operation. When that request has a latency guard and
+receives a valid grant, the module also measures the admitted work and performs
+the second operation if the request reaches nginx log phase without a client
+abort. The report is still an independent RateLimitly operation: a denial or
+dependency failure does not produce one.
+
+```mermaid
+flowchart LR
+    HTTP["HTTP request"] --> Checks["nginx access control<br/>and pre-content routing"]
+    Checks --> Request["Resource request<br/>consumptions + optional guards"]
+    Request --> Decision{"RateLimitly decision"}
+    Decision -->|Rejected| Deny["429<br/>nothing consumed"]
+    Decision -->|Failure| Policy["Configured<br/>fail-open / fail-close"]
+    Decision -->|Granted| Content["Resources consumed<br/>serve or proxy content"]
+    Content -. "when guarded and completed" .-> Report["Optional latency report"]
+    Report --> Trackers["Latency trackers"]
+    Trackers -. "evaluated by future guards" .-> Decision
+```
+
+The version-matched C-client documentation is authoritative for the
+[operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#operation-model)
+and the distinction between
+[resource requests and latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/README.md#core-operations).
+
+## Three small nginx examples
+
+These snippets assume that the tenant, API key, resolver, and upstream are
+configured as shown in [Minimal Configuration](#minimal-configuration).
+
+### Consume one resource
+
+In English: “Before serving `/checkout/`, get me one token from the `checkout`
+bucket, whose limit is 100 tokens per second.”
+
+```nginx
+ratelimitly_zone checkout "bucket=checkout" rate=100r/s;
+
+location /checkout/ {
+  ratelimitly zone=checkout;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+A grant consumes one token and authorizes nginx to proxy the request. A
+rejection consumes nothing and nginx returns `429`.
+
+### Consume two resources atomically
+
+In English: “Get me one global checkout token and one token for this client
+address; proceed only if both are available.”
+
+```nginx
+ratelimitly_zone checkout_global "bucket=checkout|scope=global" rate=100r/s;
+ratelimitly_zone checkout_client
+  "bucket=checkout|scope=client|ip=$remote_addr"
+  rate=5r/s;
+ratelimitly_group checkout_limits zone=checkout_global zone=checkout_client;
+
+location /checkout/ {
+  ratelimitly group=checkout_limits;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+RateLimitly evaluates the group as one request. A grant consumes one token from
+both buckets; if either limit rejects the request, neither consumption occurs.
+Before using an address as identity, configure nginx real-IP or proxy-protocol
+trust correctly.
+
+### Add one latency guard
+
+In English: “Get me one checkout token, but only while the tracked `inventory`
+latency is below 100 ms. After admitted work completes, report the latency
+measured by nginx.”
+
+```nginx
+ratelimitly_zone checkout "bucket=checkout" rate=100r/s;
+
+ratelimitly_guard inventory_latency
+  "service=inventory"
+  threshold=100ms;
+
+location /checkout/ {
+  ratelimitly zone=checkout guard=inventory_latency;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+The resource consumption and guard are one atomic admission request. After a
+valid grant, `rl-nginx` measures from nginx request start to log phase and sends
+the resulting service latency independently. The module sends no report for a
+rejection, dependency failure, or aborted client.
+
+## Allow, deny, and failure are different outcomes
+
+Every protected request must distinguish three outcomes:
+
+| Outcome | Meaning | nginx behavior |
+| --- | --- | --- |
+| Grant | RateLimitly approved the complete request and consumed every requested resource. | Continue to content processing. |
+| Rejection | RateLimitly rejected at least one condition and consumed nothing. | Return `429 Too Many Requests`. |
+| Failure | No usable RateLimitly decision was obtained. It is neither a grant nor a rejection. | Apply `ratelimitly_fail open\|close`. |
+
+A failure after transmission does not prove that no server processed the
+request. Choose the failure policy as an explicit availability-versus-control
+decision; see [Timeout and failure policy](docs/configuration.md#timeout-and-failure-policy).
 
 The planned `0.1.x` public preview is source-only. It supports static and
 dynamic module builds on Linux with glibc and nginx `1.30.2` or `1.31.1`; the
@@ -119,31 +252,34 @@ create or run those services. Start from
 read the [configuration guide](docs/configuration.md) before deploying. Treat
 `ratelimitly_auth_key` as a secret.
 
-## What the Module Does
+## nginx Integration Contract
 
-- Discovers RateLimitly servers through tenant-specific DNS SRV records.
-- Defines nginx-native resources with `ratelimitly_zone`.
-- Groups resources with `ratelimitly_group`.
-- Optionally reports guarded request latency after valid RateLimitly allows
-  with `ratelimitly_guard`.
-- Enforces allow and deny decisions before proxying or serving content.
-- Applies a configured fail-open or fail-closed policy when no valid decision
-  is available.
-- Exposes `$ratelimitly_verdict` for access-log proof of valid `allow`/`deny`
-  decisions without enabling debug logging.
+`rl-nginx` owns the HTTP-specific part of the workflow:
 
-When a protected request arrives, the module expands the configured nginx
-variables, hashes bucket and service names into protocol identifiers, and sends
-the decision request over UDP through `rl-c-client`. A valid allow continues
-normal nginx processing; a valid deny returns `429`; DNS, network, timeout, and
-protocol failures follow `ratelimitly_fail open|close`.
+- `ratelimitly_zone` defines one nginx-native resource consumption and
+  `ratelimitly_group` combines several consumptions into one atomic request.
+- `ratelimitly_guard` attaches latency conditions and identifies which
+  admitted work nginx will measure and report.
+- The module runs after nginx access control and earlier pre-content routing.
+  It sends no RateLimitly request for traffic rejected before that point.
+- A valid grant is the final admission decision and advances directly to
+  content. Later upstream or content failure does not reverse consumption.
+- An internal redirect reuses the main request's admission; subrequests do not
+  create independent RateLimitly admissions.
+- `$ratelimitly_verdict` records only valid `allow` or `deny` provenance.
+  Runtime failures apply `ratelimitly_fail` and leave the variable unset.
 
-The module does not create tenants, issue credentials, manage DNS, or include a
-RateLimitly server.
+`rl-c-client` owns the client mechanics beneath this contract. Its
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy)
+defines fan-out, oldest-server preference, replay, completion delivery, and
+deduplication TTL. Its
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh)
+and
+[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#error-codes)
+sections define the client behavior that the module adapts to nginx.
 
-Guard latency feedback is admission-aware: it is reported only after a valid
-allow and subsequent request processing. A deny, fail-open/fail-close error,
-missing verdict, timeout, or client abort does not contribute a latency sample.
+This module does not create tenants, issue credentials, manage RateLimitly DNS,
+or include a RateLimitly server.
 
 ## Core Directives
 
@@ -238,6 +374,8 @@ for those workflows.
 
 ## Documentation and Project Links
 
+- [RateLimitly operations in rl-c-client v0.5.0](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/README.md#core-operations)
+- [C-client v0.5.0 public API and policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md)
 - [Documentation index](docs/index.md)
 - [Build and installation](docs/build.md)
 - [Configuration](docs/configuration.md)

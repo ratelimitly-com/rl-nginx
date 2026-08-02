@@ -202,6 +202,11 @@ RCLIENT_DIR=/absolute/path/to/rl-nginx/_deps/rl-c-client \
 make -j
 ```
 
+The upstream [C-client embedding guide](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/EMBEDDING.md)
+documents its supported source-build boundary. rl-nginx deliberately links the
+locked position-independent static archive; the dependency lock and commands
+above remain authoritative for this module build.
+
 Do not replace a distribution nginx binary with the helper's minimal build.
 Reproduce the distribution or deployment build recipe, then validate the new
 binary with its real configuration and the public behavioral suite.

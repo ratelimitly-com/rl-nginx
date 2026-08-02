@@ -3,6 +3,9 @@
 This document defines the observable request lifecycle and decision contract.
 Configuration syntax and wire-field construction are specified separately in
 [Configuration DSL](dsl.md) and [Wire mapping](mapping.md).
+The meanings of a resource request and an independent latency report come from
+the locked C-client
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#operation-model).
 
 ## Activation and request construction
 
@@ -74,9 +77,17 @@ preference, final receive time, completion delivery, or DNS refresh policy.
 Changing the dependency lock in a way that changes this observable behavior
 MUST update this specification and its tests in the same change.
 
+Fan-out, response preference, replay scheduling, completion delivery, and TTL
+derivation are client-owned and are defined in the locked
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy).
+The paragraph above specifies only the v0.5.0 defaults selected by rl-nginx and
+their externally visible effect.
+
 The locked client requires SRV discovery. A failed, empty, or non-conforming
 membership fails with `RCLIENT_ERR_DNS`; there is no direct tenant-name/UDP
-port fallback.
+port fallback. The client owns the corresponding
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh)
+behavior.
 
 ## Decision contract
 
