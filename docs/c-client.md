@@ -33,7 +33,9 @@ only supported way to opt into a dirty development tree.
   behavior requires the compatibility review and specification update described
   below.
 - Use `r_client_check_rate_limit_async_borrowed` to avoid per-request copies.
-- Timeouts and retries are set by nginx (default timeout 20ms, retries disabled).
+- nginx sets the C-client scheduling unit through `ratelimitly_timeout`
+  (default 20ms). The locked policy performs one replay plus one final
+  receive-only interval and enables best-effort completion delivery.
 - Steering feedback is evaluated per response; rebind the UDP socket after all
   current in-flight RateLimitly requests complete if any response requested a
   port change. Latency reports are independent fire-and-forget requests, not
@@ -62,11 +64,13 @@ not compatible until every item remains true:
 3. After a successful borrowed start, the resource, guard, and label buffers
    remain caller-owned and must stay live until callback, cancellation, or
    client destruction. The client neither modifies nor frees them.
-4. `r_client_request_deadline_ms` succeeds for a live request. With the module's
-   `retry_attempts = 0`, `r_client_on_timeout` before that deadline leaves the
-   request pending; at or after the deadline it invokes the completion callback
-   synchronously and exactly once before returning. The request handle is no
-   longer valid when that callback completes.
+4. `r_client_request_deadline_ms` succeeds for a live request. Calling
+   `r_client_on_timeout` before a reported deadline leaves the request pending.
+   On the no-response path, at the first deadline it performs the configured
+   replay; at the second it enters the final receive-only interval; at the
+   third it invokes the timeout callback synchronously and exactly once. Any
+   valid response may change the next deadline or complete earlier, and the
+   request handle is invalid as soon as the callback completes.
 5. A normal response invokes exactly one completion callback with the same
    request handle. The result and its guard/resource arrays are callback-owned
    and valid only inside that invocation. The client unlinks the request before

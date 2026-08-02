@@ -60,20 +60,23 @@ that fan-out represents one logical admission/consumption. This commit-safety
 property is external to the nginx module. Operators MUST NOT assume there is a
 hidden single-target fallback when a discovered topology lacks that property.
 
-The module starts from the locked C-client request-policy defaults, overrides
-the attempt timeout with `ratelimitly_timeout`, and sets retry attempts to zero.
-For the currently locked revision this means one attempt, waiting until all
-targets have replied or the attempt deadline expires, with the client's
-best-by-reliability response selection. rl-nginx exposes no directives for
-wait, quorum, selection, retry, deduplication, or DNS-resynchronization policy.
+The module starts from the locked C-client request-policy defaults and sets its
+base scheduling unit `U` from `ratelimitly_timeout`. For the locked revision,
+the client sends to all discovered servers, prefers the oldest server's valid
+response, performs one replay to servers still missing a valid response, then
+waits through one final receive-only interval. A selected allow or deny also
+triggers best-effort completion delivery to servers still missing a response.
+The maximum admission wait and wire deduplication TTL are `3 * U` (60ms with
+the default `20ms` unit).
+
+rl-nginx exposes no directives for replay count, backoff, oldest-response
+preference, final receive time, completion delivery, or DNS refresh policy.
 Changing the dependency lock in a way that changes this observable behavior
 MUST update this specification and its tests in the same change.
 
-The locked client contains a compatibility fallback that can resolve the
-tenant name directly and use UDP port `8080` when SRV discovery yields no
-endpoint. This fallback is not a supported rl-nginx deployment or a fixed
-server-address configuration mechanism. Public DNS failure tests MUST ensure a
-missing SRV record cannot be accidentally masked by this fallback.
+The locked client requires SRV discovery. A failed, empty, or non-conforming
+membership fails with `RCLIENT_ERR_DNS`; there is no direct tenant-name/UDP
+port fallback.
 
 ## Decision contract
 

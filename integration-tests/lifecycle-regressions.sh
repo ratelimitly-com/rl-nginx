@@ -23,7 +23,7 @@ Environment overrides:
   DNS_PORT          local DNS port (default: 15353)
   RESPONDER_PORT    UDP responder port (default: 19080)
   NGINX_PORT        nginx HTTP port (default: 18098)
-  REQUEST_TIMEOUT   module timeout (default: 300ms)
+  REQUEST_TIMEOUT   C-client scheduling unit (default: 100ms; 300ms horizon)
   DNS_REFRESH_SEC   wait after DNS mode changes (default: 1.2)
   DNS_TIMEOUT_RECOVERY_SEC
                     wait after restoring DNS from timeout mode (default: 6)
@@ -89,7 +89,7 @@ NGINX_HOST="${NGINX_HOST:-127.0.0.1}"
 NGINX_PORT="${NGINX_PORT:-18098}"
 DOMAIN="${DOMAIN:-rn-test.local}"
 SERVER_ID="${SERVER_ID:-1}"
-REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300ms}"
+REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-100ms}"
 DNS_REFRESH_SEC="${DNS_REFRESH_SEC:-1.2}"
 DNS_TIMEOUT_RECOVERY_SEC="${DNS_TIMEOUT_RECOVERY_SEC:-6}"
 ABORT_REQUESTS="${ABORT_REQUESTS:-20}"
@@ -985,6 +985,10 @@ run_timeout_case() {
   fi
   wait_for_log '"disposition":"dropped"' "${RESPONDER_LOG}" 20 \
     || record_failure "drop responder did not observe the timeout request"
+  if ! rn_expect_log_count "${RESPONDER_LOG}" \
+      '"event":"rate_request"' 2; then
+    record_failure "timeout policy did not send exactly one initial request and one replay"
+  fi
   sleep 0.2
   tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
     >"${ARTIFACT_DIR}/timeout-trigger.log"
@@ -1223,12 +1227,14 @@ run_guard_case() {
   local error_log_start
   local expected_code
   local expected_guards
+  local expected_rate_requests
   local expected_reports
   local expect_rate_request
   local scenario
 
   expected_code="200"
   expected_guards=1
+  expected_rate_requests=1
   expected_reports=1
   expect_rate_request=1
   scenario="${MODE}"
@@ -1254,6 +1260,7 @@ run_guard_case() {
       ;;
     guard-timeout-fail-open)
       scenario="drop"
+      expected_rate_requests=2
       expected_reports=0
       ;;
   esac
@@ -1270,12 +1277,14 @@ run_guard_case() {
   elif grep -q '"event":"rate_request"' "${RESPONDER_LOG}"; then
     record_failure "${MODE} unexpectedly reached the responder"
   fi
-  if (( expect_rate_request > 0 )) && ! awk -v guards="${expected_guards}" '
+  if (( expect_rate_request > 0 )) && ! awk \
+      -v expected="${expected_rate_requests}" \
+      -v guards="${expected_guards}" '
       /"event":"rate_request"/ {
         count++
         if (index($0, "\"guards\":" guards ",\"resources\":1,") == 0) bad = 1
       }
-      END { exit count == 1 && !bad ? 0 : 1 }
+      END { exit count == expected && !bad ? 0 : 1 }
     ' "${RESPONDER_LOG}"; then
     record_failure "${MODE} did not send the expected guard/resource request shape"
   fi
@@ -1512,7 +1521,7 @@ run_rendered_values_case() {
     "${CLIENT_TIMEOUT_SEC}")"
   [[ "${code}" == "200" ]] \
     || record_failure "known bucket boundary request returned ${code}, expected 200"
-  wait_for_log 'rn: bucket zone=boundary_zone id=adad04e30132078dd71e82746cbfe92d' \
+  wait_for_log 'rn: bucket zone=boundary_zone id=98300f8a73dd010d75b92ce8d2298cc7' \
     "${NGINX_ERROR_LOG}" 20 \
     || record_failure "known bucket did not produce the locked wire identifier"
   after="$(responder_rate_request_count)"
@@ -1644,10 +1653,10 @@ run_admission_contract_case() {
     || record_failure "drop responder did not observe the internal-redirect request"
   sleep 0.1
   after="$(responder_rate_request_count)"
-  if [[ "${after}" != "$((before + 1))" ]]; then
-    record_failure "dependency-error internal-redirect request produced $((after - before)) RateLimitly events, expected 1"
+  if [[ "${after}" != "$((before + 2))" ]]; then
+    record_failure "dependency-error internal-redirect request produced $((after - before)) RateLimitly transmissions, expected initial send plus one replay"
   else
-    log "fail-${FAIL_POLICY} outcome preserved exactly one RateLimitly attempt"
+    log "fail-${FAIL_POLICY} outcome preserved one logical admission with its configured replay"
   fi
 
   check_worker_survival "pre-content admission contract"

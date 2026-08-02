@@ -27,8 +27,8 @@ DEFAULT_STATEMENTS = {
 
 C_CLIENT_STATEMENTS = (
     "r_client_default_request_policy(&worker->policy);",
-    "worker->policy.attempt_timeout_ms = mcf->timeout_ms;",
-    "worker->policy.retry.retry_attempts = 0;",
+    "worker->policy.unit_ms = mcf->timeout_ms;",
+    "worker->client_cfg.request_policy = &worker->policy;",
     "r_client_check_rate_limit_async_borrowed(",
     "r_client_report_latency(",
 )
@@ -179,10 +179,10 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     for fragment, scope in zip(C_CLIENT_STATEMENTS, integration_scopes):
         require(scope, fragment, "executable module C-client integration", failures)
 
-    require(behavior, "retry attempts to zero", "behavior specification", failures)
+    require(behavior, "one replay", "behavior specification", failures)
     require(
         implementation,
-        "retry.retry_attempts = 0",
+        "one final receive unit",
         "implementation specification",
         failures,
     )
@@ -212,13 +212,13 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     mapping = (SPEC_DIR / "mapping.md").read_text(encoding="utf-8")
     require(
         mapping,
-        "first 16 bytes of the BLAKE2s-256 digest",
+        "r_client_derive_bucket_id",
         "wire hash contract",
         failures,
     )
     require(
         mapping,
-        "adad04e30132078dd71e82746cbfe92d",
+        "98300f8a73dd010d75b92ce8d2298cc7",
         "wire bucket boundary oracle",
         failures,
     )

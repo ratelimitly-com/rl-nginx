@@ -78,8 +78,8 @@ TTL information when converting nginx resolver answers into C-client records.
 It MUST compact accepted A/AAAA addresses and report only the compacted count;
 if every address is unusable, it MUST return resolver failure rather than a
 successful array containing zeroed entries.
-The C client owns endpoint caching, refresh scheduling, supported SRV
-discovery, and its explicitly unsupported compatibility fallback described in
+The C client owns endpoint caching, refresh scheduling, and strict SRV
+discovery described in
 [Request behavior](behavior.md#discovery-dispatch-and-selection).
 
 ## C-client dependency boundary
@@ -106,9 +106,11 @@ selection, and decoding. It MUST NOT duplicate those implementations.
 
 For rate checks, the module MUST use
 `r_client_check_rate_limit_async_borrowed`. The module MUST start from
-`r_client_default_request_policy`, set `attempt_timeout_ms` from
-`ratelimitly_timeout`, and set `retry.retry_attempts = 0`. Any change to other
-locked policy behavior is a dependency-lock change requiring corresponding
+`r_client_default_request_policy` and set `unit_ms` from
+`ratelimitly_timeout`. For the locked dependency the remaining defaults are one
+replay, fixed one-unit replay and preference schedules, one final receive unit,
+zero final preference units, and enabled completion delivery. Any change to
+those locked defaults is a dependency-lock change requiring corresponding
 specification and test review.
 
 For post-response reports, the module MUST use `r_client_report_latency` and
@@ -155,10 +157,11 @@ or cleanup MUST use one teardown path that:
 5. decrements each accounting value at most once; and
 6. schedules a pending safe source-port rebind.
 
-The timeout path MUST honor a later C-client deadline when reported. With
-retries disabled, `r_client_on_timeout` can synchronously invoke the completion
-callback and release the nginx request pool, so that call MUST be the last
-access through the request context.
+The timeout path MUST honor every later C-client deadline reported across the
+initial round, replay round, and final receive-only interval.
+`r_client_on_timeout` can synchronously invoke the completion callback and
+release the nginx request pool, so that call MUST be the last access through
+the request context.
 
 An aborted HTTP client MUST execute the cleanup path without a later timeout
 callback, double decrement, use-after-free, or worker loss.

@@ -24,8 +24,10 @@ resolver, and failure-policy security guidance.
 - Guard latency feedback is emitted only after a valid RateLimitly allow and
   completed request processing. Denials, fail-open/fail-close dependency
   outcomes, missing verdicts, timeouts, and client aborts do not add samples.
-- The current integration disables C-client request retries. A request waits at
-  most the configured `ratelimitly_timeout` for its single attempt.
+- The current integration uses the C-client's unified oldest-server policy.
+  `ratelimitly_timeout` is its base unit: one initial round, one replay round,
+  and one final receive-only interval wait at most three units in total. A
+  valid response from the oldest server can complete earlier.
 - Internal nginx failures such as request-pool allocation or event-registration
   failure can return `500`. `ratelimitly_fail` is not a blanket conversion of
   every nginx failure.
@@ -176,14 +178,12 @@ before production rollout.
 
 Do not increase `ratelimitly_timeout` merely to hide DNS or network failures.
 Measure normal and tail decision latency, leave an explicit operational margin,
-and keep the value within the application's request-latency budget.
+and budget for the locked policy's three-unit maximum. The resulting
+deduplication TTL must not exceed the API key's `dedup_ttl_ms_max` quota.
 
-The locked C client contains a legacy compatibility fallback that may resolve
-the tenant name directly on UDP port `8080` after SRV discovery produces no
-endpoint. rl-nginx does not treat that as a supported deployment path or a
-server-address option: supported tenants publish SRV records. The strict public
-DNS fixture deliberately prevents the fallback from hiding a missing SRV
-record.
+The locked C client requires valid SRV membership. Failed, empty, or malformed
+SRV discovery produces no usable endpoint and follows `ratelimitly_fail`; it
+does not fall back to the tenant name on a fixed UDP port.
 
 ## Observability and log handling
 

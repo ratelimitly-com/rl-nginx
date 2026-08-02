@@ -107,8 +107,9 @@ must take the configured policy without reaching the responder. An empty label
 must be omitted, while boundary values of 1024 bytes for buckets/services and
 256 bytes for labels must reach it. A unitless threshold of `1` must become
 `1000ms`, and the known bucket text
-`boundary:known-bucket` must produce the pinned C-client identifier
-`adad04e30132078dd71e82746cbfe92d` in a one-resource responder request.
+`boundary:known-bucket` at `10000r/s` must produce the pinned canonical
+C-client identifier `98300f8a73dd010d75b92ce8d2298cc7` in a one-resource
+responder request.
 
 Run the outage-policy matrix separately while working on fail-policy behavior:
 
@@ -243,8 +244,10 @@ These are acceptance regressions, not an expected-failure wrapper. Each case
 must return zero and protects a specific ownership invariant that previously
 failed:
 
-- `timeout`: synchronous C-client completion must be the timeout handler's last
-  access to request-owned state, and exactly one timeout completion is allowed;
+- `timeout`: the first deadline must cause exactly one replay, the second must
+  enter the receive-only phase, and synchronous completion at the third must be
+  the timeout handler's last access to request-owned state; exactly one timeout
+  completion is allowed;
 - `aborted-client`: resetting a connection must cancel the C-client request and
   timer while balancing the nginx and worker request counts, with no later
   timeout completion;

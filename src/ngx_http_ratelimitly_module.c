@@ -165,6 +165,8 @@ typedef struct {
     size_t expected_guard_count;
     size_t expected_resource_count;
     ngx_event_t timer;
+    /* Stack observer used only while r_client_on_timeout may call back. */
+    ngx_flag_t *timeout_completed;
     ngx_int_t decision;
     rn_admission_outcome_t admission_outcome;
     rn_completion_cause_t completion_cause;
@@ -1130,7 +1132,6 @@ rn_build_zone_resource(
     r_resource_request_t *out
 ) {
     ngx_str_t bucket = ngx_null_string;
-    u_char *bucket_cstr;
     uint32_t zone_rate_limit = 0;
     uint32_t zone_window_ms = 0;
 
@@ -1143,14 +1144,16 @@ rn_build_zone_resource(
     {
         return NGX_ERROR;
     }
-    bucket_cstr = ngx_pnalloc(r->pool, bucket.len + 1);
-    if (bucket_cstr == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (rn_zone_rate_for_request(r, zone, &zone_rate_limit,
+            &zone_window_ms) != NGX_OK)
+    {
+        return NGX_ERROR;
     }
-    ngx_memcpy(bucket_cstr, bucket.data, bucket.len);
-    bucket_cstr[bucket.len] = '\0';
-
-    r_client_hash_id((const char *) bucket_cstr, out->bucket_id);
+    if (r_client_derive_bucket_id(bucket.data, bucket.len, zone_window_ms,
+            zone_rate_limit, out->bucket_id) != RCLIENT_OK)
+    {
+        return NGX_ERROR;
+    }
     if (worker->debug) {
         u_char hex[33];
         rn_hex_id(out->bucket_id, hex);
@@ -1158,9 +1161,6 @@ rn_build_zone_resource(
             "rn: bucket zone=%V id=%s", &zone->name, hex);
     }
 
-    if (rn_zone_rate_for_request(r, zone, &zone_rate_limit, &zone_window_ms) != NGX_OK) {
-        return NGX_ERROR;
-    }
     out->window_size_ms = zone_window_ms;
     out->rate_limit = zone_rate_limit;
     out->tokens_requested = 1;
@@ -1198,7 +1198,6 @@ rn_build_guard_entries(
     ngx_str_t service = ngx_null_string;
     ngx_str_t threshold = ngx_null_string;
     uint32_t threshold_ms = 0;
-    u_char *service_cstr;
 
     if (r == NULL || worker == NULL || mcf == NULL || guard == NULL
         || out_guard == NULL || out_report == NULL) {
@@ -1210,15 +1209,6 @@ rn_build_guard_entries(
     {
         return NGX_ERROR;
     }
-    service_cstr = ngx_pnalloc(r->pool, service.len + 1);
-    if (service_cstr == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_memcpy(service_cstr, service.data, service.len);
-    service_cstr[service.len] = '\0';
-
-    r_client_hash_id((const char *) service_cstr, out_guard->service_id);
-
     if (ngx_http_complex_value(r, &guard->threshold_cv, &threshold) != NGX_OK) {
         return NGX_ERROR;
     }
@@ -1235,8 +1225,17 @@ rn_build_guard_entries(
         return NGX_ERROR;
     }
     out_guard->min_sample_threshold = guard->min_sample_threshold;
+    if (r_client_derive_latency_tracker_id(service.data, service.len,
+            out_guard->ttl_ms, out_guard->max_samples,
+            out_guard->buffer_size, out_guard->min_sample_threshold,
+            out_guard->latency_tracker_id) != RCLIENT_OK)
+    {
+        return NGX_ERROR;
+    }
 
-    ngx_memcpy(out_report->service_id, out_guard->service_id, sizeof(out_report->service_id));
+    ngx_memcpy(out_report->latency_tracker_id,
+        out_guard->latency_tracker_id,
+        sizeof(out_report->latency_tracker_id));
     out_report->observed_latency = 0;
     out_report->ttl_ms = guard->ttl_ms;
     out_report->max_samples = guard->max_samples;
@@ -1245,9 +1244,9 @@ rn_build_guard_entries(
 
     if (worker->debug) {
         u_char hex[33];
-        rn_hex_id(out_guard->service_id, hex);
+        rn_hex_id(out_guard->latency_tracker_id, hex);
         ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
-            "rn: guard=%V service_id=%s threshold_ms=%uD",
+            "rn: guard=%V latency_tracker_id=%s threshold_ms=%uD",
             &guard->name, hex, out_guard->threshold_ms);
     }
 
@@ -2646,8 +2645,7 @@ rn_worker_init(rn_main_conf_t *mcf) {
     }
 
     r_client_default_request_policy(&worker->policy);
-    worker->policy.attempt_timeout_ms = mcf->timeout_ms;
-    worker->policy.retry.retry_attempts = 0;
+    worker->policy.unit_ms = mcf->timeout_ms;
     worker->client_cfg.request_policy = &worker->policy;
 
     if (worker->debug) {
@@ -2873,8 +2871,11 @@ rn_request_timeout_handler(ngx_event_t *ev) {
     rn_req_ctx_t *ctx;
     rn_worker_ctx_t *worker;
     r_client_req_t *req;
+    ngx_http_request_t *r;
+    ngx_flag_t completed;
     uint64_t deadline_ms;
     uint64_t now_ms;
+    int rc;
 
     if (ev == NULL || ev->data == NULL) {
         return;
@@ -2886,6 +2887,7 @@ rn_request_timeout_handler(ngx_event_t *ev) {
 
     worker = ctx->worker;
     req = ctx->req;
+    r = ctx->r;
     now_ms = worker->io_ops.now_ms(worker);
     deadline_ms = 0;
     if (r_client_request_deadline_ms(req, &deadline_ms) == RCLIENT_OK
@@ -2895,9 +2897,34 @@ rn_request_timeout_handler(ngx_event_t *ev) {
         return;
     }
 
-    /* With retries disabled, this synchronously invokes rn_rate_cb and may
-     * release the request pool containing ctx. Do not access ctx afterwards. */
-    (void) r_client_on_timeout(worker->client, req, now_ms);
+    /*
+     * A terminal timeout synchronously invokes rn_rate_cb and may release the
+     * request pool containing ctx. Observe that callback through stack storage
+     * before touching ctx again. Nonterminal round transitions keep the
+     * request live and publish a later deadline which must be re-armed.
+     */
+    completed = 0;
+    ctx->timeout_completed = &completed;
+    rc = r_client_on_timeout(worker->client, req, now_ms);
+    if (completed) {
+        return;
+    }
+    ctx->timeout_completed = NULL;
+
+    if (rc != RCLIENT_OK) {
+        r_client_cancel_request(worker->client, req);
+        rn_rate_cb(r, req, rc, NULL);
+        return;
+    }
+    deadline_ms = 0;
+    if (r_client_request_deadline_ms(req, &deadline_ms) != RCLIENT_OK) {
+        r_client_cancel_request(worker->client, req);
+        rn_rate_cb(r, req, RCLIENT_ERR_CONFIG, NULL);
+        return;
+    }
+    now_ms = worker->io_ops.now_ms(worker);
+    ngx_add_timer(&ctx->timer, deadline_ms > now_ms
+        ? (ngx_msec_t) (deadline_ms - now_ms) : 0);
 }
 
 static void
@@ -3051,6 +3078,10 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
         ngx_log_error(NGX_LOG_ALERT, worker->log, 0,
             "rn: completion callback does not own the active request");
         return;
+    }
+    if (ctx->timeout_completed != NULL) {
+        *ctx->timeout_completed = 1;
+        ctx->timeout_completed = NULL;
     }
     rn_request_teardown(ctx, req, 0);
 

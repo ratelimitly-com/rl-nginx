@@ -23,7 +23,7 @@ Supported builds use immutable inputs:
 | --- | --- |
 | Default nginx submodule | `release-1.31.1` at `d44205284fa41662da803b796d6056fc1e59b1f3` |
 | Supported stable nginx | `release-1.30.2` at `a92a537860c7b87d3793d9eb41c9cf3ed833b53c` |
-| `rl-c-client` | `v0.2.0` at `6cafd3f5bea6ba2f8a791966a70b8ab8e56c485f` |
+| `rl-c-client` | `v0.5.0` at `7b8627946a12d8e8346fe7854fdb801cffa32cd6` |
 
 The authoritative C-client lock is
 [`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). Without an

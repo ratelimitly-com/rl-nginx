@@ -49,7 +49,7 @@ default `main` branch remains the security-fix target. The supported preview is
 described in
 [compatibility and release scope](docs/compatibility.md); its supported matrix
 is Linux with glibc on `x86_64` and `aarch64`, nginx `1.30.2` and `1.31.1`, and
-the locked `rl-c-client` `v0.4.0` revision. The preview does not promise ABI or
+the locked `rl-c-client` `v0.5.0` revision. The preview does not promise ABI or
 configuration stability across the `0.1.x` line.
 
 After the first release, this section and the release notes MUST identify which

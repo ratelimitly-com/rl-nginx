@@ -14,7 +14,7 @@ gates below pass for the release candidate.
 | Architectures | `x86_64` and `aarch64` |
 | nginx module modes | Static and dynamic |
 | nginx releases | Stable `1.30.2` and mainline `1.31.1` |
-| `rl-c-client` | [`v0.4.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.4.0) at `8ce572d48499ebca99e6b8bddda2dd4d149b68d8` |
+| `rl-c-client` | [`v0.5.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.5.0) at `7b8627946a12d8e8346fe7854fdb801cffa32cd6` |
 
 Public preview means the module is suitable for evaluation and controlled
 deployments after operators test their exact nginx build and failure policy. It
@@ -29,6 +29,23 @@ the fetch helper consume that lock and fail if the tag resolves elsewhere or
 the default checkout contains local changes. The direct
 [C-client lifecycle probe](c-client.md#executable-compatibility-probe) binds the
 callback and ownership behavior required by the nginx adapter.
+
+### v0.5.0 state-ID migration
+
+The v0.5.0 dependency changes the identifier boundary deliberately. Resource
+IDs now include the rendered bucket, window, and rate; latency-tracker IDs
+include the rendered service, TTL, maximum samples, final effective buffer
+size, and minimum sample threshold. These canonical IDs prevent two different
+server-state definitions from accidentally sharing one counter or tracker.
+
+Consequently, the first v0.5.0 request for an existing configuration does not
+address the name-only state created by older rl-nginx revisions. A rolling
+deployment temporarily has old and new workers using separate state. Operators
+must either coordinate the worker transition or explicitly accept that reset
+and overlap. The old resource state becomes irrelevant after its rate window;
+old latency samples become irrelevant after their tracker TTL. Changing any
+ID-defining setting after migration has the same effect and must be treated as
+a state-identity change.
 
 ## Initial nginx matrix validation
 

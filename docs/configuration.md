@@ -87,26 +87,25 @@ path is restricted and the proxy removes any client-provided copy. An nginx
 `map` can bound values, but it cannot turn a client-selected plan or user ID
 into authenticated identity.
 
-`$binary_remote_addr` must not be used in current bucket or service templates.
-The current C-client hash interface accepts NUL-terminated text; a binary
-address can contain an embedded NUL and be truncated. Use textual
-`$remote_addr` instead. The module cannot reliably reject
-`$binary_remote_addr` at configuration load and does not reject an embedded
-NUL at request time, so this remains an explicit operator precondition until a
-separately designed length-aware hash migration is available.
+The v0.5.0 C-client interface hashes the exact rendered bytes and byte length,
+so an embedded NUL in `$binary_remote_addr` or another binary value is not
+truncated. Binary identity is still easy to compose ambiguously with textual
+delimiters; prefer `$remote_addr` for readable policies, or place a bounded
+binary component in a structurally unambiguous position.
 
 ## Construct canonical, bounded bucket keys
 
-The rendered bucket string is hashed locally to a 128-bit resource ID. Hashing
-does not correct an ambiguous or attacker-controlled input. Two templates that
-render the same text intentionally produce the same bucket, and raw user input
-can create a practically unlimited set of distinct buckets.
+The rendered bucket string, effective window, and effective rate are hashed
+locally to a 128-bit resource ID. Hashing does not correct an ambiguous or
+attacker-controlled input. Two definitions produce the same bucket only when
+all three inputs match; raw user input can still create a practically unlimited
+set of distinct buckets.
 
-The module hashes the complete rendered value as one opaque string; it does not
-escape fields or length-prefix components. Template authors therefore own both
-cardinality and structural uniqueness. A template-schema change produces new
-resource IDs and starts new bucket state, so version and roll out such a change
-as an identity migration.
+The module passes the complete rendered value as one opaque byte string; it
+does not escape fields inside that value. Template authors therefore own both
+cardinality and structural uniqueness. A template-schema, rate, or window
+change produces a new resource ID and starts new bucket state, so version and
+roll out such a change as an identity migration.
 
 Avoid patterns such as:
 
@@ -207,10 +206,18 @@ ratelimitly_fail open;
 ratelimitly_fail close;
 ```
 
-`ratelimitly_timeout` bounds how long a request waits for a decision. It must
-resolve to `1..4294967295ms`; zero is rejected. nginx duration units `w`, `d`,
-`h`, `m`, `s`, and `ms` are accepted, and a unitless value means seconds. Write
-`1ms` when one millisecond is intended.
+`ratelimitly_timeout` sets the C-client scheduling unit `U`. It must resolve to
+`1..4294967295ms`; zero is rejected. nginx duration units `w`, `d`, `h`, `m`,
+`s`, and `ms` are accepted, and a unitless value means seconds. Write `1ms`
+when one millisecond is intended.
+
+The locked v0.5.0 policy uses one initial round, one replay round, and one final
+receive-only interval, each lasting at most `U`. Its maximum admission wait and
+wire deduplication TTL are therefore `3 * U`: the default `20ms` unit permits a
+maximum 60ms wait. A valid response from the oldest discovered server can
+complete earlier. Keep the derived TTL within the credential's
+`dedup_ttl_ms_max`; an invalid policy makes request construction fail and the
+configured failure policy applies.
 
 The default is `ratelimitly_fail open`, but production configurations should
 set the policy explicitly:

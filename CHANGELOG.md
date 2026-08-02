@@ -3,6 +3,23 @@
 All notable changes to `rl-nginx` will be documented here. Release candidates
 remain preview software and must not be treated as ABI-stable versions.
 
+## Unreleased
+
+- updated the supported public `rl-c-client` dependency to `v0.5.0` and
+  migrated to its unified oldest-server policy: `ratelimitly_timeout` now sets
+  the base unit, while the locked defaults perform one replay and one final
+  receive-only interval for a maximum wait and deduplication TTL of three
+  units;
+- derive resource-bucket IDs from the rendered bucket, window, and rate, and
+  derive latency-tracker IDs from the rendered service plus all tracker-state
+  settings, using the canonical length-aware C-client helpers; and
+- removed the obsolete direct-DNS fallback description because `v0.5.0`
+  requires valid SRV membership.
+
+  This dependency update changes the wire IDs of existing buckets and latency
+  trackers. During a rolling upgrade, old and new workers therefore address
+  separate server state until old resource windows and tracker TTLs expire.
+
 ## 0.1.0-rc.3 — 2026-07-26
 
 - updated the supported public `rl-c-client` dependency to `v0.4.0`, including

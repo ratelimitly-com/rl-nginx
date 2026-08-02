@@ -67,8 +67,10 @@ The value MUST be a positive duration accepted by nginx's millisecond-mode time
 parser whose total fits `1..4294967295ms`. Accepted units are `w`, `d`, `h`,
 `m`, `s`, and `ms`; compound components appear from larger to smaller units.
 A final unitless number means seconds, so `1` is `1000ms`, not `1ms`. It becomes
-the C-client attempt timeout. The module sets retry attempts to zero, so the
-timeout bounds the only attempt. If repeated, the later value is effective;
+the C-client scheduling unit `U`. With the locked policy defaults, the client
+uses an initial round, one replay round, and one final receive-only interval,
+each lasting at most `U`; the maximum admission wait and deduplication TTL are
+therefore three times this value. If repeated, the later value is effective;
 configurations SHOULD define it once.
 
 ### `ratelimitly_fail`
@@ -125,16 +127,12 @@ When quoting is needed, the quotes MUST enclose the complete named argument as
 shown above. `bucket="value"` is invalid because nginx treats quotes that start
 in the middle of a token as literal bytes.
 
-`bucket` is an nginx complex value rendered per request. The rendered text is
-hashed as specified in [Wire mapping](mapping.md). Components MUST be canonical
-and bounded and MUST NOT treat request arguments, headers, cookies, or raw
-paths as authenticated identity. `$binary_remote_addr` MUST NOT be used: the
-current text hash boundary is NUL-terminated and embedded NUL bytes can truncate
-the identity. Use textual `$remote_addr` with correctly configured real-IP or
-proxy-protocol trust. This is an operator precondition, not a parser guarantee:
-nginx complex-value compilation does not expose enough type information for
-rl-nginx to reject that variable name reliably, and the module does not scan
-rendered values for embedded NUL bytes before hashing.
+`bucket` is an nginx complex value rendered per request. The exact bytes and
+length are hashed as specified in [Wire mapping](mapping.md). Components MUST
+be canonical and bounded and MUST NOT treat request arguments, headers,
+cookies, or raw paths as authenticated identity. Binary values, including
+embedded NUL bytes, are represented exactly, but template authors still own
+the trust, cardinality, and unambiguous composition of those bytes.
 
 The rendered bucket is one flat string, not a framed list of components.
 Configuration MUST make field boundaries unambiguous by using fixed values and

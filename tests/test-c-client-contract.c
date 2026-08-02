@@ -195,8 +195,7 @@ create_client(fixture_t *fixture)
     resolver.cancel = cancel_resolve;
 
     r_client_default_request_policy(&policy);
-    policy.attempt_timeout_ms = 25u;
-    policy.retry.retry_attempts = 0u;
+    policy.unit_ms = 25u;
 
     memset(&config, 0, sizeof(config));
     config.tenant.dns_name = dns_name;
@@ -229,7 +228,7 @@ fill_request(r_resource_request_t *resource, r_latency_guard_t *guard,
     resource->tokens_requested = 1u;
 
     memset(guard, 0, sizeof(*guard));
-    memcpy(guard->service_id, "contract-service", 16u);
+    memcpy(guard->latency_tracker_id, "contract-service", 16u);
     guard->threshold_ms = 50u;
     guard->ttl_ms = 1000u;
     guard->max_samples = 10u;
@@ -382,6 +381,7 @@ test_timeout_completion(void)
     char label[16];
     r_client_req_t *request = NULL;
     uint64_t deadline = 0u;
+    uint64_t initial_time = fixture.now_ms;
     r_client_t *client = create_client(&fixture);
 
     fill_request(&resource, &guard, label);
@@ -391,7 +391,7 @@ test_timeout_completion(void)
             "timeout fixture request did not start")
         || check(r_client_request_deadline_ms(request, &deadline) == RCLIENT_OK,
             "live request did not expose a deadline")
-        || check(deadline == fixture.now_ms + 25u,
+        || check(deadline == initial_time + 25u,
             "request policy was not copied during client creation"))
     {
         r_client_destroy(client);
@@ -404,12 +404,28 @@ test_timeout_completion(void)
         || check(fixture.rate_callback_count == 0u,
             "early timeout completed the request")
         || check(r_client_on_timeout(client, request, deadline) == RCLIENT_OK,
-            "deadline timeout failed")
+            "first-round timeout failed")
+        || check(fixture.rate_callback_count == 0u
+            && fixture.send_count == 2u,
+            "first-round timeout did not replay exactly once")
+        || check(r_client_request_deadline_ms(request, &deadline) == RCLIENT_OK
+            && deadline == initial_time + 50u,
+            "replay round did not expose its deadline")
+        || check(r_client_on_timeout(client, request, deadline) == RCLIENT_OK,
+            "replay-round timeout failed")
+        || check(fixture.rate_callback_count == 0u
+            && fixture.send_count == 2u,
+            "final receive phase sent or completed unexpectedly")
+        || check(r_client_request_deadline_ms(request, &deadline) == RCLIENT_OK
+            && deadline == initial_time + 75u,
+            "final receive phase did not expose its deadline")
+        || check(r_client_on_timeout(client, request, deadline) == RCLIENT_OK,
+            "final timeout failed")
         || check(fixture.rate_callback_count == 1u
             && fixture.rate_status == RCLIENT_ERR_TIMEOUT
             && fixture.callback_request_matched
             && !fixture.callback_had_result,
-            "deadline did not synchronously complete exactly once"))
+            "final deadline did not synchronously complete exactly once"))
     {
         r_client_destroy(client);
         return 1;
