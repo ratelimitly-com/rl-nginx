@@ -23,7 +23,7 @@ CLIENT_DOC_URL = re.compile(
 
 
 DEFAULT_STATEMENTS = {
-    "timeout": "mcf->timeout_ms = 20;",
+    "request_policy": "r_client_default_request_policy(&mcf->request_policy);",
     "failure": "mcf->fail_open = 1;",
     "debug": "mcf->debug = 0;",
     "ttl": "uint32_t ttl_ms = 30000;",
@@ -32,8 +32,7 @@ DEFAULT_STATEMENTS = {
 }
 
 C_CLIENT_STATEMENTS = (
-    "r_client_default_request_policy(&worker->policy);",
-    "worker->policy.unit_ms = mcf->timeout_ms;",
+    "worker->policy = mcf->request_policy;",
     "worker->client_cfg.request_policy = &worker->policy;",
     "r_client_check_rate_limit_async_borrowed(",
     "r_client_report_latency(",
@@ -157,7 +156,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         require(scope, fragment, f"executable module default {name}", failures)
 
     dsl_defaults = (
-        "| `ratelimitly_timeout` | `20ms` |",
+        "| `ratelimitly_policy` | `standard unit=20ms` |",
         "| `ratelimitly_fail` | `open` |",
         "| `ratelimitly_bind` | kernel-selected local address, ephemeral port |",
         "| `ratelimitly_debug` | `off` |",
@@ -197,7 +196,6 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     integration_scopes = (
         worker_init,
         worker_init,
-        worker_init,
         handler,
         log_handler,
     )
@@ -207,8 +205,29 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     require(behavior, "one replay", "behavior specification", failures)
     require(
         implementation,
-        "one final receive unit",
+        "disabled completion delivery",
         "implementation specification",
+        failures,
+    )
+    policy_parser = function_body(source, "ngx_http_rn_set_policy")
+    for fragment in (
+        '"standard"',
+        '"single_round"',
+        '"custom"',
+        "policy.replay_count = 0;",
+        "policy.final_receive_units = 0;",
+        "policy.completion_delivery = false;",
+        "policy.replay_gap",
+        "policy.preference",
+        "policy.final_receive_units",
+        "policy.final_preference_units",
+        "policy.completion_delivery",
+    ):
+        require(policy_parser, fragment, "executable request-policy mapping", failures)
+    require(
+        function_body(source, "ngx_http_rn_init"),
+        "mcf->dedup_ttl_ms_max",
+        "credential policy-horizon validation",
         failures,
     )
 
@@ -319,8 +338,8 @@ def negative_fixture_failures(source: str) -> list[str]:
             failures.append(f"validator accepted disabled executable statement {statement!r}")
 
     dead_default = source.replace(
-        DEFAULT_STATEMENTS["timeout"],
-        f"#if 0\n    {DEFAULT_STATEMENTS['timeout']}\n#endif",
+        DEFAULT_STATEMENTS["request_policy"],
+        f"#if 0\n    {DEFAULT_STATEMENTS['request_policy']}\n#endif",
         1,
     )
     if not validate(dead_default)[0]:

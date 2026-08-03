@@ -16,7 +16,7 @@ The following directives are valid only in the nginx `http` context:
 
 - `ratelimitly_tenant`
 - `ratelimitly_auth_key`
-- `ratelimitly_timeout`
+- `ratelimitly_policy`
 - `ratelimitly_fail`
 - `ratelimitly_bind`
 - `ratelimitly_debug`
@@ -62,21 +62,87 @@ The credential is sensitive and MUST NOT be committed or placed in copyable
 examples. See the configuration and operations guides for include-file,
 `nginx -T`, rotation, and log-handling requirements.
 
-### `ratelimitly_timeout`
+### `ratelimitly_policy`
 
 ```nginx
-ratelimitly_timeout <duration>;
+ratelimitly_policy standard [unit=<duration>];
+ratelimitly_policy single_round [unit=<duration>];
+ratelimitly_policy custom
+  unit=<duration>
+  replays=<0..65535>
+  replay_gap=<schedule>
+  oldest_preference=<schedule>
+  final_wait_units=<uint32>
+  final_oldest_preference_units=<uint32>
+  completion_delivery=on|off;
 ```
 
-The value MUST be a positive duration accepted by nginx's millisecond-mode time
-parser whose total fits `1..4294967295ms`. Accepted units are `w`, `d`, `h`,
-`m`, `s`, and `ms`; compound components appear from larger to smaller units.
-A final unitless number means seconds, so `1` is `1000ms`, not `1ms`. It becomes
-the C-client scheduling unit `U`. With the locked policy defaults, the client
-uses an initial round, one replay round, and one final receive-only interval,
-each lasting at most `U`; the maximum admission wait and deduplication TTL are
-therefore three times this value. If repeated, the later value is effective;
-configurations SHOULD define it once.
+The directive selects the C-client resource-request policy. It MAY occur only
+once. When omitted, `standard unit=20ms` is effective.
+
+`unit` is the base scheduling unit `U`, not the total request timeout. It MUST
+be a positive duration accepted by nginx's millisecond-mode time parser whose
+total fits `1..4294967295ms`. Accepted units are `w`, `d`, `h`, `m`, `s`, and
+`ms`; compound components appear from larger to smaller units. A final
+unitless number means seconds, so `unit=1` is `1000ms`, not `1ms`.
+
+The named policies have fixed shapes and accept no parameter other than
+`unit`:
+
+| Policy | `N` | `B(k)` | `P(k)` | `F` | `P_final` | Completion delivery | Horizon / dedup TTL |
+| --- | ---: | --- | --- | ---: | ---: | --- | ---: |
+| `single_round` | `0` | `B(0)=1` | `P(0)=1` | `0` | `0` | off | `U` |
+| `standard` | `1` | `B(0)=B(1)=1` | `P(0)=P(1)=1` | `1` | `0` | on | `3 * U` |
+
+Both use fixed one-unit replay-gap and oldest-preference schedules. A valid
+response from the oldest discovered server can complete before the horizon.
+`single_round` disables completion delivery so it never creates a second
+best-effort transmission after selecting a response.
+
+`custom` exposes every field of the locked C-client request policy. Every
+listed argument is required exactly once; unknown and duplicate arguments are
+errors. `replays` counts retransmissions of the same logical request identity,
+not new requests. Its nginx-to-C mapping is:
+
+| nginx argument | C-client field |
+| --- | --- |
+| `unit` | `unit_ms` |
+| `replays` | `replay_count` |
+| `replay_gap` | `replay_gap` (`B(k)`) |
+| `oldest_preference` | `preference` (`P(k)`) |
+| `final_wait_units` | `final_receive_units` (`F`) |
+| `final_oldest_preference_units` | `final_preference_units` (`P_final`) |
+| `completion_delivery` | `completion_delivery` |
+
+All schedule and final-wait numbers are multiples of `U`. `replay_gap` defines
+the duration of every transmission round, including the initial round `k=0`.
+Schedules use one of these forms:
+
+```text
+fixed:<units>
+linear:<initial-units>:<step-units>:<maximum-units>
+exponential:<initial-units>:<factor>:<maximum-units>
+```
+
+The linear step MUST be at least one, the exponential factor MUST be at least
+two, and the initial value MUST NOT exceed the maximum. The replay gap MUST
+start above zero. For every transmission round, `oldest_preference` MUST NOT
+exceed `replay_gap`. `final_oldest_preference_units` MUST NOT exceed
+`final_wait_units`.
+
+For replay rounds `k = 0..replays`, let `B(k)` be the selected
+`replay_gap` value and let `F` be `final_wait_units`. The maximum admission
+interval and wire deduplication TTL are:
+
+```text
+H = U * (sum(B(k), k = 0..replays) + F)
+```
+
+Configuration loading fails when the policy is structurally invalid, `H`
+does not fit the wire field, or an enabled configuration's `H` exceeds the
+API key's `dedup_ttl_ms_max`. The locked C-client documentation remains
+authoritative for response selection, replay, final-phase, completion-delivery,
+and conditional deduplication semantics.
 
 ### `ratelimitly_fail`
 
@@ -205,7 +271,7 @@ validated at configuration load; a value containing variables is validated per
 request and follows the failure policy on error. `ttl` and all sample fields
 are static and validated at configuration load.
 
-Threshold and TTL use the same duration grammar as `ratelimitly_timeout`; a
+Threshold and TTL use the same duration grammar as `ratelimitly_policy unit`; a
 unitless value means seconds. Their millisecond values MUST fit
 `1..4294967295`, so zero is invalid. All sample fields MUST fit an unsigned
 32-bit wire field. `max_samples` and `buffer_size` MUST be nonzero.
@@ -268,7 +334,7 @@ source addresses MUST NOT be used as label values.
 
 | Setting | Default |
 | --- | --- |
-| `ratelimitly_timeout` | `20ms` |
+| `ratelimitly_policy` | `standard unit=20ms` |
 | `ratelimitly_fail` | `open` |
 | `ratelimitly_bind` | kernel-selected local address, ephemeral port |
 | `ratelimitly_debug` | `off` |
@@ -277,6 +343,6 @@ source addresses MUST NOT be used as label values.
 | `ratelimitly_guard buffer_size` | credential's `latency_buffer_size_max` |
 | `ratelimitly_guard min_sample_threshold` | `8` |
 
-Production configurations SHOULD set timeout and failure policy explicitly
+Production configurations SHOULD set request and failure policy explicitly
 after assessing enforcement bypass, dependency denial, and request-latency
 budgets.

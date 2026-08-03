@@ -24,7 +24,7 @@ http {
 
   ratelimitly_tenant   tenant.example.invalid;
   ratelimitly_auth_key rl-aes1REPLACE_WITH_YOUR_KEY;
-  ratelimitly_timeout  50ms;
+  ratelimitly_policy   standard unit=50ms;
   ratelimitly_fail     close;
 
   ratelimitly_zone api_per_ip
@@ -215,33 +215,70 @@ are documented in the C client's
 section. DNS target naming and refresh behavior are client-owned; see
 [DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh).
 
-## Timeout and failure policy
+## Request and failure policy
 
 ```nginx
-ratelimitly_timeout 50ms;
+ratelimitly_policy standard unit=20ms;
 ratelimitly_fail open;
 ratelimitly_fail close;
 ```
 
-`ratelimitly_timeout` sets the C-client scheduling unit `U`. It must resolve to
-`1..4294967295ms`; zero is rejected. nginx duration units `w`, `d`, `h`, `m`,
-`s`, and `ms` are accepted, and a unitless value means seconds. Write `1ms`
-when one millisecond is intended.
+To select the one-transmission alternative, replace the policy line with:
 
-The locked v0.5.0 policy uses one initial round, one replay round, and one final
-receive-only interval, each lasting at most `U`. Its maximum admission wait and
-wire deduplication TTL are therefore `3 * U`: the default `20ms` unit permits a
-maximum 60ms wait. A valid response from the oldest discovered server can
-complete earlier. Keep the derived TTL within the credential's
-`dedup_ttl_ms_max`; an invalid policy makes request construction fail and the
-configured failure policy applies.
+```nginx
+ratelimitly_policy single_round unit=20ms;
+```
 
-This is a summary of the locked defaults, not a second policy definition. See
-the authoritative
+`ratelimitly_policy` controls how the C client transmits a logical resource
+request and selects a response. `unit` is its base scheduling unit `U`, not a
+total timeout. It must resolve to `1..4294967295ms`; zero is rejected. nginx
+duration units `w`, `d`, `h`, `m`, `s`, and `ms` are accepted, and a unitless
+value means seconds. Write `unit=1ms` when one millisecond is intended.
+
+`standard` is the default. It has one initial transmission round, one replay
+round, and one final receive-only unit, so its maximum admission interval and
+wire deduplication TTL are `3 * U`. With the default `unit=20ms`, that horizon
+is 60ms. `single_round` performs no replay or completion delivery and has a
+one-unit horizon. Either policy can complete earlier when its
+response-selection rule is satisfied.
+
+The names describe mechanics, not reliability guarantees. More transmissions
+can improve delivery opportunities and server convergence, but they also add
+traffic and—if server deduplication is degraded—conditional duplicate-
+consumption exposure.
+
+Advanced deployments can define every C-client policy field explicitly:
+
+```nginx
+ratelimitly_policy custom
+  unit=20ms
+  replays=1
+  replay_gap=fixed:1
+  oldest_preference=fixed:1
+  final_wait_units=1
+  final_oldest_preference_units=0
+  completion_delivery=on;
+```
+
+`replays` retransmit the same logical request identity within the derived
+deduplication window; they are not new requests. Schedule and final-wait values
+are multiples of `unit`. The accepted schedules are:
+
+```text
+fixed:<units>
+linear:<initial-units>:<step-units>:<maximum-units>
+exponential:<initial-units>:<factor>:<maximum-units>
+```
+
+For replay rounds `0..N`, the horizon is
+`U * (sum(replay_gap(k)) + final_wait_units)`. nginx validates the complete
+policy and rejects an enabled configuration when that horizon exceeds the API
+key's `dedup_ttl_ms_max`. See the normative
+[Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
+the authoritative C-client
 [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy)
-for schedules, response selection, completion delivery, deduplication, and
-validation rules. `rl-nginx` exposes only `U`; it does not expose the other
-policy parameters as directives.
+for response selection, replay, final-phase, completion-delivery, and
+deduplication semantics.
 
 The default is `ratelimitly_fail open`, but production configurations should
 set the policy explicitly:
@@ -426,7 +463,7 @@ protect and rotate the logs, and plan for volume on hot paths.
 
 ## Directive scope
 
-Tenant, credential, timeout, failure, bind, debug, zone, group, and guard
+Tenant, credential, request-policy, failure, bind, debug, zone, group, and guard
 definitions belong at `http` scope. Protected `server` or `location` blocks
 reference zones, groups, and guards with `ratelimitly` directives. A location
 without a `ratelimitly zone=...` or `ratelimitly group=...` reference is not

@@ -337,7 +337,7 @@ uses `DNS_SERVER`/`DNS_PORT` when set; otherwise it uses the first resolver from
 External mode also uses a more conservative default load profile:
 
 ```sh
-RATELIMITLY_TIMEOUT=1000ms ALLOW_REQUESTS=20 DENY_REQUESTS=80 PARALLELISM=5
+RATELIMITLY_POLICY_UNIT=1000ms ALLOW_REQUESTS=20 DENY_REQUESTS=80 PARALLELISM=5
 ```
 
 Override those values when testing a dedicated server or a lower-latency
@@ -473,7 +473,7 @@ The generated config defines:
 ```nginx
 ratelimitly_tenant   rn-itest.local;
 ratelimitly_auth_key <temporary tenant key>;
-ratelimitly_timeout  100ms;
+ratelimitly_policy standard unit=100ms;
 ratelimitly_fail     close;
 ratelimitly_debug    on;
 
@@ -538,7 +538,7 @@ Common overrides:
 | `TENANT_ID` | timestamp-derived | Temporary tenant id. |
 | `TENANT_SEED` | `tenant-seed-$TENANT_ID` | Temporary tenant credential seed. |
 | `TENANT_KEY` | empty | Existing tenant key, required when `EXTERNAL_SERVER=1`. |
-| `RATELIMITLY_TIMEOUT` | `100ms` local, `1000ms` external | Module timeout written to the generated nginx config. |
+| `RATELIMITLY_POLICY_UNIT` | `100ms` local, `1000ms` external | Base unit of the generated `standard` request policy. |
 | `ALLOW_REQUESTS` | `50` local, `20` external | Requests sent to `/allow`. |
 | `DENY_REQUESTS` | `200` local, `80` external | Requests sent to `/deny`. |
 | `PARALLELISM` | `20` local, `5` external | `xargs -P` curl concurrency. |

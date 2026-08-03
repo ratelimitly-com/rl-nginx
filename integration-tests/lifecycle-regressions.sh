@@ -23,7 +23,7 @@ Environment overrides:
   DNS_PORT          local DNS port (default: 15353)
   RESPONDER_PORT    UDP responder port (default: 19080)
   NGINX_PORT        nginx HTTP port (default: 18098)
-  REQUEST_TIMEOUT   C-client scheduling unit (default: 100ms; 300ms horizon)
+  REQUEST_POLICY_UNIT  C-client scheduling unit (default: 100ms; 300ms standard-policy horizon)
   DNS_REFRESH_SEC   wait after DNS mode changes (default: 1.2)
   DNS_TIMEOUT_RECOVERY_SEC
                     wait after restoring DNS from timeout mode (default: 6)
@@ -89,7 +89,7 @@ NGINX_HOST="${NGINX_HOST:-127.0.0.1}"
 NGINX_PORT="${NGINX_PORT:-18098}"
 DOMAIN="${DOMAIN:-rn-test.local}"
 SERVER_ID="${SERVER_ID:-1}"
-REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-100ms}"
+REQUEST_POLICY_UNIT="${REQUEST_POLICY_UNIT:-100ms}"
 DNS_REFRESH_SEC="${DNS_REFRESH_SEC:-1.2}"
 DNS_TIMEOUT_RECOVERY_SEC="${DNS_TIMEOUT_RECOVERY_SEC:-6}"
 ABORT_REQUESTS="${ABORT_REQUESTS:-20}"
@@ -616,7 +616,7 @@ http {
 
   ratelimitly_tenant ${DOMAIN};
   ratelimitly_auth_key ${auth_key};
-  ratelimitly_timeout ${REQUEST_TIMEOUT};
+  ratelimitly_policy standard unit=${REQUEST_POLICY_UNIT};
   ratelimitly_fail ${FAIL_POLICY};
   ratelimitly_debug ${debug_mode};
 ${fault_directive}

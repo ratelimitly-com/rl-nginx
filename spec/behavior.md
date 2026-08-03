@@ -63,25 +63,26 @@ that fan-out represents one logical admission/consumption. This commit-safety
 property is external to the nginx module. Operators MUST NOT assume there is a
 hidden single-target fallback when a discovered topology lacks that property.
 
-The module starts from the locked C-client request-policy defaults and sets its
-base scheduling unit `U` from `ratelimitly_timeout`. For the locked revision,
-the client sends to all discovered servers, prefers the oldest server's valid
-response, performs one replay to servers still missing a valid response, then
-waits through one final receive-only interval. A selected allow or deny also
-triggers best-effort completion delivery to servers still missing a response.
-The maximum admission wait and wire deduplication TTL are `3 * U` (60ms with
-the default `20ms` unit).
+The module passes the policy selected by `ratelimitly_policy` to the locked C
+client. The default `standard unit=20ms` policy sends to all discovered
+servers, prefers the oldest server's valid response, performs one replay to
+servers still missing a valid response, then waits through one final
+receive-only unit. A selected allow or deny also triggers best-effort
+completion delivery to servers still missing a response. Its maximum admission
+wait and wire deduplication TTL are `3 * U`, or 60ms by default.
 
-rl-nginx exposes no directives for replay count, backoff, oldest-response
-preference, final receive time, completion delivery, or DNS refresh policy.
-Changing the dependency lock in a way that changes this observable behavior
-MUST update this specification and its tests in the same change.
+`single_round` sends once, waits for at most one unit, and disables both replay
+and completion delivery. `custom` exposes the replay-gap and oldest-preference
+schedules, replay count, final receive interval and preference, and completion
+delivery. The exact syntax, horizon formula, and validation rules are in
+[Configuration DSL](dsl.md#ratelimitly_policy). DNS refresh policy remains
+client-owned and is not configurable through rl-nginx.
 
 Fan-out, response preference, replay scheduling, completion delivery, and TTL
 derivation are client-owned and are defined in the locked
 [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy).
-The paragraph above specifies only the v0.5.0 defaults selected by rl-nginx and
-their externally visible effect.
+The paragraphs above specify the supported nginx selections and their
+externally visible effect.
 
 The locked client requires SRV discovery. A failed, empty, or non-conforming
 membership fails with `RCLIENT_ERR_DNS`; there is no direct tenant-name/UDP

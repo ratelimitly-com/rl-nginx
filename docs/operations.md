@@ -26,18 +26,19 @@ nginx behavior from the client behavior linked to its locked release.
 - Guard latency feedback is emitted only after a valid RateLimitly allow and
   completed request processing. Denials, fail-open/fail-close dependency
   outcomes, missing verdicts, timeouts, and client aborts do not add samples.
-- The current integration uses the C-client's unified oldest-server policy.
-  `ratelimitly_timeout` is its base unit: one initial round, one replay round,
-  and one final receive-only interval wait at most three units in total. A
-  valid response from the oldest server can complete earlier.
+- The default `ratelimitly_policy standard unit=20ms` uses one initial round,
+  one replay round, and one final receive-only interval, for a maximum
+  three-unit admission horizon. A valid response from the oldest server can
+  complete earlier. `single_round` and a fully explicit `custom` policy are
+  also available.
 - Internal nginx failures such as request-pool allocation or event-registration
   failure can return `500`. `ratelimitly_fail` is not a blanket conversion of
   every nginx failure.
 
 The C client's
 [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy)
-is authoritative for the summarized three-unit schedule, response selection,
-completion delivery, and deduplication semantics.
+is authoritative for response selection, replay schedules, completion
+delivery, and deduplication semantics.
 
 After admission, the client can disconnect and a content handler or upstream
 can still fail. Those outcomes do not reverse resource consumption. Fail-open
@@ -190,10 +191,11 @@ traffic on a protected location. Confirm that the service and incident process
 can tolerate that dependency. Test the chosen behavior under a forced outage
 before production rollout.
 
-Do not increase `ratelimitly_timeout` merely to hide DNS or network failures.
-Measure normal and tail decision latency, leave an explicit operational margin,
-and budget for the locked policy's three-unit maximum. The resulting
-deduplication TTL must not exceed the API key's `dedup_ttl_ms_max` quota.
+Do not increase the request-policy unit or add replays merely to hide DNS or
+network failures. Measure normal and tail decision latency, leave an explicit
+operational margin, and budget for the selected policy's complete derived
+horizon. nginx rejects an enabled configuration whose resulting deduplication
+TTL exceeds the API key's `dedup_ttl_ms_max` quota.
 
 The locked C client requires valid SRV membership. Failed, empty, or malformed
 SRV discovery produces no usable endpoint and follows `ratelimitly_fail`; it
@@ -239,7 +241,7 @@ Useful markers include:
 
 | Marker | Meaning and action |
 | --- | --- |
-| `rn: client cfg ...` | Worker-local client initialization. It includes tenant, key ID, and auth type, but not the full credential. |
+| `rn: client cfg ...` | Worker-local client initialization. It includes tenant, key ID, auth type, selected policy, unit, replay count, final wait, completion-delivery state, and derived horizon, but not the full credential. |
 | `rn: SRV target=...` / `rn: addr=...` | Discovery produced a server target/address. This does not yet prove a valid response. |
 | `rn: async_start_failed ... rc=-5(dns)` | The request could not start because the worker had no usable discovered target. Check resolver answers/cache and retry after recovery. |
 | `rn: udp_send failed ...` | The local UDP send failed. Check bind address, routing, socket/resource pressure, and egress policy. |
@@ -342,9 +344,10 @@ value is instead handled per request under the failure policy.
 `status=-2` proves only that no valid decision completed before the deadline.
 Check whether the SRV target was discovered, whether a UDP send was logged,
 whether the target is reachable, and whether responses have the expected
-server ID, request ID, authentication, and protocol shape. Increase the timeout
-only after confirming the path is healthy but legitimately slower than the
-configured budget. In particular, the client documents why a wrong credential,
+server ID, request ID, authentication, and protocol shape. Increase the policy
+unit or select a different policy only after confirming the path is healthy
+but legitimately slower than the configured budget. In particular, the client
+documents why a wrong credential,
 wrong key ID, skewed clock, or unusable authenticated response can all end as
 [`RCLIENT_ERR_TIMEOUT`](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#error-codes).
 
@@ -376,7 +379,7 @@ Before shifting production traffic:
    described in [Building and installing rl-nginx](build.md).
 3. Validate the exact configuration, credential include, trusted resolver, DNS
    records, target addresses, UDP policy, and optional local bind.
-4. Choose and record the failure policy, timeout, monitoring thresholds,
+4. Choose and record the request policy, failure policy, monitoring thresholds,
    incident owner, and rollback trigger.
 5. Test known allow, known deny, RateLimitly outage, and DNS failure/recovery in
    staging under that policy.

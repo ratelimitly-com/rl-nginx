@@ -33,7 +33,7 @@ only supported way to opt into a dirty development tree.
 | Integration layer | [Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#choosing-an-integration-layer) | nginx uses the core borrowed API because it already owns UDP, DNS, timers, logging, and request pools. |
 | Credentials and quotas | [Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#credentials) | nginx validates the encoded key at configuration load and uses its latency-buffer quota when `buffer_size` is omitted. |
 | State identity | [Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#content-defined-ids) | nginx renders names and passes the defining settings to the canonical ID helpers. |
-| Delivery and selection | [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy) | `ratelimitly_timeout` sets `unit_ms`; all other policy fields keep the locked defaults. |
+| Delivery and selection | [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy) | `ratelimitly_policy` selects the complete policy passed to the C client. |
 | Discovery | [DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh) and [I/O abstraction](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/IO_ABSTRACTION.md#dns) | nginx supplies the asynchronous resolver and worker-local UDP adapter. |
 | Failure surface | [Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#error-codes) | Client failures are mapped through `ratelimitly_fail`; valid denials are never fail-opened. |
 
@@ -51,8 +51,9 @@ an nginx-module fallback.
 - It supplies the I/O and DNS adapters required by `r_client_io.h`; the client
   still owns discovery state, authentication, packets, policy, deadlines, and
   response selection.
-- It maps `ratelimitly_timeout` to the default policy's `unit_ms`. With the
-  v0.5.0 defaults, the request horizon is `3 * unit_ms`.
+- It maps `ratelimitly_policy standard`, `single_round`, or the complete
+  `custom` form to an `r_request_policy_t`, validates its derived horizon
+  against the credential, and passes it unchanged to the C client.
 - It rearms nginx timers from every deadline returned by the client and treats
   a synchronous completion callback as the end of request-handle validity.
 - It defers a requested UDP source-port rebind until no resource request is in

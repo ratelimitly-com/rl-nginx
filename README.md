@@ -138,7 +138,7 @@ Every protected request must distinguish three outcomes:
 
 A failure after transmission does not prove that no server processed the
 request. Choose the failure policy as an explicit availability-versus-control
-decision; see [Timeout and failure policy](docs/configuration.md#timeout-and-failure-policy).
+decision; see [Request and failure policy](docs/configuration.md#request-and-failure-policy).
 
 The planned `0.1.x` public preview is source-only. It supports static and
 dynamic module builds on Linux with glibc and nginx `1.30.2` or `1.31.1`; the
@@ -218,7 +218,7 @@ http {
 
   ratelimitly_tenant   tenant.example.invalid;
   ratelimitly_auth_key rl-aes1REPLACE_WITH_YOUR_KEY;
-  ratelimitly_timeout  50ms;
+  ratelimitly_policy   standard unit=50ms;
   ratelimitly_fail     close;
 
   ratelimitly_zone api
@@ -285,7 +285,7 @@ or include a RateLimitly server.
 
 - `ratelimitly_tenant <tenant-domain>;`
 - `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
-- `ratelimitly_timeout <duration>;`
+- `ratelimitly_policy standard|single_round|custom ...;`
 - `ratelimitly_fail open|close;`
 - `ratelimitly_bind <ip>;`
 - `ratelimitly_debug on|off;`

@@ -104,7 +104,7 @@ OVERSIZED_LABEL="${MAX_LABEL}l"
 
 run_case representative accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'\
-$'  log_format ratelimitly_test "$status $ratelimitly_verdict";\n  access_log off;\n  ratelimitly_timeout 50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency "service=service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
+$'  log_format ratelimitly_test "$status $ratelimitly_verdict";\n  access_log off;\n  ratelimitly_policy standard unit=50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency "service=service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
 
 run_case min_sample_zero accept \
   $'  ratelimitly_guard zero "service=service:zero" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
@@ -113,7 +113,19 @@ run_case min_sample_positive accept \
 run_case dynamic_values_deferred accept \
   $'  map $arg_rate $dynamic_rate { default invalid-at-runtime; }\n  map $arg_threshold $dynamic_threshold { default invalid-at-runtime; }\n  ratelimitly_zone dynamic "bucket=dynamic" rate=$dynamic_rate;\n  ratelimitly_guard dynamic_guard "service=dynamic" threshold=$dynamic_threshold;'
 run_case unitless_durations_are_seconds accept \
-  $'  ratelimitly_timeout 1;\n  ratelimitly_guard seconds "service=seconds" threshold=1 ttl=1;'
+  $'  ratelimitly_policy standard unit=1;\n  ratelimitly_guard seconds "service=seconds" threshold=1 ttl=1;'
+run_case standard_default_unit accept \
+  $'  ratelimitly_policy standard;'
+run_case single_round accept \
+  $'  ratelimitly_policy single_round unit=25ms;'
+run_case single_round_wire_horizon_boundary accept \
+  $'  ratelimitly_policy single_round unit=4294967295ms;'
+run_case standard_wire_horizon_boundary accept \
+  $'  ratelimitly_policy standard unit=1431655765ms;'
+run_case custom_fixed accept \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=fixed:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;'
+run_case custom_schedules accept \
+  $'  ratelimitly_policy custom unit=10ms replays=2 replay_gap=linear:1:1:3 oldest_preference=exponential:0:2:0 final_wait_units=2 final_oldest_preference_units=1 completion_delivery=off;'
 run_case max_static_bucket accept \
   "  ratelimitly_zone max_bucket \"bucket=${MAX_IDENTIFIER}\" rate=1r/s;"
 run_case max_static_service accept \
@@ -231,15 +243,69 @@ run_case overflow_min_sample reject \
   $'  ratelimitly_guard overflow "service=overflow" threshold=1ms min_sample_threshold=4294967296;' \
   'invalid ratelimitly_guard min_sample_threshold'
 
-run_case invalid_timeout reject \
-  $'  ratelimitly_timeout forever;' \
-  'invalid timeout'
-run_case zero_timeout reject \
-  $'  ratelimitly_timeout 0;' \
-  'invalid timeout'
-run_case overflow_timeout reject \
-  $'  ratelimitly_timeout 4294967296ms;' \
-  'invalid timeout'
+run_case removed_timeout_directive reject \
+  $'  ratelimitly_timeout 20ms;' \
+  'unknown directive "ratelimitly_timeout"'
+run_case invalid_policy_name reject \
+  $'  ratelimitly_policy fast;' \
+  'invalid ratelimitly_policy name'
+run_case named_policy_unknown_argument reject \
+  $'  ratelimitly_policy standard replays=2;' \
+  'standard accepts only unit='
+run_case duplicate_policy reject \
+  $'  ratelimitly_policy standard;\n  ratelimitly_policy single_round;' \
+  'is duplicate'
+run_case invalid_policy_unit reject \
+  $'  ratelimitly_policy standard unit=forever;' \
+  'invalid ratelimitly_policy unit'
+run_case zero_policy_unit reject \
+  $'  ratelimitly_policy standard unit=0;' \
+  'invalid ratelimitly_policy unit'
+run_case overflow_policy_unit reject \
+  $'  ratelimitly_policy standard unit=4294967296ms;' \
+  'invalid ratelimitly_policy unit'
+run_case policy_horizon_overflow reject \
+  $'  ratelimitly_policy standard unit=1431655766ms;' \
+  'ratelimitly_policy horizon exceeds the wire limit'
+run_case custom_missing_fields reject \
+  $'  ratelimitly_policy custom unit=20ms;' \
+  'custom requires unit=, replays=, replay_gap=, oldest_preference=, final_wait_units=, final_oldest_preference_units=, and completion_delivery='
+run_case custom_duplicate_field reject \
+  $'  ratelimitly_policy custom unit=20ms unit=25ms replays=1 replay_gap=fixed:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'duplicate ratelimitly_policy unit='
+run_case custom_replays_overflow reject \
+  $'  ratelimitly_policy custom unit=20ms replays=65536 replay_gap=fixed:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replays'
+run_case custom_invalid_schedule_kind reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=random:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replay_gap'
+run_case custom_malformed_linear_schedule reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=linear:1:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replay_gap'
+run_case custom_zero_replay_gap reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=fixed:0 oldest_preference=fixed:0 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replay_gap'
+run_case custom_zero_linear_step reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=linear:1:0:2 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replay_gap'
+run_case custom_small_exponential_factor reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=exponential:1:1:2 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replay_gap'
+run_case custom_schedule_initial_above_maximum reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=linear:2:1:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'invalid ratelimitly_policy replay_gap'
+run_case custom_invalid_completion_delivery reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=fixed:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=maybe;' \
+  'invalid ratelimitly_policy completion_delivery'
+run_case custom_final_preference_too_long reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=fixed:1 oldest_preference=fixed:1 final_wait_units=1 final_oldest_preference_units=2 completion_delivery=on;' \
+  'final_oldest_preference_units exceeds final_wait_units'
+run_case custom_round_preference_too_long reject \
+  $'  ratelimitly_policy custom unit=20ms replays=1 replay_gap=fixed:1 oldest_preference=fixed:2 final_wait_units=1 final_oldest_preference_units=0 completion_delivery=on;' \
+  'oldest_preference exceeds replay_gap'
+run_case policy_exceeds_credential_ttl reject \
+  "${VALID_RESOLVER}"$'\n'"${VALID_TENANT}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n  ratelimitly_policy standard unit=101ms;\n'"${ENABLED_SERVER}" \
+  'ratelimitly_policy horizon is invalid or exceeds the API-key dedup_ttl_ms_max of 300ms'
 run_case invalid_fail_policy reject \
   $'  ratelimitly_fail maybe;' \
   'invalid ratelimitly_fail value'

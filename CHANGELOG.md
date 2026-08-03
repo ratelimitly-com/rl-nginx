@@ -6,10 +6,9 @@ remain preview software and must not be treated as ABI-stable versions.
 ## Unreleased
 
 - updated the supported public `rl-c-client` dependency to `v0.5.0` and
-  migrated to its unified oldest-server policy: `ratelimitly_timeout` now sets
-  the base unit, while the locked defaults perform one replay and one final
-  receive-only interval for a maximum wait and deduplication TTL of three
-  units;
+  replaced `ratelimitly_timeout` with `ratelimitly_policy`: `standard` exposes
+  the locked three-unit default, `single_round` provides a literal one-round
+  policy, and `custom` exposes the complete request-policy parameter set;
 - derive resource-bucket IDs from the rendered bucket, window, and rate, and
   derive latency-tracker IDs from the rendered service plus all tracker-state
   settings, using the canonical length-aware C-client helpers; and
