@@ -58,6 +58,12 @@ resolver IP addresses used for RateLimitly SRV discovery. `ratelimitly_dns_resol
 is OPTIONAL. When omitted, RateLimitly uses nginx's HTTP-scope `resolver` if
 configured, or defaults to the system DNS (`/etc/resolv.conf`).
 
+The value is NOT syntactically validated while loading configuration. An
+incorrect or non-existent tenant name therefore passes `nginx -t` and surfaces
+only at runtime as a DNS resolution failure, which is handled by
+`ratelimitly_fail` — under the default `open` that means enforcement is
+bypassed. Verify the name resolves before relying on it.
+
 ### `ratelimitly_auth_key`
 
 ```nginx
@@ -88,7 +94,15 @@ ratelimitly_policy custom
 ```
 
 The directive selects the C-client resource-request policy. It MAY occur only
-once. When omitted, `standard unit=20ms` is effective.
+once; a second occurrence is a configuration error rather than a last-wins
+override, so a base configuration plus an environment-specific override
+`include` is not a valid pattern for this directive.
+
+When omitted, `standard unit=20ms` is effective. That value is not set by this
+module: it is the locked `rl-c-client` default returned by
+`r_client_default_request_policy()`, pinned by the full-SHA dependency lock in
+`dependencies/rl-c-client.env`, and it must be re-verified whenever that lock
+is bumped.
 
 `unit` is the base scheduling unit `U`, not the total request timeout. It MUST
 be a positive duration accepted by nginx's millisecond-mode time parser whose

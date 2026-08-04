@@ -287,7 +287,10 @@ or include a RateLimitly server.
 - `ratelimitly_dns_resolver <ip> ...;` (optional; alias `ratelimitly_resolver`, defaults to system DNS `/etc/resolv.conf`)
 - `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
 - `ratelimitly_policy standard|single_round|custom ...;`
-- `ratelimitly_fail open|close;`
+- `ratelimitly_fail open|close;` — **defaults to `open`.** When no usable
+  decision is available the request continues normal nginx processing, i.e.
+  enforcement is bypassed. Set this explicitly in every production
+  configuration.
 - `ratelimitly_bind <ip>;`
 - `ratelimitly_debug on|off;`
 - `ratelimitly_zone <name> "bucket=<template>" rate=<rate>;`

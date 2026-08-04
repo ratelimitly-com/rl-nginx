@@ -44,13 +44,19 @@ production capture.
 
 ## Supported versions and scope
 
-The `0.1.0-rc.3` source-only public preview is the current release line. The
-default `main` branch remains the security-fix target. The supported preview is
-described in
+The `0.1.0-rc.3` source-only public preview is the current published release
+line. The default `main` branch remains the security-fix target. The supported
+preview is described in
 [compatibility and release scope](docs/compatibility.md); its supported matrix
 is Linux with glibc on `x86_64` and `aarch64`, nginx `1.30.2` and `1.31.1`, and
-the locked `rl-c-client` `v0.5.0` revision. The preview does not promise ABI or
-configuration stability across the `0.1.x` line.
+the locked `rl-c-client` `v0.4.0` revision that `0.1.0-rc.3` actually shipped.
+
+`main` — and therefore the next release candidate — has moved to the locked
+`rl-c-client` `v0.5.0` revision. Report against the combination you are running:
+a published `0.1.0-rc.3` deployment pairs with `v0.4.0`, not `v0.5.0`.
+
+The preview does not promise ABI or configuration stability across the `0.1.x`
+line.
 
 After the first release, this section and the release notes MUST identify which
 release lines receive security fixes. Unless a release note says otherwise,

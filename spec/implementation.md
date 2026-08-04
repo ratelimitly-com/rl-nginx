@@ -169,8 +169,12 @@ or cleanup MUST use one teardown path that:
 The timeout path MUST honor every later C-client deadline reported across the
 initial round, replay round, and final receive-only interval.
 `r_client_on_timeout` can synchronously invoke the completion callback and
-release the nginx request pool, so that call MUST be the last access through
-the request context.
+release the nginx request pool, so that call MUST NOT be followed by any access
+through the request context unless a callback-observed flag proves the
+completion callback did not fire. The implementation sets such a flag on the
+handler's stack before calling `r_client_on_timeout` and clears it from the
+completion callback; only when the flag is still clear on return may the
+handler read a further deadline and rearm.
 
 An aborted HTTP client MUST execute the cleanup path without a later timeout
 callback, double decrement, use-after-free, or worker loss.

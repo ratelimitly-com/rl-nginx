@@ -9,8 +9,9 @@ The current module does **not** provide:
 - Prometheus counters, histograms, a built-in metrics exporter, or a
   module-specific health endpoint;
 - nginx directives for selecting a fixed RateLimitly server address;
-- nginx directives for configuring C-client replay count, replay/preference
-  schedules, final receive time, completion delivery, or DNS refresh policy;
+- nginx directives for configuring the C-client DNS refresh policy (replay
+  count, replay/preference schedules, final receive time, and completion
+  delivery are now configurable through `ratelimitly_policy custom`);
 - dynamic zone, group, guard, credential, or policy updates without a normal
   nginx configuration reload;
 - a deterministic single-commit routing mode owned by the nginx module;
