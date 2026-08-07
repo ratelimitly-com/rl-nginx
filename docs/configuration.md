@@ -171,11 +171,13 @@ components can contain `|`.
 ## Tenant, credential, and DNS trust
 
 ```nginx
-ratelimitly_tenant <tenant-domain>;
+ratelimitly_tenant [tenant-domain];
 ratelimitly_auth_key <rl-cookie...|rl-aes...>;
 ```
 
-`ratelimitly_tenant` is the static DNS name used to discover:
+`ratelimitly_tenant` is OPTIONAL. When omitted, it defaults to
+`c-${api-key-id}.p0.ratelimitly.com` derived from the key ID in
+`ratelimitly_auth_key`. It specifies the static DNS name used to discover:
 
 ```text
 _ratelimitly._udp.<tenant-domain>

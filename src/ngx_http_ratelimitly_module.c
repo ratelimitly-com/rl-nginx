@@ -871,13 +871,23 @@ ngx_http_rn_init(ngx_conf_t *cf) {
         uint32_t policy_horizon_ms;
         uint32_t max_ttl_ms;
 
-        if (mcf->tenant_dns.len == 0) {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_tenant is required");
-            return NGX_ERROR;
-        }
         if (mcf->auth_key.len == 0) {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_auth_key is required");
             return NGX_ERROR;
+        }
+        if (mcf->tenant_dns.len == 0) {
+            u_char *p, *start;
+            size_t len;
+
+            len = sizeof("c-.p0.ratelimitly.com") - 1 + NGX_INT64_LEN;
+            start = ngx_pnalloc(cf->pool, len);
+            if (start == NULL) {
+                return NGX_ERROR;
+            }
+            p = ngx_snprintf(start, len, "c-%uL.p0.ratelimitly.com",
+                             (unsigned long) mcf->key_id);
+            mcf->tenant_dns.data = start;
+            mcf->tenant_dns.len = p - start;
         }
         max_ttl_ms = mcf->dedup_ttl_ms_max == 0
             ? UINT32_MAX : mcf->dedup_ttl_ms_max;

@@ -133,9 +133,8 @@ run_case max_static_service accept \
 run_case max_static_label accept \
   "  server { listen unix:__SOCKET__; location / { ratelimitly_label \"${MAX_LABEL}\"; return 204; } }"
 
-run_case missing_tenant reject \
-  "${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}" \
-  'ratelimitly_tenant is required'
+run_case omitted_tenant_default accept \
+  "${VALID_RESOLVER}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}"
 run_case missing_auth reject \
   "${VALID_TENANT}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}" \
   'ratelimitly_auth_key is required'

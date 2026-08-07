@@ -26,9 +26,8 @@ The following directives are valid only in the nginx `http` context:
 
 `ratelimitly` and `ratelimitly_label` are valid in `server` and `location`
 contexts. The module is enabled only when at least one effective `ratelimitly`
-rule exists. When enabled anywhere in `http`, `ratelimitly_tenant` and
-`ratelimitly_auth_key` MUST both be present or nginx configuration loading
-fails.
+rule exists. When enabled anywhere in `http`, `ratelimitly_auth_key` MUST be
+present or nginx configuration loading fails. `ratelimitly_tenant` is OPTIONAL.
 
 Zones, guards, and groups MUST be defined before a rule references them. Zones
 MUST be defined before a group references them. Names are case-sensitive.
@@ -41,10 +40,11 @@ MUST be defined before a group references them. Names are case-sensitive.
 ratelimitly_tenant <tenant-dns-name>;
 ```
 
-The value supplies the tenant DNS name to the locked C client. Supported
-deployments MUST publish `_ratelimitly._udp.<tenant-dns-name>` SRV records.
-This is not a fixed server-address directive. A second occurrence is a
-configuration error.
+The value supplies the tenant DNS name to the locked C client. When omitted,
+`ratelimitly_tenant` defaults to `c-${api-key-id}.p0.ratelimitly.com` derived
+from the embedded key ID of `ratelimitly_auth_key`. Supported deployments MUST
+publish `_ratelimitly._udp.<tenant-dns-name>` SRV records. This is not a fixed
+server-address directive. A second occurrence is a configuration error.
 
 ### `ratelimitly_auth_key`
 
@@ -328,6 +328,7 @@ source addresses MUST NOT be used as label values.
 
 | Setting | Default |
 | --- | --- |
+| `ratelimitly_tenant` | `c-${api-key-id}.p0.ratelimitly.com` |
 | `ratelimitly_policy` | `standard unit=20ms` |
 | `ratelimitly_fail` | `open` |
 | `ratelimitly_bind` | kernel-selected local address, ephemeral port |

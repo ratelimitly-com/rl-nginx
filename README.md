@@ -283,7 +283,7 @@ or include a RateLimitly server.
 
 ## Core Directives
 
-- `ratelimitly_tenant <tenant-domain>;`
+- `ratelimitly_tenant [tenant-domain];` (optional; defaults to `c-${api-key-id}.p0.ratelimitly.com`)
 - `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
 - `ratelimitly_policy standard|single_round|custom ...;`
 - `ratelimitly_fail open|close;`
