@@ -5,6 +5,49 @@ remain preview software and must not be treated as ABI-stable versions.
 
 ## Unreleased
 
+### Breaking
+
+- **`ratelimitly_timeout` is removed.** There is no alias: a configuration that
+  still uses it fails `nginx -t` with `unknown directive`.
+
+  `ratelimitly_timeout <T>` made `T` the *entire* admission budget (it set the
+  client's attempt timeout with zero retries). `ratelimitly_policy` replaces it
+  with a multi-round policy, so the migration is **not** a one-for-one textual
+  substitution:
+
+  | Old | Equivalent | Worst-case admission wait |
+  |---|---|---|
+  | `ratelimitly_timeout T;` | `ratelimitly_policy single_round unit=T;` | `T` — unchanged |
+  | `ratelimitly_timeout T;` | `ratelimitly_policy standard unit=T;` | **`3 * T`** — three units |
+  | `ratelimitly_timeout T;` | `ratelimitly_policy standard unit=T/3;` | `T` — unchanged, using the new default shape |
+
+  Choose `single_round` to preserve the previous behaviour exactly, or
+  `standard` with a third of the old value to keep the same worst case while
+  adopting the replay/final-receive shape. Writing `standard unit=T` with the
+  old value triples the budget.
+
+- **The derived policy horizon is now validated against the API key.** A
+  `unit=` that was previously accepted can now be rejected at configuration
+  load when `unit * (sum(replay_gap) + final_wait_units)` exceeds the
+  credential's `dedup_ttl_ms_max`. See
+  [configuration](docs/configuration.md#ratelimitly_policy).
+
+- **`ratelimitly_policy` rejects duplicate occurrences.** `ratelimitly_timeout`
+  was last-wins, so a base configuration plus an environment-specific override
+  `include` is no longer valid for this directive and fails `nginx -t`. This
+  matches `ratelimitly_tenant`, `ratelimitly_auth_key`, `ratelimitly_bind` and
+  `ratelimitly_debug`, which already rejected duplicates.
+
+- **Latency-tracker identity now depends on the credential when `buffer_size`
+  is omitted.** The effective `buffer_size` falls back to the API key's
+  `latency_buffer_size_max`, and that value is part of the tracker ID. Rotating
+  to a credential whose quota differs re-identifies every guard that relies on
+  the fallback, discarding accumulated latency history. Set `buffer_size`
+  explicitly on each `ratelimitly_guard` in any configuration expected to
+  survive a key rotation.
+
+### Changed
+
 - updated the supported public `rl-c-client` dependency to `v0.5.0` and
   replaced `ratelimitly_timeout` with `ratelimitly_policy`: `standard` exposes
   the locked three-unit default, `single_round` provides a literal one-round

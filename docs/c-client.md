@@ -54,8 +54,15 @@ an nginx-module fallback.
 - It maps `ratelimitly_policy standard`, `single_round`, or the complete
   `custom` form to an `r_request_policy_t`, validates its derived horizon
   against the credential, and passes it unchanged to the C client.
-- It rearms nginx timers from every deadline returned by the client and treats
-  a synchronous completion callback as the end of request-handle validity.
+- It rearms nginx timers from the deadline returned after each *timeout*
+  transition, and treats a synchronous completion callback as the end of
+  request-handle validity. It does **not** currently rearm after a datagram:
+  the client can move a deadline *earlier* when a valid non-oldest response
+  arrives, and that shortened deadline is not yet reflected in the nginx timer,
+  so a `custom` policy whose `oldest_preference` is smaller than its
+  `replay_gap` delivers its verdict at the later round deadline instead. The
+  `standard` and `single_round` policies are unaffected, because their
+  preference equals their gap in every round.
 - It defers a requested UDP source-port rebind until no resource request is in
   flight. A later independent latency report does not delay the rebind.
 - It maps a selected result into the final nginx admission decision and owns

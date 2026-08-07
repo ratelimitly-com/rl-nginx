@@ -261,8 +261,9 @@ ratelimitly_policy custom
 ```
 
 `replays` retransmit the same logical request identity within the derived
-deduplication window; they are not new requests. Schedule and final-wait values
-are multiples of `unit`. The accepted schedules are:
+deduplication window; they are not new requests. `replays` accepts `0..65535`
+(the locked client's `R_CLIENT_HA_MAX_REPLAY_COUNT`). Schedule and final-wait
+values are multiples of `unit`. The accepted schedules are:
 
 ```text
 fixed:<units>
@@ -270,10 +271,39 @@ linear:<initial-units>:<step-units>:<maximum-units>
 exponential:<initial-units>:<factor>:<maximum-units>
 ```
 
+**What the preference fields do.** Within transmission round `k`, the client
+withholds selection for the first `oldest_preference(k)` units, so that a valid
+response from the *oldest* discovered server can win over a faster response
+from a newer one; once those units elapse it accepts the best response it
+already holds. `oldest_preference=fixed:0` therefore selects the first valid
+response regardless of server age, and raising the value trades decision
+latency for a higher chance of converging on the oldest server's view.
+`final_oldest_preference_units` applies the same rule inside the final
+receive-only interval. Each round's preference must not exceed that round's
+`replay_gap`, and `final_oldest_preference_units` must not exceed
+`final_wait_units`.
+
 For replay rounds `0..N`, the horizon is
 `U * (sum(replay_gap(k)) + final_wait_units)`. nginx validates the complete
 policy and rejects an enabled configuration when that horizon exceeds the API
-key's `dedup_ttl_ms_max`. See the normative
+key's `dedup_ttl_ms_max`.
+
+**Where `dedup_ttl_ms_max` comes from.** It is a per-credential quota encoded
+in the `ratelimitly_auth_key` value and issued by the RateLimitly control
+plane; it is not an nginx setting and cannot be raised from configuration. When
+the derived horizon exceeds it, `nginx -t` prints the effective ceiling:
+
+```text
+ratelimitly_policy horizon is invalid or exceeds the API-key dedup_ttl_ms_max of <N>ms
+```
+
+So for a credential whose quota is `N`, the largest usable `unit` is
+`floor(N / 3)` under `standard` (three units) and `N` under `single_round`
+(one unit). A `custom` policy's ceiling follows its own horizon formula above.
+Because the quota travels with the credential, the same configuration can load
+against one API key and be rejected against another.
+
+See the normative
 [Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
 the authoritative C-client
 [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy)
@@ -405,8 +435,20 @@ Guard threshold and TTL milliseconds and the three sample-count fields must fit
 an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
 unitless duration means seconds. `max_samples` must be nonzero. When
 `buffer_size` is omitted, nginx uses the configured API key's
-`latency_buffer_size_max` quota. An explicit `buffer_size` must be nonzero and
-must not exceed that credential quota. Rendered service keys must contain
+`latency_buffer_size_max` quota. An explicit `buffer_size` must be nonzero;
+nginx does **not** compare it against the credential's `latency_buffer_size_max`,
+so an over-quota value loads cleanly and is rejected or clamped by the
+RateLimitly server at runtime rather than at `nginx -t`.
+
+Because the effective `buffer_size` is one of the inputs to the latency-tracker
+ID, omitting it ties tracker identity to the credential: rotating to an API key
+whose `latency_buffer_size_max` differs re-identifies every guard that relies on
+the fallback, and each one restarts with no samples until it passes
+`min_sample_threshold` again. Set `buffer_size` explicitly on every guard in a
+configuration that must survive key rotation, and see
+[operations](operations.md) before rotating a key in production.
+
+Rendered service keys must contain
 `1..1024` bytes; static oversized values fail `nginx -t`, while empty or
 oversized dynamic values follow the failure policy. Quote the complete
 `"service=value"` argument when needed, never only the value.
