@@ -23,7 +23,7 @@ Supported builds use immutable inputs:
 | --- | --- |
 | Default nginx submodule | `release-1.31.1` at `d44205284fa41662da803b796d6056fc1e59b1f3` |
 | Supported stable nginx | `release-1.30.2` at `a92a537860c7b87d3793d9eb41c9cf3ed833b53c` |
-| `rl-c-client` | `v0.5.0` at `7b8627946a12d8e8346fe7854fdb801cffa32cd6` |
+| `rl-c-client` | `v0.5.0` at `22cdd47b2cc802e2d758423c7eab02bf1c94bfe4` |
 
 The authoritative C-client lock is
 [`dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). Without an
@@ -202,7 +202,7 @@ RCLIENT_DIR=/absolute/path/to/rl-nginx/_deps/rl-c-client \
 make -j
 ```
 
-The upstream [C-client embedding guide](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/EMBEDDING.md)
+The upstream [C-client embedding guide](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/EMBEDDING.md)
 documents its supported source-build boundary. rl-nginx deliberately links the
 locked position-independent static archive; the dependency lock and commands
 above remain authoritative for this module build.

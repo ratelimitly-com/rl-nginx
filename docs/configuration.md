@@ -10,7 +10,7 @@ This guide explains how nginx directives construct those operations. For the
 underlying meanings of resource requests, latency reports, API-key quotas, and
 client policy, follow the versioned `rl-c-client` links in the relevant
 sections or start with its
-[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#operation-model).
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model).
 
 ## Minimal configuration
 
@@ -114,7 +114,7 @@ change produces a new resource ID and starts new bucket state, so version and
 roll out such a change as an identity migration.
 
 The exact, cross-client identity contract is defined by the C client's
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids).
 `rl-nginx` owns only the rendered name and effective nginx rate/window values
 passed to those helpers.
 
@@ -211,9 +211,9 @@ its unredacted output.
 
 The encoded fields, client-side checks, and server-enforced quota boundaries
 are documented in the C client's
-[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#credentials)
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials)
 section. DNS target naming and refresh behavior are client-owned; see
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#dns-refresh).
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh).
 
 ## Request and failure policy
 
@@ -254,9 +254,7 @@ ratelimitly_policy custom
   unit=20ms
   replays=1
   replay_gap=fixed:1
-  oldest_preference=fixed:1
   final_wait_units=1
-  final_oldest_preference_units=0
   completion_delivery=on;
 ```
 
@@ -276,7 +274,7 @@ policy and rejects an enabled configuration when that horizon exceeds the API
 key's `dedup_ttl_ms_max`. See the normative
 [Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
 the authoritative C-client
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy)
 for response selection, replay, final-phase, completion-delivery, and
 deduplication semantics.
 
@@ -423,7 +421,7 @@ that threshold. The default is `8`.
 
 Tracker fields and the independence of reports from resource requests are
 defined in the C client's
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#latency-guards-and-independent-reports).
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#latency-guards-and-independent-reports).
 This module adds the HTTP-specific eligibility rule and the measurement from
 request start to nginx log phase described above.
 

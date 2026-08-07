@@ -5,9 +5,9 @@ guidance for selecting variables and constructing identities is normative here
 and explained with examples in
 [Configuring rl-nginx](../docs/configuration.md).
 The locked C-client remains authoritative for the underlying
-[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#credentials)
+[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials)
 and
-[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.0/docs/api.md#content-defined-ids);
+[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids);
 this document defines how nginx directives provide and validate those values.
 
 ## Scope and activation
@@ -71,9 +71,7 @@ ratelimitly_policy custom
   unit=<duration>
   replays=<0..65535>
   replay_gap=<schedule>
-  oldest_preference=<schedule>
   final_wait_units=<uint32>
-  final_oldest_preference_units=<uint32>
   completion_delivery=on|off;
 ```
 
@@ -89,15 +87,15 @@ unitless number means seconds, so `unit=1` is `1000ms`, not `1ms`.
 The named policies have fixed shapes and accept no parameter other than
 `unit`:
 
-| Policy | `N` | `B(k)` | `P(k)` | `F` | `P_final` | Completion delivery | Horizon / dedup TTL |
-| --- | ---: | --- | --- | ---: | ---: | --- | ---: |
-| `single_round` | `0` | `B(0)=1` | `P(0)=1` | `0` | `0` | off | `U` |
-| `standard` | `1` | `B(0)=B(1)=1` | `P(0)=P(1)=1` | `1` | `0` | on | `3 * U` |
+| Policy | `N` | `B(k)` | `F` | Completion delivery | Horizon / dedup TTL |
+| --- | ---: | --- | ---: | --- | ---: |
+| `single_round` | `0` | `B(0)=1` | `0` | off | `U` |
+| `standard` | `1` | `B(0)=B(1)=1` | `1` | on | `3 * U` |
 
-Both use fixed one-unit replay-gap and oldest-preference schedules. A valid
-response from the oldest discovered server can complete before the horizon.
-`single_round` disables completion delivery so it never creates a second
-best-effort transmission after selecting a response.
+Both use fixed one-unit replay-gap schedules. A valid response from the oldest
+discovered server during Round 0 or from any server in subsequent rounds can
+complete before the horizon. `single_round` disables completion delivery so it
+never creates a second best-effort transmission after selecting a response.
 
 `custom` exposes every field of the locked C-client request policy. Every
 listed argument is required exactly once; unknown and duplicate arguments are
@@ -109,9 +107,7 @@ not new requests. Its nginx-to-C mapping is:
 | `unit` | `unit_ms` |
 | `replays` | `replay_count` |
 | `replay_gap` | `replay_gap` (`B(k)`) |
-| `oldest_preference` | `preference` (`P(k)`) |
 | `final_wait_units` | `final_receive_units` (`F`) |
-| `final_oldest_preference_units` | `final_preference_units` (`P_final`) |
 | `completion_delivery` | `completion_delivery` |
 
 All schedule and final-wait numbers are multiples of `U`. `replay_gap` defines
@@ -126,9 +122,7 @@ exponential:<initial-units>:<factor>:<maximum-units>
 
 The linear step MUST be at least one, the exponential factor MUST be at least
 two, and the initial value MUST NOT exceed the maximum. The replay gap MUST
-start above zero. For every transmission round, `oldest_preference` MUST NOT
-exceed `replay_gap`. `final_oldest_preference_units` MUST NOT exceed
-`final_wait_units`.
+start above zero.
 
 For replay rounds `k = 0..replays`, let `B(k)` be the selected
 `replay_gap` value and let `F` be `final_wait_units`. The maximum admission

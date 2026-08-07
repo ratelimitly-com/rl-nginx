@@ -218,9 +218,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "policy.final_receive_units = 0;",
         "policy.completion_delivery = false;",
         "policy.replay_gap",
-        "policy.preference",
         "policy.final_receive_units",
-        "policy.final_preference_units",
         "policy.completion_delivery",
     ):
         require(policy_parser, fragment, "executable request-policy mapping", failures)
