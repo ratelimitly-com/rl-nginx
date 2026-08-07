@@ -183,12 +183,12 @@ ratelimitly_auth_key <rl-cookie...|rl-aes...>;
 _ratelimitly._udp.<tenant-domain>
 ```
 
-The module has no direct server-address directive. nginx's `resolver` supplies
-the SRV and address answers. Declare it directly in the `http` context: the
-module captures one resolver and `resolver_timeout` for its worker-local client,
-and deliberately ignores server/location overrides for RateLimitly discovery.
-A configuration that enables RateLimitly without an HTTP-scope resolver fails
-`nginx -t`. Configure a resolver that is trusted and reachable from nginx
+The module has no direct server-address directive. DNS resolution for SRV and
+address answers uses `ratelimitly_dns_resolver` (or `ratelimitly_resolver`),
+nginx's HTTP-scope `resolver`, or defaults to system DNS (`/etc/resolv.conf`).
+When configured in HTTP scope, RateLimitly captures that resolver for its
+worker-local client and deliberately ignores server/location overrides for
+RateLimitly discovery. Configure a resolver that is trusted and reachable from nginx
 workers. A compromised or unreliable resolver can
 redirect decision traffic or turn enforcement into an outage. Set an explicit
 `resolver_timeout`, restrict resolver and UDP egress according to the

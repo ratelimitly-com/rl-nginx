@@ -15,6 +15,7 @@ this document defines how nginx directives provide and validate those values.
 The following directives are valid only in the nginx `http` context:
 
 - `ratelimitly_dns_srv`
+- `ratelimitly_dns_resolver`
 - `ratelimitly_auth_key`
 - `ratelimitly_policy`
 - `ratelimitly_fail`
@@ -45,6 +46,17 @@ The value supplies the tenant DNS name to the locked C client. When omitted,
 from the embedded key ID of `ratelimitly_auth_key`. Supported deployments MUST
 publish `_ratelimitly._udp.<tenant-dns-name>` SRV records. This is not a fixed
 server-address directive. A second occurrence is a configuration error.
+
+### `ratelimitly_dns_resolver`
+
+```nginx
+ratelimitly_dns_resolver <address> ...;
+```
+
+`ratelimitly_dns_resolver` (alias `ratelimitly_resolver`) specifies custom DNS
+resolver IP addresses used for RateLimitly SRV discovery. `ratelimitly_dns_resolver`
+is OPTIONAL. When omitted, RateLimitly uses nginx's HTTP-scope `resolver` if
+configured, or defaults to the system DNS (`/etc/resolv.conf`).
 
 ### `ratelimitly_auth_key`
 
@@ -329,6 +341,7 @@ source addresses MUST NOT be used as label values.
 | Setting | Default |
 | --- | --- |
 | `ratelimitly_dns_srv` | `c-${api-key-id}.p0.ratelimitly.com` |
+| `ratelimitly_dns_resolver` | system DNS (`/etc/resolv.conf`) |
 | `ratelimitly_policy` | `standard unit=20ms` |
 | `ratelimitly_fail` | `open` |
 | `ratelimitly_bind` | kernel-selected local address, ephemeral port |

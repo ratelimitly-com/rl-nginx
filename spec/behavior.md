@@ -50,11 +50,11 @@ backoff; protected requests during that interval immediately follow
 
 Supported deployments MUST publish SRV records as required by
 [`ratelimitly_dns_srv`](dsl.md#ratelimitly_dns_srv). The locked C client resolves
-those records and their A/AAAA targets through the nginx asynchronous resolver.
+those records and their A/AAAA targets through `ratelimitly_dns_resolver`,
+the HTTP-scope `resolver`, or system DNS (`/etc/resolv.conf`).
 It sends the request to every currently usable discovered endpoint address.
-The resolver and `resolver_timeout` are captured from the `http` context and
-apply process-wide to the worker client. Server and location resolver overrides
-do not change RateLimitly discovery.
+The resolver is captured from the `http` context and applies process-wide to the
+worker client. Server and location resolver overrides do not change RateLimitly discovery.
 
 rl-nginx does not choose a single commit target and does not deduplicate
 resource consumption across those endpoints. A supported deployment MUST

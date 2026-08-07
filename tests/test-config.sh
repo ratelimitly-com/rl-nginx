@@ -135,6 +135,12 @@ run_case max_static_label accept \
 
 run_case omitted_tenant_default accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}"
+run_case ratelimitly_dns_resolver accept \
+  $'  ratelimitly_dns_resolver 127.0.0.1;' $'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}"
+run_case ratelimitly_resolver_alias accept \
+  $'  ratelimitly_resolver 127.0.0.1;' $'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}"
+run_case omitted_resolver_system_dns_default accept \
+  "${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}"
 run_case missing_auth reject \
   "${VALID_DNS_SRV}"$'\n'"${VALID_ZONE}"$'\n'"${ENABLED_SERVER}" \
   'ratelimitly_auth_key is required'
@@ -317,9 +323,8 @@ run_case oversized_static_label reject \
 run_case invalid_bind reject \
   $'  ratelimitly_bind not-an-ip;' \
   'invalid ratelimitly_bind address'
-run_case location_only_resolver reject \
-  "${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      resolver 127.0.0.1;\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }' \
-  'ratelimitly requires resolver in the http context'
+run_case location_only_resolver accept \
+  "${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      resolver 127.0.0.1;\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }'
 
 run_example_case "${RN_ROOT}/examples/minimal.conf"
 run_example_case "${RN_ROOT}/examples/security-conscious.conf"

@@ -284,6 +284,7 @@ or include a RateLimitly server.
 ## Core Directives
 
 - `ratelimitly_dns_srv [tenant-domain];` (optional; defaults to `c-${api-key-id}.p0.ratelimitly.com`)
+- `ratelimitly_dns_resolver <ip> ...;` (optional; alias `ratelimitly_resolver`, defaults to system DNS `/etc/resolv.conf`)
 - `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
 - `ratelimitly_policy standard|single_round|custom ...;`
 - `ratelimitly_fail open|close;`

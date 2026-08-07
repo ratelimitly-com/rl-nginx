@@ -139,15 +139,18 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     )
     source_directives.discard("ratelimitly_test_fault")
     source_directives.discard("ratelimitly_verdict")
+    source_directives.discard("ratelimitly_resolver")
     documented_directives = set(re.findall(r"^### `([^`]+)`$", dsl, re.MULTILINE))
     if source_directives != documented_directives:
         missing = sorted(source_directives - documented_directives)
         extra = sorted(documented_directives - source_directives)
-        failures.append(f"directive mismatch; undocumented={missing}, nonexistent={extra}")
+        failures.append(
+            f"Directive set mismatch. missing={missing} extra={extra}"
+        )
 
-    main_conf = function_body(source, "ngx_http_rn_create_main_conf").split(
-        "return mcf;", 1
-    )[0]
+    main_conf = function_body(
+        source, "ngx_http_rn_create_main_conf"
+    ).split("return mcf;", 1)[0]
     guard_parser = function_body(source, "ngx_http_rn_guard")
     for name, fragment in DEFAULT_STATEMENTS.items():
         scope = guard_parser if name in {
@@ -157,6 +160,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
 
     dsl_defaults = (
         "| `ratelimitly_dns_srv` | `c-${api-key-id}.p0.ratelimitly.com` |",
+        "| `ratelimitly_dns_resolver` | system DNS (`/etc/resolv.conf`) |",
         "| `ratelimitly_policy` | `standard unit=20ms` |",
         "| `ratelimitly_fail` | `open` |",
         "| `ratelimitly_bind` | kernel-selected local address, ephemeral port |",

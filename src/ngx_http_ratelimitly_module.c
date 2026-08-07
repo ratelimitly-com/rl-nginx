@@ -198,6 +198,8 @@ static char *ngx_http_rn_merge_srv_conf(ngx_conf_t *cf, void *parent, void *chil
 static char *ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
 static char *ngx_http_rn_set_dns_srv(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_set_dns_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static ngx_resolver_t *rn_create_system_dns_resolver(ngx_conf_t *cf);
 static char *ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_policy(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_fail(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -281,6 +283,20 @@ static ngx_command_t ngx_http_rn_commands[] = {
     { ngx_string("ratelimitly_dns_srv"),
       NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
       ngx_http_rn_set_dns_srv,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("ratelimitly_dns_resolver"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_1MORE,
+      ngx_http_rn_set_dns_resolver,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("ratelimitly_resolver"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_1MORE,
+      ngx_http_rn_set_dns_resolver,
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
       NULL },
@@ -899,16 +915,25 @@ ngx_http_rn_init(ngx_conf_t *cf) {
                 "API-key dedup_ttl_ms_max of %uDms", max_ttl_ms);
             return NGX_ERROR;
         }
-        clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-        if (clcf == NULL || clcf->resolver == NULL
-            || clcf->resolver->connections.nelts == 0)
-        {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                "ratelimitly requires resolver in the http context");
-            return NGX_ERROR;
+        if (mcf->resolver == NULL) {
+            clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+            if (clcf != NULL && clcf->resolver != NULL
+                && clcf->resolver->connections.nelts > 0)
+            {
+                mcf->resolver = clcf->resolver;
+                mcf->resolver_timeout = clcf->resolver_timeout;
+            } else {
+                mcf->resolver = rn_create_system_dns_resolver(cf);
+                if (mcf->resolver == NULL) {
+                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "failed to create system DNS resolver for ratelimitly");
+                    return NGX_ERROR;
+                }
+            }
         }
-        mcf->resolver = clcf->resolver;
-        mcf->resolver_timeout = clcf->resolver_timeout;
+        if (mcf->resolver_timeout == 0) {
+            mcf->resolver_timeout = 30000;
+        }
     }
 
     return NGX_OK;
@@ -1032,6 +1057,75 @@ ngx_http_rn_set_dns_srv(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     }
     mcf->tenant_dns = value[1];
     return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_rn_set_dns_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    rn_main_conf_t *mcf = conf;
+    ngx_str_t *value = cf->args->elts;
+
+    if (mcf->resolver != NULL) {
+        return "is duplicate";
+    }
+
+    mcf->resolver = ngx_resolver_create(cf, &value[1], cf->args->nelts - 1);
+    if (mcf->resolver == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+}
+
+static ngx_resolver_t *
+rn_create_system_dns_resolver(ngx_conf_t *cf) {
+    FILE        *fp;
+    char         line[256];
+    ngx_str_t    names[16];
+    ngx_uint_t   n = 0;
+    u_char      *p, *start;
+    size_t       len;
+
+    fp = fopen("/etc/resolv.conf", "r");
+    if (fp != NULL) {
+        while (fgets(line, sizeof(line), fp) != NULL && n < 16) {
+            p = (u_char *) line;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (ngx_strncmp(p, "nameserver", 10) != 0) {
+                continue;
+            }
+            p += 10;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            start = p;
+            while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '#') {
+                p++;
+            }
+            len = p - start;
+            if (len == 0) {
+                continue;
+            }
+            names[n].data = ngx_pnalloc(cf->pool, len);
+            if (names[n].data == NULL) {
+                fclose(fp);
+                return NULL;
+            }
+            ngx_memcpy(names[n].data, start, len);
+            names[n].len = len;
+            n++;
+        }
+        fclose(fp);
+    }
+
+    if (n == 0) {
+        names[0].data = (u_char *) "127.0.0.1";
+        names[0].len = sizeof("127.0.0.1") - 1;
+        n = 1;
+    }
+
+    return ngx_resolver_create(cf, names, n);
 }
 
 static char *
