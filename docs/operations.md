@@ -3,7 +3,9 @@
 This runbook describes the behavior operators must account for when deploying,
 warming, observing, recovering, and rolling back the RateLimitly nginx module.
 Read [Configuring rl-nginx](configuration.md) first for identity, credential,
-resolver, and failure-policy security guidance.
+resolver, and failure-policy security guidance. The
+[documentation ownership map](index.md#documentation-ownership) distinguishes
+nginx behavior from the client behavior linked to its locked release.
 
 ## Runtime contract
 
@@ -24,11 +26,19 @@ resolver, and failure-policy security guidance.
 - Guard latency feedback is emitted only after a valid RateLimitly allow and
   completed request processing. Denials, fail-open/fail-close dependency
   outcomes, missing verdicts, timeouts, and client aborts do not add samples.
-- The current integration disables C-client request retries. A request waits at
-  most the configured `ratelimitly_timeout` for its single attempt.
+- The default `ratelimitly_policy standard unit=20ms` uses one initial round,
+  one replay round, and one final receive-only interval, for a maximum
+  three-unit admission horizon. A valid response from the oldest server can
+  complete earlier. `single_round` and a fully explicit `custom` policy are
+  also available.
 - Internal nginx failures such as request-pool allocation or event-registration
   failure can return `500`. `ratelimitly_fail` is not a blanket conversion of
   every nginx failure.
+
+The C client's
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy)
+is authoritative for response selection, replay schedules, completion
+delivery, and deduplication semantics.
 
 After admission, the client can disconnect and a content handler or upstream
 can still fail. Those outcomes do not reverse resource consumption. Fail-open
@@ -71,6 +81,13 @@ nginx workers. Permit DNS traffic to that resolver and UDP traffic to every
 address/port returned by the SRV and address lookups. `ratelimitly_bind`, when
 set, chooses only the local UDP source address; it is not a server address.
 Server or location resolver overrides do not affect RateLimitly discovery.
+
+Target naming, membership validation, and refresh pacing are client-owned. See
+the version-matched C-client
+[DNS contract](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/IO_ABSTRACTION.md#dns)
+and
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh)
+instead of inferring client behavior from nginx resolver configuration alone.
 
 The worker socket is unconnected and can receive any datagram addressed to its
 ephemeral port. Protocol authentication prevents invalid datagrams from
@@ -174,16 +191,20 @@ traffic on a protected location. Confirm that the service and incident process
 can tolerate that dependency. Test the chosen behavior under a forced outage
 before production rollout.
 
-Do not increase `ratelimitly_timeout` merely to hide DNS or network failures.
-Measure normal and tail decision latency, leave an explicit operational margin,
-and keep the value within the application's request-latency budget.
+Do not increase the request-policy unit or add replays merely to hide DNS or
+network failures. Measure normal and tail decision latency, leave an explicit
+operational margin, and budget for the selected policy's complete derived
+horizon. nginx rejects an enabled configuration whose resulting deduplication
+TTL exceeds the API key's `dedup_ttl_ms_max` quota.
 
-The locked C client contains a legacy compatibility fallback that may resolve
-the tenant name directly on UDP port `8080` after SRV discovery produces no
-endpoint. rl-nginx does not treat that as a supported deployment path or a
-server-address option: supported tenants publish SRV records. The strict public
-DNS fixture deliberately prevents the fallback from hiding a missing SRV
-record.
+The locked C client requires valid SRV membership. Failed, empty, or malformed
+SRV discovery produces no usable endpoint and follows `ratelimitly_fail`; it
+does not fall back to the tenant name on a fixed UDP port.
+
+For the exact distinction between synchronous submission errors, asynchronous
+timeouts, discarded packet-local errors, and server-side silent rejection, see
+the C-client
+[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#error-codes).
 
 ## Observability and log handling
 
@@ -220,7 +241,7 @@ Useful markers include:
 
 | Marker | Meaning and action |
 | --- | --- |
-| `rn: client cfg ...` | Worker-local client initialization. It includes tenant, key ID, and auth type, but not the full credential. |
+| `rn: client cfg ...` | Worker-local client initialization. It includes tenant, key ID, auth type, selected policy, unit, replay count, final wait, completion-delivery state, and derived horizon, but not the full credential. |
 | `rn: SRV target=...` / `rn: addr=...` | Discovery produced a server target/address. This does not yet prove a valid response. |
 | `rn: async_start_failed ... rc=-5(dns)` | The request could not start because the worker had no usable discovered target. Check resolver answers/cache and retry after recovery. |
 | `rn: udp_send failed ...` | The local UDP send failed. Check bind address, routing, socket/resource pressure, and egress policy. |
@@ -263,6 +284,12 @@ production credential:
   model;
 - rotate the key in the RateLimitly control plane after suspected exposure,
   deploy the replacement, warm the new workers, and revoke the old key.
+
+The encoded credential fields and quota enforcement points are defined in the
+C-client
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials)
+section. This runbook owns the additional nginx process-memory, configuration,
+reload, and support-bundle controls below.
 
 nginx also retains the parsed directive value in configuration-cycle memory so
 the master can create replacement workers and a worker can retry lazy client
@@ -317,9 +344,12 @@ value is instead handled per request under the failure policy.
 `status=-2` proves only that no valid decision completed before the deadline.
 Check whether the SRV target was discovered, whether a UDP send was logged,
 whether the target is reachable, and whether responses have the expected
-server ID, request ID, authentication, and protocol shape. Increase the timeout
-only after confirming the path is healthy but legitimately slower than the
-configured budget.
+server ID, request ID, authentication, and protocol shape. Increase the policy
+unit or select a different policy only after confirming the path is healthy
+but legitimately slower than the configured budget. In particular, the client
+documents why a wrong credential,
+wrong key ID, skewed clock, or unusable authenticated response can all end as
+[`RCLIENT_ERR_TIMEOUT`](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#error-codes).
 
 ### Unexpected `429`
 
@@ -349,7 +379,7 @@ Before shifting production traffic:
    described in [Building and installing rl-nginx](build.md).
 3. Validate the exact configuration, credential include, trusted resolver, DNS
    records, target addresses, UDP policy, and optional local bind.
-4. Choose and record the failure policy, timeout, monitoring thresholds,
+4. Choose and record the request policy, failure policy, monitoring thresholds,
    incident owner, and rollback trigger.
 5. Test known allow, known deny, RateLimitly outage, and DNS failure/recovery in
    staging under that policy.

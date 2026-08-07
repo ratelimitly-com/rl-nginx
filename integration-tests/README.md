@@ -107,8 +107,9 @@ must take the configured policy without reaching the responder. An empty label
 must be omitted, while boundary values of 1024 bytes for buckets/services and
 256 bytes for labels must reach it. A unitless threshold of `1` must become
 `1000ms`, and the known bucket text
-`boundary:known-bucket` must produce the pinned C-client identifier
-`adad04e30132078dd71e82746cbfe92d` in a one-resource responder request.
+`boundary:known-bucket` at `10000r/s` must produce the pinned canonical
+C-client identifier `98300f8a73dd010d75b92ce8d2298cc7` in a one-resource
+responder request.
 
 Run the outage-policy matrix separately while working on fail-policy behavior:
 
@@ -243,8 +244,10 @@ These are acceptance regressions, not an expected-failure wrapper. Each case
 must return zero and protects a specific ownership invariant that previously
 failed:
 
-- `timeout`: synchronous C-client completion must be the timeout handler's last
-  access to request-owned state, and exactly one timeout completion is allowed;
+- `timeout`: the first deadline must cause exactly one replay, the second must
+  enter the receive-only phase, and synchronous completion at the third must be
+  the timeout handler's last access to request-owned state; exactly one timeout
+  completion is allowed;
 - `aborted-client`: resetting a connection must cancel the C-client request and
   timer while balancing the nginx and worker request counts, with no later
   timeout completion;
@@ -334,7 +337,7 @@ uses `DNS_SERVER`/`DNS_PORT` when set; otherwise it uses the first resolver from
 External mode also uses a more conservative default load profile:
 
 ```sh
-RATELIMITLY_TIMEOUT=1000ms ALLOW_REQUESTS=20 DENY_REQUESTS=80 PARALLELISM=5
+RATELIMITLY_POLICY_UNIT=1000ms ALLOW_REQUESTS=20 DENY_REQUESTS=80 PARALLELISM=5
 ```
 
 Override those values when testing a dedicated server or a lower-latency
@@ -468,9 +471,9 @@ resolver 127.0.0.1:<DNS_PORT> valid=1s ipv6=off;
 The generated config defines:
 
 ```nginx
-ratelimitly_tenant   rn-itest.local;
+ratelimitly_dns_srv  rn-itest.local;
 ratelimitly_auth_key <temporary tenant key>;
-ratelimitly_timeout  100ms;
+ratelimitly_policy standard unit=100ms;
 ratelimitly_fail     close;
 ratelimitly_debug    on;
 
@@ -535,7 +538,7 @@ Common overrides:
 | `TENANT_ID` | timestamp-derived | Temporary tenant id. |
 | `TENANT_SEED` | `tenant-seed-$TENANT_ID` | Temporary tenant credential seed. |
 | `TENANT_KEY` | empty | Existing tenant key, required when `EXTERNAL_SERVER=1`. |
-| `RATELIMITLY_TIMEOUT` | `100ms` local, `1000ms` external | Module timeout written to the generated nginx config. |
+| `RATELIMITLY_POLICY_UNIT` | `100ms` local, `1000ms` external | Base unit of the generated `standard` request policy. |
 | `ALLOW_REQUESTS` | `50` local, `20` external | Requests sent to `/allow`. |
 | `DENY_REQUESTS` | `200` local, `80` external | Requests sent to `/deny`. |
 | `PARALLELISM` | `20` local, `5` external | `xargs -P` curl concurrency. |

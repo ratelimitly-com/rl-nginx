@@ -1,7 +1,13 @@
-# C Client Integration
+# rl-c-client integration boundary
 
-This module uses the standalone `rl-c-client` repository as the protocol
-engine. The supported tag and full commit SHA are recorded in
+This document records the nginx adapter contract. It does not redefine the
+public C-client API or policy: those belong to the version-matched
+`rl-c-client` documentation linked below.
+
+## Supported revision
+
+The module uses the standalone `rl-c-client` repository as its protocol and
+client-policy engine. The supported tag and full commit SHA are recorded in
 [`../dependencies/rl-c-client.env`](../dependencies/rl-c-client.env). Fetch the
 locked public release with:
 
@@ -19,31 +25,41 @@ Generated files ignored by the C-client repository are permitted; tracked or
 untracked local source changes are rejected. An explicit `RCLIENT_DIR` is the
 only supported way to opt into a dirty development tree.
 
-## Key Assumptions
+## Read the client contract at its source
 
-- The C client sends a mutating rate request to every currently usable
-  discovered endpoint. rl-nginx neither selects one deterministic commit target
-  nor deduplicates writes across targets. Supported deployments must supply a
-  RateLimitly topology whose server/protocol semantics make that fan-out one
-  logical consumption. There is no nginx-module fallback for a topology that
-  lacks this external commit-safety property.
-- DNS discovery and refresh behavior is owned by the locked C client.
-  rl-nginx supplies nginx resolver adapters and `resolver_timeout` but exposes
-  no refresh-interval or TTL policy directive. A lock update that changes this
-  behavior requires the compatibility review and specification update described
-  below.
-- Use `r_client_check_rate_limit_async_borrowed` to avoid per-request copies.
-- Timeouts and retries are set by nginx (default timeout 20ms, retries disabled).
-- Steering feedback is evaluated per response; rebind the UDP socket after all
-  current in-flight RateLimitly requests complete if any response requested a
-  port change. Latency reports are independent fire-and-forget requests, not
-  continuations of those rate requests, so a rebind never waits for a later
-  report.
+| Client-owned topic | Authoritative v0.5.0 documentation | nginx-specific consequence |
+| --- | --- | --- |
+| Logical operations | [Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model) | Each protected main request creates one resource request; a post-response latency report is separate. |
+| Integration layer | [Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#choosing-an-integration-layer) | nginx uses the core borrowed API because it already owns UDP, DNS, timers, logging, and request pools. |
+| Credentials and quotas | [Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials) | nginx validates the encoded key at configuration load and uses its latency-buffer quota when `buffer_size` is omitted. |
+| State identity | [Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids) | nginx renders names and passes the defining settings to the canonical ID helpers. |
+| Delivery and selection | [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy) | `ratelimitly_policy` selects the complete policy passed to the C client. |
+| Discovery | [DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh) and [I/O abstraction](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/IO_ABSTRACTION.md#dns) | nginx supplies the asynchronous resolver and worker-local UDP adapter. |
+| Failure surface | [Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#error-codes) | Client failures are mapped through `ratelimitly_fail`; valid denials are never fail-opened. |
 
-## Notes
+The HA policy sends a mutating resource request to every currently usable
+member. rl-nginx neither selects one deterministic commit target nor
+deduplicates writes across targets. Supported deployments therefore require a
+RateLimitly topology whose server/protocol semantics make that fan-out one
+logical consumption. This external commit-safety property is not replaced by
+an nginx-module fallback.
 
-The nginx module MUST provide I/O and DNS adapters via `r_client_io.h` (see
-`IO_ABSTRACTION.md` in the selected C-client checkout).
+## What the nginx adapter owns
+
+- It calls `r_client_check_rate_limit_async_borrowed`, retaining rendered
+  request inputs in an nginx request pool until callback or cancellation.
+- It supplies the I/O and DNS adapters required by `r_client_io.h`; the client
+  still owns discovery state, authentication, packets, policy, deadlines, and
+  response selection.
+- It maps `ratelimitly_policy standard`, `single_round`, or the complete
+  `custom` form to an `r_request_policy_t`, validates its derived horizon
+  against the credential, and passes it unchanged to the C client.
+- It rearms nginx timers from every deadline returned by the client and treats
+  a synchronous completion callback as the end of request-handle validity.
+- It defers a requested UDP source-port rebind until no resource request is in
+  flight. A later independent latency report does not delay the rebind.
+- It maps a selected result into the final nginx admission decision and owns
+  all later HTTP latency measurement and reporting eligibility.
 
 ## Required lifecycle contract
 
@@ -62,11 +78,13 @@ not compatible until every item remains true:
 3. After a successful borrowed start, the resource, guard, and label buffers
    remain caller-owned and must stay live until callback, cancellation, or
    client destruction. The client neither modifies nor frees them.
-4. `r_client_request_deadline_ms` succeeds for a live request. With the module's
-   `retry_attempts = 0`, `r_client_on_timeout` before that deadline leaves the
-   request pending; at or after the deadline it invokes the completion callback
-   synchronously and exactly once before returning. The request handle is no
-   longer valid when that callback completes.
+4. `r_client_request_deadline_ms` succeeds for a live request. Calling
+   `r_client_on_timeout` before a reported deadline leaves the request pending.
+   On the no-response path, at the first deadline it performs the configured
+   replay; at the second it enters the final receive-only interval; at the
+   third it invokes the timeout callback synchronously and exactly once. Any
+   valid response may change the next deadline or complete earlier, and the
+   request handle is invalid as soon as the callback completes.
 5. A normal response invokes exactly one completion callback with the same
    request handle. The result and its guard/resource arrays are callback-owned
    and valid only inside that invocation. The client unlinks the request before

@@ -21,6 +21,12 @@
 #define RN_MAX_SERVICE_LEN 1024
 #define RN_MAX_LABEL_LEN 256
 
+typedef enum {
+    RN_POLICY_STANDARD = 0,
+    RN_POLICY_SINGLE_ROUND,
+    RN_POLICY_CUSTOM,
+} rn_policy_kind_t;
+
 typedef struct {
     ngx_str_t name;
     ngx_str_t bucket_template;
@@ -57,8 +63,11 @@ typedef struct {
     r_auth_type_t auth_type;
     ngx_str_t auth_key;
     uint32_t latency_buffer_size_max;
+    uint32_t dedup_ttl_ms_max;
 
-    ngx_msec_t timeout_ms;
+    r_request_policy_t request_policy;
+    rn_policy_kind_t request_policy_kind;
+    ngx_flag_t request_policy_set;
     ngx_flag_t fail_open;
 
     ngx_flag_t enabled;
@@ -165,6 +174,8 @@ typedef struct {
     size_t expected_guard_count;
     size_t expected_resource_count;
     ngx_event_t timer;
+    /* Stack observer used only while r_client_on_timeout may call back. */
+    ngx_flag_t *timeout_completed;
     ngx_int_t decision;
     rn_admission_outcome_t admission_outcome;
     rn_completion_cause_t completion_cause;
@@ -186,9 +197,11 @@ static void *ngx_http_rn_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_rn_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 static char *ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static char *ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_set_dns_srv(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_set_dns_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static ngx_resolver_t *rn_create_system_dns_resolver(ngx_conf_t *cf);
 static char *ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static char *ngx_http_rn_set_timeout(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_set_policy(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_fail(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_bind(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_debug(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -246,6 +259,16 @@ static ngx_int_t rn_parse_protocol_duration_ms(
     ngx_str_t *value,
     uint32_t *out_ms
 );
+static ngx_int_t rn_parse_policy_schedule(
+    ngx_str_t *value,
+    r_ha_schedule_t *out_schedule
+);
+static ngx_int_t rn_policy_horizon_ms(
+    const r_request_policy_t *policy,
+    uint32_t max_ttl_ms,
+    uint32_t *out_horizon_ms
+);
+static const char *rn_policy_kind_name(rn_policy_kind_t kind);
 static ngx_flag_t rn_has_literal_value_quotes(ngx_str_t *value);
 static ngx_int_t rn_build_guard_entries(
     ngx_http_request_t *r,
@@ -257,9 +280,23 @@ static ngx_int_t rn_build_guard_entries(
 );
 
 static ngx_command_t ngx_http_rn_commands[] = {
-    { ngx_string("ratelimitly_tenant"),
+    { ngx_string("ratelimitly_dns_srv"),
       NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
-      ngx_http_rn_set_tenant,
+      ngx_http_rn_set_dns_srv,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("ratelimitly_dns_resolver"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_1MORE,
+      ngx_http_rn_set_dns_resolver,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("ratelimitly_resolver"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_1MORE,
+      ngx_http_rn_set_dns_resolver,
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
       NULL },
@@ -271,9 +308,9 @@ static ngx_command_t ngx_http_rn_commands[] = {
       0,
       NULL },
 
-    { ngx_string("ratelimitly_timeout"),
-      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
-      ngx_http_rn_set_timeout,
+    { ngx_string("ratelimitly_policy"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_1MORE,
+      ngx_http_rn_set_policy,
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
       NULL },
@@ -847,24 +884,56 @@ ngx_http_rn_init(ngx_conf_t *cf) {
 
     mcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_rn_module);
     if (mcf && mcf->enabled) {
-        if (mcf->tenant_dns.len == 0) {
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_tenant is required");
-            return NGX_ERROR;
-        }
+        uint32_t policy_horizon_ms;
+        uint32_t max_ttl_ms;
+
         if (mcf->auth_key.len == 0) {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "ratelimitly_auth_key is required");
             return NGX_ERROR;
         }
-        clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
-        if (clcf == NULL || clcf->resolver == NULL
-            || clcf->resolver->connections.nelts == 0)
+        if (mcf->tenant_dns.len == 0) {
+            u_char *p, *start;
+            size_t len;
+
+            len = sizeof("c-.p0.ratelimitly.com") - 1 + NGX_INT64_LEN;
+            start = ngx_pnalloc(cf->pool, len);
+            if (start == NULL) {
+                return NGX_ERROR;
+            }
+            p = ngx_snprintf(start, len, "c-%uL.p0.ratelimitly.com",
+                             (unsigned long) mcf->key_id);
+            mcf->tenant_dns.data = start;
+            mcf->tenant_dns.len = p - start;
+        }
+        max_ttl_ms = mcf->dedup_ttl_ms_max == 0
+            ? UINT32_MAX : mcf->dedup_ttl_ms_max;
+        if (rn_policy_horizon_ms(&mcf->request_policy, max_ttl_ms,
+                &policy_horizon_ms) != NGX_OK)
         {
             ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                "ratelimitly requires resolver in the http context");
+                "ratelimitly_policy horizon is invalid or exceeds the "
+                "API-key dedup_ttl_ms_max of %uDms", max_ttl_ms);
             return NGX_ERROR;
         }
-        mcf->resolver = clcf->resolver;
-        mcf->resolver_timeout = clcf->resolver_timeout;
+        if (mcf->resolver == NULL) {
+            clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
+            if (clcf != NULL && clcf->resolver != NULL
+                && clcf->resolver->connections.nelts > 0)
+            {
+                mcf->resolver = clcf->resolver;
+                mcf->resolver_timeout = clcf->resolver_timeout;
+            } else {
+                mcf->resolver = rn_create_system_dns_resolver(cf);
+                if (mcf->resolver == NULL) {
+                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                        "failed to create system DNS resolver for ratelimitly");
+                    return NGX_ERROR;
+                }
+            }
+        }
+        if (mcf->resolver_timeout == 0) {
+            mcf->resolver_timeout = 30000;
+        }
     }
 
     return NGX_OK;
@@ -888,7 +957,10 @@ ngx_http_rn_create_main_conf(ngx_conf_t *cf) {
     mcf->auth_type = (r_auth_type_t) 0;
     mcf->auth_key.len = 0;
     mcf->auth_key.data = NULL;
-    mcf->timeout_ms = 20;
+    mcf->dedup_ttl_ms_max = 0;
+    r_client_default_request_policy(&mcf->request_policy);
+    mcf->request_policy_kind = RN_POLICY_STANDARD;
+    mcf->request_policy_set = 0;
     mcf->fail_open = 1;
     mcf->enabled = 0;
     mcf->worker = NULL;
@@ -976,7 +1048,7 @@ ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 }
 
 static char *
-ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+ngx_http_rn_set_dns_srv(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
 
@@ -985,6 +1057,75 @@ ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     }
     mcf->tenant_dns = value[1];
     return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_rn_set_dns_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    rn_main_conf_t *mcf = conf;
+    ngx_str_t *value = cf->args->elts;
+
+    if (mcf->resolver != NULL) {
+        return "is duplicate";
+    }
+
+    mcf->resolver = ngx_resolver_create(cf, &value[1], cf->args->nelts - 1);
+    if (mcf->resolver == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+}
+
+static ngx_resolver_t *
+rn_create_system_dns_resolver(ngx_conf_t *cf) {
+    FILE        *fp;
+    char         line[256];
+    ngx_str_t    names[16];
+    ngx_uint_t   n = 0;
+    u_char      *p, *start;
+    size_t       len;
+
+    fp = fopen("/etc/resolv.conf", "r");
+    if (fp != NULL) {
+        while (fgets(line, sizeof(line), fp) != NULL && n < 16) {
+            p = (u_char *) line;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (ngx_strncmp(p, "nameserver", 10) != 0) {
+                continue;
+            }
+            p += 10;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            start = p;
+            while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '#') {
+                p++;
+            }
+            len = p - start;
+            if (len == 0) {
+                continue;
+            }
+            names[n].data = ngx_pnalloc(cf->pool, len);
+            if (names[n].data == NULL) {
+                fclose(fp);
+                return NULL;
+            }
+            ngx_memcpy(names[n].data, start, len);
+            names[n].len = len;
+            n++;
+        }
+        fclose(fp);
+    }
+
+    if (n == 0) {
+        names[0].data = (u_char *) "127.0.0.1";
+        names[0].len = sizeof("127.0.0.1") - 1;
+        n = 1;
+    }
+
+    return ngx_resolver_create(cf, names, n);
 }
 
 static char *
@@ -1015,19 +1156,166 @@ ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     mcf->auth_type = info.type;
     mcf->key_id = info.key_id;
     mcf->latency_buffer_size_max = info.latency_buffer_size_max;
+    mcf->dedup_ttl_ms_max = info.dedup_ttl_ms_max;
     return NGX_CONF_OK;
 }
 
 static char *
-ngx_http_rn_set_timeout(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+ngx_http_rn_set_policy(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
-    uint32_t ms;
+    r_request_policy_t policy;
+    rn_policy_kind_t kind;
+    ngx_uint_t i;
+    ngx_flag_t unit_set = 0;
+    ngx_flag_t replays_set = 0;
+    ngx_flag_t replay_gap_set = 0;
+    ngx_flag_t final_wait_set = 0;
+    ngx_flag_t completion_delivery_set = 0;
 
-    if (rn_parse_protocol_duration_ms(&value[1], &ms) != NGX_OK) {
-        return "invalid timeout";
+    if (mcf->request_policy_set) {
+        return "is duplicate";
     }
-    mcf->timeout_ms = ms;
+
+    r_client_default_request_policy(&policy);
+    if (value[1].len == sizeof("standard") - 1
+        && ngx_strncmp(value[1].data, "standard", value[1].len) == 0)
+    {
+        kind = RN_POLICY_STANDARD;
+    } else if (value[1].len == sizeof("single_round") - 1
+        && ngx_strncmp(value[1].data, "single_round", value[1].len) == 0)
+    {
+        kind = RN_POLICY_SINGLE_ROUND;
+        policy.replay_count = 0;
+        policy.final_receive_units = 0;
+        policy.completion_delivery = false;
+    } else if (value[1].len == sizeof("custom") - 1
+        && ngx_strncmp(value[1].data, "custom", value[1].len) == 0)
+    {
+        kind = RN_POLICY_CUSTOM;
+        ngx_memzero(&policy, sizeof(policy));
+    } else {
+        return "invalid ratelimitly_policy name";
+    }
+
+    for (i = 2; i < cf->args->nelts; i++) {
+        ngx_str_t arg_value;
+        uint32_t number;
+
+        if (value[i].len >= sizeof("unit=") - 1
+            && ngx_strncmp(value[i].data, "unit=", sizeof("unit=") - 1) == 0)
+        {
+            if (unit_set) {
+                return "duplicate ratelimitly_policy unit=";
+            }
+            arg_value.data = value[i].data + sizeof("unit=") - 1;
+            arg_value.len = value[i].len - (sizeof("unit=") - 1);
+            if (rn_parse_protocol_duration_ms(&arg_value, &number) != NGX_OK) {
+                return "invalid ratelimitly_policy unit";
+            }
+            policy.unit_ms = number;
+            unit_set = 1;
+            continue;
+        }
+
+        if (kind != RN_POLICY_CUSTOM) {
+            return kind == RN_POLICY_STANDARD
+                ? "ratelimitly_policy standard accepts only unit="
+                : "ratelimitly_policy single_round accepts only unit=";
+        }
+
+        if (value[i].len >= sizeof("replays=") - 1
+            && ngx_strncmp(value[i].data, "replays=", sizeof("replays=") - 1) == 0)
+        {
+            if (replays_set) {
+                return "duplicate ratelimitly_policy replays=";
+            }
+            arg_value.data = value[i].data + sizeof("replays=") - 1;
+            arg_value.len = value[i].len - (sizeof("replays=") - 1);
+            if (rn_numeric_parse_u32(arg_value.data, arg_value.len, &number) != 0
+                || number > R_CLIENT_HA_MAX_REPLAY_COUNT)
+            {
+                return "invalid ratelimitly_policy replays";
+            }
+            policy.replay_count = number;
+            replays_set = 1;
+        } else if (value[i].len >= sizeof("replay_gap=") - 1
+            && ngx_strncmp(value[i].data, "replay_gap=",
+                sizeof("replay_gap=") - 1) == 0)
+        {
+            if (replay_gap_set) {
+                return "duplicate ratelimitly_policy replay_gap=";
+            }
+            arg_value.data = value[i].data + sizeof("replay_gap=") - 1;
+            arg_value.len = value[i].len - (sizeof("replay_gap=") - 1);
+            if (rn_parse_policy_schedule(&arg_value, &policy.replay_gap)
+                    != NGX_OK
+                || policy.replay_gap.initial_units == 0)
+            {
+                return "invalid ratelimitly_policy replay_gap";
+            }
+            replay_gap_set = 1;
+        } else if (value[i].len >= sizeof("final_wait_units=") - 1
+            && ngx_strncmp(value[i].data, "final_wait_units=",
+                sizeof("final_wait_units=") - 1) == 0)
+        {
+            if (final_wait_set) {
+                return "duplicate ratelimitly_policy final_wait_units=";
+            }
+            arg_value.data = value[i].data + sizeof("final_wait_units=") - 1;
+            arg_value.len = value[i].len
+                - (sizeof("final_wait_units=") - 1);
+            if (rn_numeric_parse_u32(arg_value.data, arg_value.len, &number)
+                != 0)
+            {
+                return "invalid ratelimitly_policy final_wait_units";
+            }
+            policy.final_receive_units = number;
+            final_wait_set = 1;
+        } else if (value[i].len >= sizeof("completion_delivery=") - 1
+            && ngx_strncmp(value[i].data, "completion_delivery=",
+                sizeof("completion_delivery=") - 1) == 0)
+        {
+            if (completion_delivery_set) {
+                return "duplicate ratelimitly_policy completion_delivery=";
+            }
+            arg_value.data = value[i].data
+                + sizeof("completion_delivery=") - 1;
+            arg_value.len = value[i].len
+                - (sizeof("completion_delivery=") - 1);
+            if (arg_value.len == 2
+                && ngx_strncmp(arg_value.data, "on", 2) == 0)
+            {
+                policy.completion_delivery = true;
+            } else if (arg_value.len == 3
+                && ngx_strncmp(arg_value.data, "off", 3) == 0)
+            {
+                policy.completion_delivery = false;
+            } else {
+                return "invalid ratelimitly_policy completion_delivery";
+            }
+            completion_delivery_set = 1;
+        } else {
+            return "invalid ratelimitly_policy custom argument";
+        }
+    }
+
+    if (kind == RN_POLICY_CUSTOM
+        && (!unit_set || !replays_set || !replay_gap_set
+            || !final_wait_set || !completion_delivery_set))
+    {
+        return "ratelimitly_policy custom requires unit=, replays=, replay_gap=, final_wait_units=, and completion_delivery=";
+    }
+
+    uint32_t horizon_ms = 0;
+    if (rn_policy_horizon_ms(&policy, UINT32_MAX, &horizon_ms) != NGX_OK)
+    {
+        return "ratelimitly_policy horizon exceeds the wire limit";
+    }
+
+    mcf->request_policy = policy;
+    mcf->request_policy_kind = kind;
+    mcf->request_policy_set = 1;
     return NGX_CONF_OK;
 }
 
@@ -1110,6 +1398,224 @@ rn_parse_protocol_duration_ms(ngx_str_t *value, uint32_t *out_ms) {
     return NGX_OK;
 }
 
+static ngx_int_t
+rn_parse_schedule_number(
+    u_char **cursor,
+    u_char *end,
+    ngx_flag_t require_separator,
+    uint32_t *out
+) {
+    u_char *separator;
+    ngx_str_t number;
+
+    if (cursor == NULL || *cursor == NULL || *cursor >= end || out == NULL) {
+        return NGX_ERROR;
+    }
+
+    separator = ngx_strlchr(*cursor, end, ':');
+    if (require_separator) {
+        if (separator == NULL) {
+            return NGX_ERROR;
+        }
+        number.data = *cursor;
+        number.len = (size_t) (separator - *cursor);
+        *cursor = separator + 1;
+    } else {
+        if (separator != NULL) {
+            return NGX_ERROR;
+        }
+        number.data = *cursor;
+        number.len = (size_t) (end - *cursor);
+        *cursor = end;
+    }
+
+    if (number.len == 0
+        || rn_numeric_parse_u32(number.data, number.len, out) != 0)
+    {
+        return NGX_ERROR;
+    }
+    return NGX_OK;
+}
+
+static ngx_int_t
+rn_parse_policy_schedule(ngx_str_t *value, r_ha_schedule_t *out_schedule) {
+    u_char *cursor;
+    u_char *end;
+    uint32_t initial;
+    uint32_t growth;
+    uint32_t maximum;
+
+    if (value == NULL || out_schedule == NULL || value->len == 0) {
+        return NGX_ERROR;
+    }
+    cursor = value->data;
+    end = value->data + value->len;
+    ngx_memzero(out_schedule, sizeof(*out_schedule));
+
+    if (value->len > sizeof("fixed:") - 1
+        && ngx_strncmp(cursor, "fixed:", sizeof("fixed:") - 1) == 0)
+    {
+        cursor += sizeof("fixed:") - 1;
+        if (rn_parse_schedule_number(&cursor, end, 0, &initial) != NGX_OK) {
+            return NGX_ERROR;
+        }
+        out_schedule->kind = R_HA_SCHEDULE_FIXED;
+        out_schedule->initial_units = initial;
+        out_schedule->max_units = initial;
+        return NGX_OK;
+    }
+
+    if (value->len > sizeof("linear:") - 1
+        && ngx_strncmp(cursor, "linear:", sizeof("linear:") - 1) == 0)
+    {
+        cursor += sizeof("linear:") - 1;
+        if (rn_parse_schedule_number(&cursor, end, 1, &initial) != NGX_OK
+            || rn_parse_schedule_number(&cursor, end, 1, &growth) != NGX_OK
+            || rn_parse_schedule_number(&cursor, end, 0, &maximum) != NGX_OK
+            || growth == 0 || initial > maximum)
+        {
+            return NGX_ERROR;
+        }
+        out_schedule->kind = R_HA_SCHEDULE_LINEAR;
+        out_schedule->initial_units = initial;
+        out_schedule->max_units = maximum;
+        out_schedule->growth.linear_step_units = growth;
+        return NGX_OK;
+    }
+
+    if (value->len > sizeof("exponential:") - 1
+        && ngx_strncmp(cursor, "exponential:",
+            sizeof("exponential:") - 1) == 0)
+    {
+        cursor += sizeof("exponential:") - 1;
+        if (rn_parse_schedule_number(&cursor, end, 1, &initial) != NGX_OK
+            || rn_parse_schedule_number(&cursor, end, 1, &growth) != NGX_OK
+            || rn_parse_schedule_number(&cursor, end, 0, &maximum) != NGX_OK
+            || growth < 2 || initial > maximum)
+        {
+            return NGX_ERROR;
+        }
+        out_schedule->kind = R_HA_SCHEDULE_EXPONENTIAL;
+        out_schedule->initial_units = initial;
+        out_schedule->max_units = maximum;
+        out_schedule->growth.exponential_factor = growth;
+        return NGX_OK;
+    }
+
+    return NGX_ERROR;
+}
+
+static ngx_int_t
+rn_policy_schedule_units(
+    const r_ha_schedule_t *schedule,
+    uint32_t round,
+    uint32_t *out_units
+) {
+    uint32_t value;
+
+    if (schedule == NULL || out_units == NULL
+        || schedule->initial_units > schedule->max_units)
+    {
+        return NGX_ERROR;
+    }
+
+    value = schedule->initial_units;
+    switch (schedule->kind) {
+    case R_HA_SCHEDULE_FIXED:
+        break;
+    case R_HA_SCHEDULE_LINEAR:
+        if (schedule->growth.linear_step_units == 0) {
+            return NGX_ERROR;
+        }
+        if (round > (schedule->max_units - value)
+            / schedule->growth.linear_step_units)
+        {
+            value = schedule->max_units;
+        } else {
+            value += round * schedule->growth.linear_step_units;
+        }
+        break;
+    case R_HA_SCHEDULE_EXPONENTIAL:
+        if (schedule->growth.exponential_factor < 2) {
+            return NGX_ERROR;
+        }
+        while (round-- > 0 && value < schedule->max_units) {
+            if (value > schedule->max_units
+                / schedule->growth.exponential_factor)
+            {
+                value = schedule->max_units;
+            } else {
+                value *= schedule->growth.exponential_factor;
+            }
+        }
+        break;
+    default:
+        return NGX_ERROR;
+    }
+
+    *out_units = value;
+    return NGX_OK;
+}
+
+static ngx_int_t
+rn_policy_horizon_ms(
+    const r_request_policy_t *policy,
+    uint32_t max_ttl_ms,
+    uint32_t *out_horizon_ms
+) {
+    uint64_t total_units = 0;
+    uint64_t max_units;
+    uint32_t round;
+
+    if (policy == NULL || out_horizon_ms == NULL || policy->unit_ms == 0
+        || policy->unit_ms > max_ttl_ms
+        || policy->replay_count > R_CLIENT_HA_MAX_REPLAY_COUNT
+        || policy->replay_gap.initial_units == 0)
+    {
+        return NGX_ERROR;
+    }
+
+    max_units = max_ttl_ms / policy->unit_ms;
+    for (round = 0; round <= policy->replay_count; round++) {
+        uint32_t gap_units;
+
+        if (rn_policy_schedule_units(&policy->replay_gap, round, &gap_units)
+                != NGX_OK)
+        {
+            return NGX_ERROR;
+        }
+        if (gap_units > max_units - total_units) {
+            return NGX_ERROR;
+        }
+        total_units += gap_units;
+    }
+
+    if (policy->final_receive_units > max_units - total_units) {
+        return NGX_ERROR;
+    }
+    total_units += policy->final_receive_units;
+    if (total_units == 0) {
+        return NGX_ERROR;
+    }
+
+    *out_horizon_ms = (uint32_t) (total_units * policy->unit_ms);
+    return NGX_OK;
+}
+
+static const char *
+rn_policy_kind_name(rn_policy_kind_t kind) {
+    switch (kind) {
+    case RN_POLICY_STANDARD:
+        return "standard";
+    case RN_POLICY_SINGLE_ROUND:
+        return "single_round";
+    case RN_POLICY_CUSTOM:
+        return "custom";
+    default:
+        return "unknown";
+    }
+}
+
 static ngx_flag_t
 rn_has_literal_value_quotes(ngx_str_t *value) {
     u_char first;
@@ -1130,7 +1636,6 @@ rn_build_zone_resource(
     r_resource_request_t *out
 ) {
     ngx_str_t bucket = ngx_null_string;
-    u_char *bucket_cstr;
     uint32_t zone_rate_limit = 0;
     uint32_t zone_window_ms = 0;
 
@@ -1143,14 +1648,16 @@ rn_build_zone_resource(
     {
         return NGX_ERROR;
     }
-    bucket_cstr = ngx_pnalloc(r->pool, bucket.len + 1);
-    if (bucket_cstr == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (rn_zone_rate_for_request(r, zone, &zone_rate_limit,
+            &zone_window_ms) != NGX_OK)
+    {
+        return NGX_ERROR;
     }
-    ngx_memcpy(bucket_cstr, bucket.data, bucket.len);
-    bucket_cstr[bucket.len] = '\0';
-
-    r_client_hash_id((const char *) bucket_cstr, out->bucket_id);
+    if (r_client_derive_bucket_id(bucket.data, bucket.len, zone_window_ms,
+            zone_rate_limit, out->bucket_id) != RCLIENT_OK)
+    {
+        return NGX_ERROR;
+    }
     if (worker->debug) {
         u_char hex[33];
         rn_hex_id(out->bucket_id, hex);
@@ -1158,9 +1665,6 @@ rn_build_zone_resource(
             "rn: bucket zone=%V id=%s", &zone->name, hex);
     }
 
-    if (rn_zone_rate_for_request(r, zone, &zone_rate_limit, &zone_window_ms) != NGX_OK) {
-        return NGX_ERROR;
-    }
     out->window_size_ms = zone_window_ms;
     out->rate_limit = zone_rate_limit;
     out->tokens_requested = 1;
@@ -1198,7 +1702,6 @@ rn_build_guard_entries(
     ngx_str_t service = ngx_null_string;
     ngx_str_t threshold = ngx_null_string;
     uint32_t threshold_ms = 0;
-    u_char *service_cstr;
 
     if (r == NULL || worker == NULL || mcf == NULL || guard == NULL
         || out_guard == NULL || out_report == NULL) {
@@ -1210,15 +1713,6 @@ rn_build_guard_entries(
     {
         return NGX_ERROR;
     }
-    service_cstr = ngx_pnalloc(r->pool, service.len + 1);
-    if (service_cstr == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ngx_memcpy(service_cstr, service.data, service.len);
-    service_cstr[service.len] = '\0';
-
-    r_client_hash_id((const char *) service_cstr, out_guard->service_id);
-
     if (ngx_http_complex_value(r, &guard->threshold_cv, &threshold) != NGX_OK) {
         return NGX_ERROR;
     }
@@ -1235,8 +1729,17 @@ rn_build_guard_entries(
         return NGX_ERROR;
     }
     out_guard->min_sample_threshold = guard->min_sample_threshold;
+    if (r_client_derive_latency_tracker_id(service.data, service.len,
+            out_guard->ttl_ms, out_guard->max_samples,
+            out_guard->buffer_size, out_guard->min_sample_threshold,
+            out_guard->latency_tracker_id) != RCLIENT_OK)
+    {
+        return NGX_ERROR;
+    }
 
-    ngx_memcpy(out_report->service_id, out_guard->service_id, sizeof(out_report->service_id));
+    ngx_memcpy(out_report->latency_tracker_id,
+        out_guard->latency_tracker_id,
+        sizeof(out_report->latency_tracker_id));
     out_report->observed_latency = 0;
     out_report->ttl_ms = guard->ttl_ms;
     out_report->max_samples = guard->max_samples;
@@ -1245,9 +1748,9 @@ rn_build_guard_entries(
 
     if (worker->debug) {
         u_char hex[33];
-        rn_hex_id(out_guard->service_id, hex);
+        rn_hex_id(out_guard->latency_tracker_id, hex);
         ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
-            "rn: guard=%V service_id=%s threshold_ms=%uD",
+            "rn: guard=%V latency_tracker_id=%s threshold_ms=%uD",
             &guard->name, hex, out_guard->threshold_ms);
     }
 
@@ -2645,16 +3148,23 @@ rn_worker_init(rn_main_conf_t *mcf) {
         worker->client_cfg.tenant.auth.secret_len = 0;
     }
 
-    r_client_default_request_policy(&worker->policy);
-    worker->policy.attempt_timeout_ms = mcf->timeout_ms;
-    worker->policy.retry.retry_attempts = 0;
+    worker->policy = mcf->request_policy;
     worker->client_cfg.request_policy = &worker->policy;
 
     if (worker->debug) {
+        uint32_t horizon_ms = 0;
+
+        (void) rn_policy_horizon_ms(&worker->policy, UINT32_MAX,
+            &horizon_ms);
         ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
-            "rn: client cfg key_id=%uL auth=%s tenant=%V",
+            "rn: client cfg key_id=%uL auth=%s tenant=%V policy=%s "
+            "unit_ms=%uL replays=%uD final_wait_units=%uD "
+            "completion_delivery=%s horizon_ms=%uD",
             (unsigned long) mcf->key_id, rn_auth_type_name(mcf->auth_type),
-            &mcf->tenant_dns);
+            &mcf->tenant_dns, rn_policy_kind_name(mcf->request_policy_kind),
+            (unsigned long) worker->policy.unit_ms,
+            worker->policy.replay_count, worker->policy.final_receive_units,
+            worker->policy.completion_delivery ? "on" : "off", horizon_ms);
     }
 
     if (rn_open_socket_candidate(worker, &udp_fd, &udp_family, &udp_conn)
@@ -2873,8 +3383,11 @@ rn_request_timeout_handler(ngx_event_t *ev) {
     rn_req_ctx_t *ctx;
     rn_worker_ctx_t *worker;
     r_client_req_t *req;
+    ngx_http_request_t *r;
+    ngx_flag_t completed;
     uint64_t deadline_ms;
     uint64_t now_ms;
+    int rc;
 
     if (ev == NULL || ev->data == NULL) {
         return;
@@ -2886,6 +3399,7 @@ rn_request_timeout_handler(ngx_event_t *ev) {
 
     worker = ctx->worker;
     req = ctx->req;
+    r = ctx->r;
     now_ms = worker->io_ops.now_ms(worker);
     deadline_ms = 0;
     if (r_client_request_deadline_ms(req, &deadline_ms) == RCLIENT_OK
@@ -2895,9 +3409,34 @@ rn_request_timeout_handler(ngx_event_t *ev) {
         return;
     }
 
-    /* With retries disabled, this synchronously invokes rn_rate_cb and may
-     * release the request pool containing ctx. Do not access ctx afterwards. */
-    (void) r_client_on_timeout(worker->client, req, now_ms);
+    /*
+     * A terminal timeout synchronously invokes rn_rate_cb and may release the
+     * request pool containing ctx. Observe that callback through stack storage
+     * before touching ctx again. Nonterminal round transitions keep the
+     * request live and publish a later deadline which must be re-armed.
+     */
+    completed = 0;
+    ctx->timeout_completed = &completed;
+    rc = r_client_on_timeout(worker->client, req, now_ms);
+    if (completed) {
+        return;
+    }
+    ctx->timeout_completed = NULL;
+
+    if (rc != RCLIENT_OK) {
+        r_client_cancel_request(worker->client, req);
+        rn_rate_cb(r, req, rc, NULL);
+        return;
+    }
+    deadline_ms = 0;
+    if (r_client_request_deadline_ms(req, &deadline_ms) != RCLIENT_OK) {
+        r_client_cancel_request(worker->client, req);
+        rn_rate_cb(r, req, RCLIENT_ERR_CONFIG, NULL);
+        return;
+    }
+    now_ms = worker->io_ops.now_ms(worker);
+    ngx_add_timer(&ctx->timer, deadline_ms > now_ms
+        ? (ngx_msec_t) (deadline_ms - now_ms) : 0);
 }
 
 static void
@@ -3051,6 +3590,10 @@ rn_rate_cb(void *user, r_client_req_t *req, int status, const r_rate_limit_resul
         ngx_log_error(NGX_LOG_ALERT, worker->log, 0,
             "rn: completion callback does not own the active request");
         return;
+    }
+    if (ctx->timeout_completed != NULL) {
+        *ctx->timeout_completed = 1;
+        ctx->timeout_completed = NULL;
     }
     rn_request_teardown(ctx, req, 0);
 

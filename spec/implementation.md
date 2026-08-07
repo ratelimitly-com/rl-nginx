@@ -4,6 +4,12 @@ This document defines conformance boundaries for the nginx-module and
 `rl-c-client` integration. It records implemented constraints, not proposed
 architecture.
 
+The locked C-client defines the core embedder boundary in
+[Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#choosing-an-integration-layer)
+and the host callbacks in its
+[Event-Loop Integration](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/IO_ABSTRACTION.md)
+contract. This specification defines how nginx satisfies that host side.
+
 ## nginx phase integration
 
 The module MUST register:
@@ -24,9 +30,9 @@ deny or fail-close runtime failure, and `500` for the internal nginx failures
 identified in [Request behavior](behavior.md). `NGX_OK` deliberately skips any
 unexpected later pre-content handler and advances directly to content.
 
-Configuration definitions, credentials, timeout, failure policy, bind address,
-and debug flag live in HTTP main configuration. Effective rules and labels
-live in location configuration and follow the inheritance contract in
+Configuration definitions, credentials, request policy, failure policy, bind
+address, and debug flag live in HTTP main configuration. Effective rules and
+labels live in location configuration and follow the inheritance contract in
 [Configuration DSL](dsl.md).
 Unconfigured server and location activation flags MUST merge to `0`, never the
 truthy `NGX_CONF_UNSET` sentinel.
@@ -78,8 +84,8 @@ TTL information when converting nginx resolver answers into C-client records.
 It MUST compact accepted A/AAAA addresses and report only the compacted count;
 if every address is unusable, it MUST return resolver failure rather than a
 successful array containing zeroed entries.
-The C client owns endpoint caching, refresh scheduling, supported SRV
-discovery, and its explicitly unsupported compatibility fallback described in
+The C client owns endpoint caching, refresh scheduling, and strict SRV
+discovery described in
 [Request behavior](behavior.md#discovery-dispatch-and-selection).
 
 ## C-client dependency boundary
@@ -105,11 +111,16 @@ authentication, request IDs, DNS policy, multi-endpoint dispatch, response
 selection, and decoding. It MUST NOT duplicate those implementations.
 
 For rate checks, the module MUST use
-`r_client_check_rate_limit_async_borrowed`. The module MUST start from
-`r_client_default_request_policy`, set `attempt_timeout_ms` from
-`ratelimitly_timeout`, and set `retry.retry_attempts = 0`. Any change to other
-locked policy behavior is a dependency-lock change requiring corresponding
-specification and test review.
+`r_client_check_rate_limit_async_borrowed`. The module MUST pass a complete
+`r_request_policy_t` selected by `ratelimitly_policy`. `standard` uses the
+locked C-client defaults with an optional `unit_ms` override. `single_round`
+uses the same fixed one-unit round schedules with zero replays, zero final
+receive units, zero final preference units, and disabled completion delivery.
+`custom` maps every documented nginx argument into the corresponding policy
+field and MUST validate the complete derived horizon against the wire limit and
+encoded credential quota during configuration loading. Any dependency change
+that alters these policy semantics requires corresponding specification and
+test review.
 
 For post-response reports, the module MUST use `r_client_report_latency` and
 MUST treat its result as observability only.
@@ -155,10 +166,11 @@ or cleanup MUST use one teardown path that:
 5. decrements each accounting value at most once; and
 6. schedules a pending safe source-port rebind.
 
-The timeout path MUST honor a later C-client deadline when reported. With
-retries disabled, `r_client_on_timeout` can synchronously invoke the completion
-callback and release the nginx request pool, so that call MUST be the last
-access through the request context.
+The timeout path MUST honor every later C-client deadline reported across the
+initial round, replay round, and final receive-only interval.
+`r_client_on_timeout` can synchronously invoke the completion callback and
+release the nginx request pool, so that call MUST be the last access through
+the request context.
 
 An aborted HTTP client MUST execute the cleanup path without a later timeout
 callback, double decrement, use-after-free, or worker loss.
@@ -223,6 +235,8 @@ secret. The module does not implement a metrics exporter or health endpoint.
 The required static contributor gate (`make check`) MUST cover at least:
 
 - directive parsing, defaults, inheritance, and invalid configuration;
+- named and custom request-policy parsing, field mapping, horizon derivation,
+  and credential-quota rejection;
 - dependency bootstrap, lock verification, and immutable workflow pins;
 - SRV target conversion and strict public DNS fixture behavior;
 - allow/deny, outage policy, malformed response, and exact-cardinality cases;

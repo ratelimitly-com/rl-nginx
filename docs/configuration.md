@@ -6,6 +6,12 @@ are part of the enforcement boundary: an attacker-controlled identity can
 split traffic across unlimited buckets, while an unbounded label can create
 excessive telemetry cardinality or an oversized request.
 
+This guide explains how nginx directives construct those operations. For the
+underlying meanings of resource requests, latency reports, API-key quotas, and
+client policy, follow the versioned `rl-c-client` links in the relevant
+sections or start with its
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model).
+
 ## Minimal configuration
 
 The tenant and API key below are deliberately non-working placeholders. Replace
@@ -16,9 +22,9 @@ http {
   resolver 127.0.0.53 valid=30s ipv6=off;
   resolver_timeout 2s;
 
-  ratelimitly_tenant   tenant.example.invalid;
+  ratelimitly_dns_srv  tenant.example.invalid;
   ratelimitly_auth_key rl-aes1REPLACE_WITH_YOUR_KEY;
-  ratelimitly_timeout  50ms;
+  ratelimitly_policy   standard unit=50ms;
   ratelimitly_fail     close;
 
   ratelimitly_zone api_per_ip
@@ -87,26 +93,30 @@ path is restricted and the proxy removes any client-provided copy. An nginx
 `map` can bound values, but it cannot turn a client-selected plan or user ID
 into authenticated identity.
 
-`$binary_remote_addr` must not be used in current bucket or service templates.
-The current C-client hash interface accepts NUL-terminated text; a binary
-address can contain an embedded NUL and be truncated. Use textual
-`$remote_addr` instead. The module cannot reliably reject
-`$binary_remote_addr` at configuration load and does not reject an embedded
-NUL at request time, so this remains an explicit operator precondition until a
-separately designed length-aware hash migration is available.
+The v0.5.0 C-client interface hashes the exact rendered bytes and byte length,
+so an embedded NUL in `$binary_remote_addr` or another binary value is not
+truncated. Binary identity is still easy to compose ambiguously with textual
+delimiters; prefer `$remote_addr` for readable policies, or place a bounded
+binary component in a structurally unambiguous position.
 
 ## Construct canonical, bounded bucket keys
 
-The rendered bucket string is hashed locally to a 128-bit resource ID. Hashing
-does not correct an ambiguous or attacker-controlled input. Two templates that
-render the same text intentionally produce the same bucket, and raw user input
-can create a practically unlimited set of distinct buckets.
+The rendered bucket string, effective window, and effective rate are hashed
+locally to a 128-bit resource ID. Hashing does not correct an ambiguous or
+attacker-controlled input. Two definitions produce the same bucket only when
+all three inputs match; raw user input can still create a practically unlimited
+set of distinct buckets.
 
-The module hashes the complete rendered value as one opaque string; it does not
-escape fields or length-prefix components. Template authors therefore own both
-cardinality and structural uniqueness. A template-schema change produces new
-resource IDs and starts new bucket state, so version and roll out such a change
-as an identity migration.
+The module passes the complete rendered value as one opaque byte string; it
+does not escape fields inside that value. Template authors therefore own both
+cardinality and structural uniqueness. A template-schema, rate, or window
+change produces a new resource ID and starts new bucket state, so version and
+roll out such a change as an identity migration.
+
+The exact, cross-client identity contract is defined by the C client's
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids).
+`rl-nginx` owns only the rendered name and effective nginx rate/window values
+passed to those helpers.
 
 Avoid patterns such as:
 
@@ -161,22 +171,24 @@ components can contain `|`.
 ## Tenant, credential, and DNS trust
 
 ```nginx
-ratelimitly_tenant <tenant-domain>;
+ratelimitly_dns_srv [tenant-domain];
 ratelimitly_auth_key <rl-cookie...|rl-aes...>;
 ```
 
-`ratelimitly_tenant` is the static DNS name used to discover:
+`ratelimitly_dns_srv` is OPTIONAL. When omitted, it defaults to
+`c-${api-key-id}.p0.ratelimitly.com` derived from the key ID in
+`ratelimitly_auth_key`. It specifies the static DNS name used to discover:
 
 ```text
 _ratelimitly._udp.<tenant-domain>
 ```
 
-The module has no direct server-address directive. nginx's `resolver` supplies
-the SRV and address answers. Declare it directly in the `http` context: the
-module captures one resolver and `resolver_timeout` for its worker-local client,
-and deliberately ignores server/location overrides for RateLimitly discovery.
-A configuration that enables RateLimitly without an HTTP-scope resolver fails
-`nginx -t`. Configure a resolver that is trusted and reachable from nginx
+The module has no direct server-address directive. DNS resolution for SRV and
+address answers uses `ratelimitly_dns_resolver` (or `ratelimitly_resolver`),
+nginx's HTTP-scope `resolver`, or defaults to system DNS (`/etc/resolv.conf`).
+When configured in HTTP scope, RateLimitly captures that resolver for its
+worker-local client and deliberately ignores server/location overrides for
+RateLimitly discovery. Configure a resolver that is trusted and reachable from nginx
 workers. A compromised or unreliable resolver can
 redirect decision traffic or turn enforcement into an outage. Set an explicit
 `resolver_timeout`, restrict resolver and UDP egress according to the
@@ -199,18 +211,74 @@ model, rotate an exposed key through the RateLimitly control plane, and redact
 it from support bundles. `nginx -T` prints included configuration; never share
 its unredacted output.
 
-## Timeout and failure policy
+The encoded fields, client-side checks, and server-enforced quota boundaries
+are documented in the C client's
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials)
+section. DNS target naming and refresh behavior are client-owned; see
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh).
+
+## Request and failure policy
 
 ```nginx
-ratelimitly_timeout 50ms;
+ratelimitly_policy standard unit=20ms;
 ratelimitly_fail open;
 ratelimitly_fail close;
 ```
 
-`ratelimitly_timeout` bounds how long a request waits for a decision. It must
-resolve to `1..4294967295ms`; zero is rejected. nginx duration units `w`, `d`,
-`h`, `m`, `s`, and `ms` are accepted, and a unitless value means seconds. Write
-`1ms` when one millisecond is intended.
+To select the one-transmission alternative, replace the policy line with:
+
+```nginx
+ratelimitly_policy single_round unit=20ms;
+```
+
+`ratelimitly_policy` controls how the C client transmits a logical resource
+request and selects a response. `unit` is its base scheduling unit `U`, not a
+total timeout. It must resolve to `1..4294967295ms`; zero is rejected. nginx
+duration units `w`, `d`, `h`, `m`, `s`, and `ms` are accepted, and a unitless
+value means seconds. Write `unit=1ms` when one millisecond is intended.
+
+`standard` is the default. It has one initial transmission round, one replay
+round, and one final receive-only unit, so its maximum admission interval and
+wire deduplication TTL are `3 * U`. With the default `unit=20ms`, that horizon
+is 60ms. `single_round` performs no replay or completion delivery and has a
+one-unit horizon. Either policy can complete earlier when its
+response-selection rule is satisfied.
+
+The names describe mechanics, not reliability guarantees. More transmissions
+can improve delivery opportunities and server convergence, but they also add
+traffic and—if server deduplication is degraded—conditional duplicate-
+consumption exposure.
+
+Advanced deployments can define every C-client policy field explicitly:
+
+```nginx
+ratelimitly_policy custom
+  unit=20ms
+  replays=1
+  replay_gap=fixed:1
+  final_wait_units=1
+  completion_delivery=on;
+```
+
+`replays` retransmit the same logical request identity within the derived
+deduplication window; they are not new requests. Schedule and final-wait values
+are multiples of `unit`. The accepted schedules are:
+
+```text
+fixed:<units>
+linear:<initial-units>:<step-units>:<maximum-units>
+exponential:<initial-units>:<factor>:<maximum-units>
+```
+
+For replay rounds `0..N`, the horizon is
+`U * (sum(replay_gap(k)) + final_wait_units)`. nginx validates the complete
+policy and rejects an enabled configuration when that horizon exceeds the API
+key's `dedup_ttl_ms_max`. See the normative
+[Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
+the authoritative C-client
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy)
+for response selection, replay, final-phase, completion-delivery, and
+deduplication semantics.
 
 The default is `ratelimitly_fail open`, but production configurations should
 set the policy explicitly:
@@ -309,12 +377,12 @@ ratelimitly_guard api_latency
   min_sample_threshold=8;
 ```
 
-A guard hashes the rendered service key, sends latency metadata, and asks
-RateLimitly to shed requests when observed latency crosses the configured
-threshold. Prefer a fixed service name per protected application or a finite
-route-to-service map. Do not use raw `$host`, `$uri`, request arguments,
-headers, cookies, or user IDs; doing so creates attacker-controlled service
-cardinality and fragments latency history.
+A guard names a latency tracker, supplies its state-defining settings, and asks
+RateLimitly to reject the combined request when observed latency crosses the
+configured threshold. Prefer a fixed service name per protected application or
+a finite route-to-service map. Do not use raw `$host`, `$uri`, request
+arguments, headers, cookies, or user IDs; doing so creates attacker-controlled
+service cardinality and fragments latency history.
 
 The module reports a post-response latency sample only after RateLimitly has
 returned a valid allow and the admitted request reaches nginx log phase without
@@ -338,10 +406,10 @@ an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
 unitless duration means seconds. `max_samples` must be nonzero. When
 `buffer_size` is omitted, nginx uses the configured API key's
 `latency_buffer_size_max` quota. An explicit `buffer_size` must be nonzero and
-must not exceed that credential quota. Rendered service keys must contain `1..1024` bytes; static oversized
-values fail `nginx -t`, while empty or oversized dynamic values follow the
-failure policy. Quote the complete `"service=value"` argument when needed,
-never only the value.
+must not exceed that credential quota. Rendered service keys must contain
+`1..1024` bytes; static oversized values fail `nginx -t`, while empty or
+oversized dynamic values follow the failure policy. Quote the complete
+`"service=value"` argument when needed, never only the value.
 The tuning fields are static and validated while loading configuration.
 
 A static invalid `threshold` makes `nginx -t` fail. A dynamic threshold is
@@ -352,6 +420,12 @@ map for dynamic thresholds; never render them directly from client input.
 retained, non-expired sample is still required before minimum latency is
 available. A positive value requires the estimated insertion rate to reach
 that threshold. The default is `8`.
+
+Tracker fields and the independence of reports from resource requests are
+defined in the C client's
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#latency-guards-and-independent-reports).
+This module adds the HTTP-specific eligibility rule and the measurement from
+request start to nginx log phase described above.
 
 ## Labels and data exposure
 
@@ -389,7 +463,7 @@ protect and rotate the logs, and plan for volume on hot paths.
 
 ## Directive scope
 
-Tenant, credential, timeout, failure, bind, debug, zone, group, and guard
+Tenant, credential, request-policy, failure, bind, debug, zone, group, and guard
 definitions belong at `http` scope. Protected `server` or `location` blocks
 reference zones, groups, and guards with `ratelimitly` directives. A location
 without a `ratelimitly zone=...` or `ratelimitly group=...` reference is not

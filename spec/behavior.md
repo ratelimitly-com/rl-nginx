@@ -3,6 +3,9 @@
 This document defines the observable request lifecycle and decision contract.
 Configuration syntax and wire-field construction are specified separately in
 [Configuration DSL](dsl.md) and [Wire mapping](mapping.md).
+The meanings of a resource request and an independent latency report come from
+the locked C-client
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model).
 
 ## Activation and request construction
 
@@ -46,12 +49,12 @@ backoff; protected requests during that interval immediately follow
 ## Discovery, dispatch, and selection
 
 Supported deployments MUST publish SRV records as required by
-[`ratelimitly_tenant`](dsl.md#ratelimitly_tenant). The locked C client resolves
-those records and their A/AAAA targets through the nginx asynchronous resolver.
+[`ratelimitly_dns_srv`](dsl.md#ratelimitly_dns_srv). The locked C client resolves
+those records and their A/AAAA targets through `ratelimitly_dns_resolver`,
+the HTTP-scope `resolver`, or system DNS (`/etc/resolv.conf`).
 It sends the request to every currently usable discovered endpoint address.
-The resolver and `resolver_timeout` are captured from the `http` context and
-apply process-wide to the worker client. Server and location resolver overrides
-do not change RateLimitly discovery.
+The resolver is captured from the `http` context and applies process-wide to the
+worker client. Server and location resolver overrides do not change RateLimitly discovery.
 
 rl-nginx does not choose a single commit target and does not deduplicate
 resource consumption across those endpoints. A supported deployment MUST
@@ -60,20 +63,31 @@ that fan-out represents one logical admission/consumption. This commit-safety
 property is external to the nginx module. Operators MUST NOT assume there is a
 hidden single-target fallback when a discovered topology lacks that property.
 
-The module starts from the locked C-client request-policy defaults, overrides
-the attempt timeout with `ratelimitly_timeout`, and sets retry attempts to zero.
-For the currently locked revision this means one attempt, waiting until all
-targets have replied or the attempt deadline expires, with the client's
-best-by-reliability response selection. rl-nginx exposes no directives for
-wait, quorum, selection, retry, deduplication, or DNS-resynchronization policy.
-Changing the dependency lock in a way that changes this observable behavior
-MUST update this specification and its tests in the same change.
+The module passes the policy selected by `ratelimitly_policy` to the locked C
+client. The default `standard unit=20ms` policy sends to all discovered
+servers, prefers the oldest server's valid response, performs one replay to
+servers still missing a valid response, then waits through one final
+receive-only unit. A selected allow or deny also triggers best-effort
+completion delivery to servers still missing a response. Its maximum admission
+wait and wire deduplication TTL are `3 * U`, or 60ms by default.
 
-The locked client contains a compatibility fallback that can resolve the
-tenant name directly and use UDP port `8080` when SRV discovery yields no
-endpoint. This fallback is not a supported rl-nginx deployment or a fixed
-server-address configuration mechanism. Public DNS failure tests MUST ensure a
-missing SRV record cannot be accidentally masked by this fallback.
+`single_round` sends once, waits for at most one unit, and disables both replay
+and completion delivery. `custom` exposes the replay-gap schedule, replay count,
+final receive interval, and completion delivery. The exact syntax, horizon
+formula, and validation rules are in [Configuration DSL](dsl.md#ratelimitly_policy).
+DNS refresh policy remains client-owned and is not configurable through rl-nginx.
+
+Fan-out, response preference, replay scheduling, completion delivery, and TTL
+derivation are client-owned and are defined in the locked
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy).
+The paragraphs above specify the supported nginx selections and their
+externally visible effect.
+
+The locked client requires SRV discovery. A failed, empty, or non-conforming
+membership fails with `RCLIENT_ERR_DNS`; there is no direct tenant-name/UDP
+port fallback. The client owns the corresponding
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh)
+behavior.
 
 ## Decision contract
 

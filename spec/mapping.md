@@ -4,6 +4,14 @@ This document defines how effective nginx configuration becomes input to the
 locked `rl-c-client` API and RateLimitly wire messages. Numeric grammar and
 configuration validation are defined in [Configuration DSL](dsl.md).
 
+The client structures and canonical derivation algorithms are defined by the
+locked C-client's
+[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-requests),
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#latency-guards-and-independent-reports),
+and
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids).
+This document specifies which nginx values rl-nginx supplies to that API.
+
 ## Resource mapping
 
 Each expanded zone occurrence produces one `r_resource_request_t` in rule and
@@ -11,28 +19,27 @@ group order:
 
 | C-client field | Value |
 | --- | --- |
-| `bucket_id` | first 16 bytes of the BLAKE2s-256 digest produced by `r_client_hash_id` from the rendered bucket |
+| `bucket_id` | canonical ID produced by `r_client_derive_bucket_id` from the exact rendered bucket bytes, `window_size_ms`, and `rate_limit` |
 | `window_size_ms` | rendered rate period converted to milliseconds |
 | `rate_limit` | rendered decimal rate |
 | `tokens_requested` | `1` |
 
-The module copies the rendered bucket to request-pool storage, appends a NUL
-terminator, and passes it to the C-client hash helper. An embedded NUL therefore
-terminates the hashed identity early. Configuration MUST obey the safe-input
-requirements in [`ratelimitly_zone`](dsl.md#ratelimitly_zone).
+The module passes the exact rendered bytes and explicit byte length to the
+C-client helper. Embedded NUL bytes are part of the identity rather than a
+terminator. The helper frames the name and defining numeric fields and returns
+the first 16 bytes of its domain-separated BLAKE2s-256 digest.
 
 The complete rendered bucket is one opaque flat string. The module does not
 escape components, add length prefixes, or otherwise make an ambiguous
 template structurally unique. Operators MUST construct a canonical,
 unambiguous string from fixed values and bounded finite-map outputs. Changing
-that text schema changes the hashed resource IDs and starts new logical bucket
-state; a future length-aware or structured hash boundary therefore requires an
-explicit identity migration rather than a silent implementation change.
+the rendered text, window, or rate changes the resource ID and starts new
+logical bucket state.
 
 The executable boundary oracle pins the rendered text
-`boundary:known-bucket` to identifier
-`adad04e30132078dd71e82746cbfe92d` and requires the responder to observe the
-same one-resource request.
+`boundary:known-bucket` with a `10000r/s` rate to identifier
+`98300f8a73dd010d75b92ce8d2298cc7` and requires the responder to observe the
+same one-resource request. This locks the complete name/window/rate boundary.
 
 Repeated zone references are not deduplicated. Each occurrence produces a
 separate ResourceBlock on the wire.
@@ -44,19 +51,19 @@ first-seen order:
 
 | C-client field | Value |
 | --- | --- |
-| `service_id` | first 16 bytes of the BLAKE2s-256 digest produced by `r_client_hash_id` from the rendered service |
+| `latency_tracker_id` | canonical ID produced by `r_client_derive_latency_tracker_id` from the exact rendered service bytes and tracker-state settings |
 | `threshold_ms` | rendered threshold converted to milliseconds |
 | `ttl_ms` | configured guard TTL in milliseconds |
 | `max_samples` | configured value |
 | `buffer_size` | explicit configured value, or the API-key `latency_buffer_size_max` when omitted |
 | `min_sample_threshold` | configured value |
 
-The service hash uses the same opaque, flat, NUL-terminated boundary as the
-bucket hash. Configuration MUST obey the canonical, unambiguous, bounded, and
-operator-controlled input requirements in
-[`ratelimitly_guard`](dsl.md#ratelimitly_guard). A service-key schema change
-similarly creates different service IDs and separates subsequent latency
-history from the old identity.
+The ID includes the rendered service, `ttl_ms`, `max_samples`, final effective
+`buffer_size`, and `min_sample_threshold`. `threshold_ms` is excluded because
+it evaluates tracker state but does not define that stored state. Changing an
+included value creates a new tracker and separates subsequent latency history
+from the old identity. The exact rendered service length is honored, including
+embedded NUL bytes.
 
 The locked C-client encoder writes `current_latency = 0` in every rate-request
 GuardBlock. Current latency is learned from server responses; rl-nginx does not
@@ -103,7 +110,7 @@ met, the module calls `r_client_report_latency` with one
 
 | C-client field | Value |
 | --- | --- |
-| `service_id` | copied from the corresponding request guard |
+| `latency_tracker_id` | copied from the corresponding request guard |
 | `observed_latency` | nginx request-start to log-phase duration, clamped to `1..4294967295` ms |
 | `ttl_ms` | copied from guard configuration |
 | `max_samples` | copied from guard configuration |
