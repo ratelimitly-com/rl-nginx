@@ -156,7 +156,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         require(scope, fragment, f"executable module default {name}", failures)
 
     dsl_defaults = (
-        "| `ratelimitly_tenant` | `c-${api-key-id}.p0.ratelimitly.com` |",
+        "| `ratelimitly_dns_srv` | `c-${api-key-id}.p0.ratelimitly.com` |",
         "| `ratelimitly_policy` | `standard unit=20ms` |",
         "| `ratelimitly_fail` | `open` |",
         "| `ratelimitly_bind` | kernel-selected local address, ephemeral port |",

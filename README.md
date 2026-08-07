@@ -216,7 +216,7 @@ events {}
 http {
   resolver 127.0.0.53 valid=30s ipv6=off;
 
-  ratelimitly_tenant   tenant.example.invalid;
+  ratelimitly_dns_srv  tenant.example.invalid;
   ratelimitly_auth_key rl-aes1REPLACE_WITH_YOUR_KEY;
   ratelimitly_policy   standard unit=50ms;
   ratelimitly_fail     close;
@@ -283,7 +283,7 @@ or include a RateLimitly server.
 
 ## Core Directives
 
-- `ratelimitly_tenant [tenant-domain];` (optional; defaults to `c-${api-key-id}.p0.ratelimitly.com`)
+- `ratelimitly_dns_srv [tenant-domain];` (optional; defaults to `c-${api-key-id}.p0.ratelimitly.com`)
 - `ratelimitly_auth_key <rl-cookie...|rl-aes...>;`
 - `ratelimitly_policy standard|single_round|custom ...;`
 - `ratelimitly_fail open|close;`

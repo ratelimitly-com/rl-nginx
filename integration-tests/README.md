@@ -471,7 +471,7 @@ resolver 127.0.0.1:<DNS_PORT> valid=1s ipv6=off;
 The generated config defines:
 
 ```nginx
-ratelimitly_tenant   rn-itest.local;
+ratelimitly_dns_srv  rn-itest.local;
 ratelimitly_auth_key <temporary tenant key>;
 ratelimitly_policy standard unit=100ms;
 ratelimitly_fail     close;

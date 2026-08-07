@@ -614,7 +614,7 @@ http {
   resolver ${DNS_SERVER}:${DNS_PORT} valid=1s ipv6=off;
   resolver_timeout 1s;
 
-  ratelimitly_tenant ${DOMAIN};
+  ratelimitly_dns_srv ${DOMAIN};
   ratelimitly_auth_key ${auth_key};
   ratelimitly_policy standard unit=${REQUEST_POLICY_UNIT};
   ratelimitly_fail ${FAIL_POLICY};

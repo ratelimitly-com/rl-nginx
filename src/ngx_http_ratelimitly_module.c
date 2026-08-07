@@ -197,7 +197,7 @@ static void *ngx_http_rn_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_rn_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child);
 static char *ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 
-static char *ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_set_dns_srv(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_policy(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_fail(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -278,9 +278,9 @@ static ngx_int_t rn_build_guard_entries(
 );
 
 static ngx_command_t ngx_http_rn_commands[] = {
-    { ngx_string("ratelimitly_tenant"),
+    { ngx_string("ratelimitly_dns_srv"),
       NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
-      ngx_http_rn_set_tenant,
+      ngx_http_rn_set_dns_srv,
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
       NULL },
@@ -1023,7 +1023,7 @@ ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
 }
 
 static char *
-ngx_http_rn_set_tenant(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+ngx_http_rn_set_dns_srv(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
 

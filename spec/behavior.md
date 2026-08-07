@@ -49,7 +49,7 @@ backoff; protected requests during that interval immediately follow
 ## Discovery, dispatch, and selection
 
 Supported deployments MUST publish SRV records as required by
-[`ratelimitly_tenant`](dsl.md#ratelimitly_tenant). The locked C client resolves
+[`ratelimitly_dns_srv`](dsl.md#ratelimitly_dns_srv). The locked C client resolves
 those records and their A/AAAA targets through the nginx asynchronous resolver.
 It sends the request to every currently usable discovered endpoint address.
 The resolver and `resolver_timeout` are captured from the `http` context and

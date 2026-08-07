@@ -362,7 +362,7 @@ http {
   resolver ${DNS_SERVER}:${DNS_PORT} valid=1s ${NGINX_RESOLVER_OPTIONS};
   resolver_timeout 2s;
 
-  ratelimitly_tenant   ${DOMAIN};
+  ratelimitly_dns_srv  ${DOMAIN};
   ratelimitly_auth_key ${TENANT_KEY};
   ratelimitly_policy standard unit=${RATELIMITLY_POLICY_UNIT};
   ratelimitly_fail     close;

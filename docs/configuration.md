@@ -22,7 +22,7 @@ http {
   resolver 127.0.0.53 valid=30s ipv6=off;
   resolver_timeout 2s;
 
-  ratelimitly_tenant   tenant.example.invalid;
+  ratelimitly_dns_srv  tenant.example.invalid;
   ratelimitly_auth_key rl-aes1REPLACE_WITH_YOUR_KEY;
   ratelimitly_policy   standard unit=50ms;
   ratelimitly_fail     close;
@@ -171,11 +171,11 @@ components can contain `|`.
 ## Tenant, credential, and DNS trust
 
 ```nginx
-ratelimitly_tenant [tenant-domain];
+ratelimitly_dns_srv [tenant-domain];
 ratelimitly_auth_key <rl-cookie...|rl-aes...>;
 ```
 
-`ratelimitly_tenant` is OPTIONAL. When omitted, it defaults to
+`ratelimitly_dns_srv` is OPTIONAL. When omitted, it defaults to
 `c-${api-key-id}.p0.ratelimitly.com` derived from the key ID in
 `ratelimitly_auth_key`. It specifies the static DNS name used to discover:
 
