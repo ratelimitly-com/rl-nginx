@@ -15,7 +15,7 @@ contract. This specification defines how nginx satisfies that host side.
 The module MUST register:
 
 - the final HTTP pre-content-phase handler for protected-request checks; and
-- an HTTP log-phase handler for post-response guard latency reports.
+- an HTTP log-phase handler for explicitly configured latency reports.
 
 nginx executes the handlers within a phase in reverse registration order. The
 module MUST therefore place its pre-content handler at index zero of the phase
@@ -31,9 +31,9 @@ identified in [Request behavior](behavior.md). `NGX_OK` deliberately skips any
 unexpected later pre-content handler and advances directly to content.
 
 Configuration definitions, credentials, request policy, failure policy, bind
-address, and debug flag live in HTTP main configuration. Effective rules and
-labels live in location configuration and follow the inheritance contract in
-[Configuration DSL](dsl.md).
+address, and debug flag live in HTTP main configuration. Effective rules,
+labels, and the optional single report target live in location configuration
+and follow the inheritance contract in [Configuration DSL](dsl.md).
 Unconfigured server and location activation flags MUST merge to `0`, never the
 truthy `NGX_CONF_UNSET` sentinel.
 
@@ -179,10 +179,12 @@ handler read a further deadline and rearm.
 An aborted HTTP client MUST execute the cleanup path without a later timeout
 callback, double decrement, use-after-free, or worker loss.
 
-The log-phase handler MUST call `r_client_report_latency` only for the explicit
-valid-allow outcome. It MUST suppress reporting for every other outcome and
-for a connection marked timed out, failed, or destroyed, including when an
-otherwise valid allow preceded that client abort.
+The log-phase handler MUST call `r_client_report_latency` at most once and only
+when an effective `ratelimitly_report` supplied one valid report entry. It MUST
+permit report-only, valid-allow, and fail-open completed work, and suppress
+reporting after valid deny, fail-close, internal nginx failure, or a connection
+marked timed out, failed, or destroyed. Guard construction MUST NOT allocate or
+enable a report.
 
 ## Response and phase resumption
 
@@ -244,9 +246,9 @@ The required static contributor gate (`make check`) MUST cover at least:
 - dependency bootstrap, lock verification, and immutable workflow pins;
 - SRV target conversion and strict public DNS fixture behavior;
 - allow/deny, outage policy, malformed response, and exact-cardinality cases;
-- guard decisions and post-response latency reporting only after a valid allow,
-  including suppression after denial, startup failure, timeout fail-open, and
-  client abort;
+- guard decisions independent of reporting; report-only requests; exactly one
+  explicit post-response report after valid allow or completed fail-open work;
+  and suppression after denial, fail-close, and client abort;
 - timeout, aborted client, source-port steering, reload, and shutdown lifecycle;
 - missing SRV, invalid SRV target, DNS timeout, and same-worker recovery;
 - HTTP-scope resolver selection despite a location-level override; and

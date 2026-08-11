@@ -29,7 +29,7 @@ only supported way to opt into a dirty development tree.
 
 | Client-owned topic | Authoritative v0.6.0 documentation | nginx-specific consequence |
 | --- | --- | --- |
-| Logical operations | [Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model) | Each protected main request creates one resource request; a post-response latency report is separate. |
+| Logical operations | [Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model) | Each protected main request creates one resource request; an explicitly configured post-response latency report is separate and may also be used without admission. |
 | Integration layer | [Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#choosing-an-integration-layer) | nginx uses the core borrowed API because it already owns UDP, DNS, timers, logging, and request pools. |
 | Credentials and quotas | [Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#credentials) | nginx validates the encoded key at configuration load and uses its latency-buffer quota when `buffer_size` is omitted. |
 | State identity | [Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids) | nginx renders names and passes the defining settings to the canonical ID helpers. |

@@ -152,8 +152,9 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         source, "ngx_http_rn_create_main_conf"
     ).split("return mcf;", 1)[0]
     guard_parser = function_body(source, "ngx_http_rn_guard")
+    tracker_parser = function_body(source, "ngx_http_rn_tracker")
     for name, fragment in DEFAULT_STATEMENTS.items():
-        scope = guard_parser if name in {
+        scope = tracker_parser if name in {
             "ttl", "max_samples", "buffer_size", "min_sample_threshold"
         } else main_conf
         require(scope, fragment, f"executable module default {name}", failures)
@@ -165,16 +166,16 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "| `ratelimitly_fail` | `open` |",
         "| `ratelimitly_bind` | kernel-selected local address, ephemeral port |",
         "| `ratelimitly_debug` | `off` |",
-        "| `ratelimitly_guard ttl` | `30s` |",
-        "| `ratelimitly_guard max_samples` | `128` |",
-        "| `ratelimitly_guard buffer_size` | credential's `latency_buffer_size_max` |",
-        "| `ratelimitly_guard min_sample_threshold` | `8` |",
+        "| `ratelimitly_tracker ttl` | `30s` |",
+        "| `ratelimitly_tracker max_samples` | `128` |",
+        "| `ratelimitly_tracker buffer_size` | credential's `latency_buffer_size_max` |",
+        "| `ratelimitly_tracker min_sample_threshold` | `8` |",
     )
     for fragment in dsl_defaults:
         require(dsl, fragment, "DSL defaults table", failures)
-    require(guard_parser, "ngx_flag_t buffer_size_set = 0;",
+    require(tracker_parser, "ngx_flag_t buffer_size_set = 0;",
             "credential-derived buffer-size omission state", failures)
-    require(source, "out_guard->buffer_size = guard->buffer_size_set",
+    require(source, "out->buffer_size = tracker->buffer_size_set",
             "credential-derived buffer-size selection", failures)
     require(source, "mcf->latency_buffer_size_max",
             "credential-derived buffer-size quota", failures)
@@ -198,6 +199,15 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     worker_init = function_body(source, "rn_worker_init")
     handler = function_body(source, "ngx_http_rn_handler")
     log_handler = function_body(source, "ngx_http_rn_log_handler")
+    guard_builder = function_body(source, "rn_build_guard_entries")
+    if "r_client_report_latency" in guard_builder or "lat_report" in guard_builder:
+        failures.append("guard construction still owns latency reporting")
+    require(source, 'ngx_string("ratelimitly_report")',
+            "explicit latency-report directive", failures)
+    require(log_handler, "ctx->admission_outcome != RN_ADMISSION_NONE",
+            "report-only latency eligibility", failures)
+    require(log_handler, "ctx->admission_outcome != RN_ADMISSION_FAIL_OPEN",
+            "fail-open latency eligibility", failures)
     integration_scopes = (
         worker_init,
         worker_init,

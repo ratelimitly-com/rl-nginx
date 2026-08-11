@@ -34,22 +34,24 @@ RateLimitly exposes two independent logical operations:
   future latency guards can evaluate. It neither requests nor consumes a
   resource and does not make an admission decision.
 
-A protected HTTP request that reaches the module's final admission point
-attempts the first operation. When that request has a latency guard and
-receives a valid grant, the module also measures the admitted work and performs
-the second operation if the request reaches nginx log phase without a client
-abort. The report is still an independent RateLimitly operation: a denial or
-dependency failure does not produce one.
+A location opts into the first operation with `ratelimitly` and independently
+opts into the second with `ratelimitly_report`. A guard never enables reporting
+implicitly, and reporting does not require a guard or even a resource request.
+When requested, nginx sends one latency sample after serving the main request;
+it never delays or changes the HTTP result to deliver that sample.
 
 ```mermaid
 flowchart LR
     HTTP["HTTP request"] --> Checks["nginx access control<br/>and pre-content routing"]
-    Checks --> Request["Resource request<br/>resources, guards, or both"]
+    Checks --> Request["Optional resource request<br/>resources, guards, or both"]
     Request --> Decision{"RateLimitly decision"}
     Decision -->|Rejected| Deny["429<br/>nothing consumed"]
     Decision -->|Failure| Policy["Configured<br/>fail-open / fail-close"]
+    Policy -->|open| Content
+    Policy -->|close| Deny
     Decision -->|Granted| Content["Requested resources consumed, if any<br/>serve or proxy content"]
-    Content -. "when guarded and completed" .-> Report["Optional latency report"]
+    Checks -->|no admission rule| Content
+    Content -. "when ratelimitly_report is configured" .-> Report["One best-effort latency report"]
     Report --> Trackers["Latency trackers"]
     Trackers -. "evaluated by future guards" .-> Decision
 ```
@@ -107,26 +109,30 @@ trust correctly.
 ### Add one latency guard
 
 In English: “Get me one checkout token, but only while the tracked `inventory`
-latency is below 100 ms. After admitted work completes, report the latency
-measured by nginx.”
+latency is below 100 ms. Also report the latency measured by nginx after the
+request is served.”
 
 ```nginx
 ratelimitly_zone checkout "bucket=checkout" rate=100r/s;
 
-ratelimitly_guard inventory_latency
+ratelimitly_tracker inventory_tracker
   "service=inventory"
+  ttl=30s;
+ratelimitly_guard inventory_latency
+  tracker=inventory_tracker
   threshold=100ms;
 
 location /checkout/ {
   ratelimitly zone=checkout guard=inventory_latency;
+  ratelimitly_report inventory_tracker;
   proxy_pass http://127.0.0.1:9000;
 }
 ```
 
-The resource consumption and guard are one atomic admission request. After a
-valid grant, `rl-nginx` measures from nginx request start to log phase and sends
-the resulting service latency independently. The module sends no report for a
-rejection, dependency failure, or aborted client.
+The resource consumption and guard are one atomic admission request. The
+separate report directive measures from nginx request start to log phase and
+sends one sample after completed work. A guard without that directive does not
+report. A report can likewise be configured on a location that has no guard.
 
 A guard can also be the complete admission policy when the operation does not
 consume a rate-limited resource:
@@ -139,9 +145,9 @@ location /inventory-health/ {
 ```
 
 This sends a Rate Request with no resource consumptions and one latency guard.
-A passing guard admits the HTTP request; a failing guard returns `429`. After
-a valid grant and completed admitted work, nginx reports the measured latency
-under the same eligibility rules as a mixed resource-and-guard request.
+A passing guard admits the HTTP request; a failing guard returns `429`. It does
+not send a latency report unless the location also declares
+`ratelimitly_report inventory_tracker;`.
 
 ## Allow, deny, and failure are different outcomes
 
@@ -275,8 +281,10 @@ read the [configuration guide](docs/configuration.md) before deploying. Treat
 
 - `ratelimitly_zone` defines one nginx-native resource consumption and
   `ratelimitly_group` combines several consumptions into one atomic request.
-- `ratelimitly_guard` attaches latency conditions and identifies which
-  admitted work nginx will measure and report.
+- `ratelimitly_tracker` defines one shared latency-history identity;
+  `ratelimitly_guard` evaluates that tracker at a threshold.
+- `ratelimitly_report` independently asks nginx to send one measured sample
+  after serving the main request. Guards never report implicitly.
 - The module runs after nginx access control and earlier pre-content routing.
   It sends no RateLimitly request for traffic rejected before that point.
 - A valid grant is the final admission decision and advances directly to
@@ -312,13 +320,15 @@ or include a RateLimitly server.
 - `ratelimitly_debug on|off;`
 - `ratelimitly_zone <name> "bucket=<template>" rate=<rate>;`
 - `ratelimitly_group <name> zone=<zone> ...;`
-- `ratelimitly_guard <name> "service=<template>" threshold=<duration> ...;`
+- `ratelimitly_tracker <name> "service=<template>" ...;`
+- `ratelimitly_guard <name> tracker=<tracker> threshold=<duration>;`
 - `ratelimitly zone=<name> [guard=<name>] ...;`,
   `ratelimitly group=<name> [guard=<name>] ...;`, or
   `ratelimitly guard=<name> [guard=<name>] ...;`
 - `ratelimitly_label "<template>";`
+- `ratelimitly_report <tracker>|off;`
 
-Rendered bucket and service keys are limited to 1024 bytes; labels are limited
+Rendered bucket and tracker service keys are limited to 1024 bytes; labels are limited
 to 256 bytes. Quote a complete named argument (`"bucket=value"` or
 `"service=value"`), not only its value. Empty/oversized dynamic identifiers
 follow `ratelimitly_fail`, while invalid static values fail `nginx -t`.

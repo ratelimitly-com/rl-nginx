@@ -7,6 +7,13 @@ remain preview software and must not be treated as ABI-stable versions.
 
 ### Breaking
 
+- **Latency tracker identity, guards, and reporting are now separate.** Define
+  tracker state with `ratelimitly_tracker`, reference it from
+  `ratelimitly_guard tracker=... threshold=...`, and opt into exactly one
+  post-response sample with `ratelimitly_report <tracker>`. Guards no longer
+  report implicitly. A report can be used without a guard or admission rule,
+  and `ratelimitly_report off` suppresses inheritance.
+
 - **`ratelimitly_timeout` is removed.** There is no alias: a configuration that
   still uses it fails `nginx -t` with `unknown directive`.
 
@@ -43,7 +50,7 @@ remain preview software and must not be treated as ABI-stable versions.
   `latency_buffer_size_max`, and that value is part of the tracker ID. Rotating
   to a credential whose quota differs re-identifies every guard that relies on
   the fallback, discarding accumulated latency history. Set `buffer_size`
-  explicitly on each `ratelimitly_guard` in any configuration expected to
+  explicitly on each `ratelimitly_tracker` in any configuration expected to
   survive a key rotation.
 
 ### Changed
@@ -102,9 +109,9 @@ Changes since `v0.1.0-rc.1`:
   outside independent RateLimitly accounting;
 - drained nginx posted requests after asynchronous verdict callbacks so
   resumed content cannot remain pinned awaiting an unrelated client event;
-- made guard latency feedback require an explicit valid allow and suppress it
-  after denial, request-start failure, dependency fail-open/fail-close,
-  timeout, cardinality mismatch, or client abort;
+- replaced guard-derived latency feedback with the explicit single-tracker
+  `ratelimitly_report` contract, including report-only and completed fail-open
+  work and suppression after denial, fail-close, or client abort;
 - made the HTTP-scope resolver and timeout deterministic for each worker,
   validated bind addresses at configuration time, and bounded failed worker
   initialization retries;

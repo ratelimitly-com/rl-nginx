@@ -51,12 +51,12 @@ first-seen order:
 
 | C-client field | Value |
 | --- | --- |
-| `latency_tracker_id` | canonical ID produced by `r_client_derive_latency_tracker_id` from the exact rendered service bytes and tracker-state settings |
+| `latency_tracker_id` | canonical ID produced by `r_client_derive_latency_tracker_id` from the referenced tracker's exact rendered service bytes and state settings |
 | `threshold_ms` | rendered threshold converted to milliseconds |
-| `ttl_ms` | configured guard TTL in milliseconds |
-| `max_samples` | configured value |
-| `buffer_size` | explicit configured value, or the API-key `latency_buffer_size_max` when omitted |
-| `min_sample_threshold` | configured value |
+| `ttl_ms` | configured tracker TTL in milliseconds |
+| `max_samples` | tracker value |
+| `buffer_size` | explicit tracker value, or the API-key `latency_buffer_size_max` when omitted |
+| `min_sample_threshold` | tracker value |
 
 The ID includes the rendered service, `ttl_ms`, `max_samples`, final effective
 `buffer_size`, and `min_sample_threshold`. `threshold_ms` is excluded because
@@ -69,8 +69,8 @@ The locked C-client encoder writes `current_latency = 0` in every rate-request
 GuardBlock. Current latency is learned from server responses; rl-nginx does not
 measure or populate this request field.
 
-Repeated references to the same guard definition are deduplicated before both
-rate-request and latency-report construction.
+Repeated references to the same guard definition are deduplicated before rate
+request construction. Guards never construct or enable latency reports.
 
 ## Rate request composition
 
@@ -105,18 +105,19 @@ permit a request.
 
 ## Latency report mapping
 
-When the report trigger in [Request behavior](behavior.md#latency-reporting) is
-met, the module calls `r_client_report_latency` with one
-`r_service_latency_report_t` per distinct applied guard:
+When the explicit report trigger in
+[Request behavior](behavior.md#latency-reporting) is met, the module calls
+`r_client_report_latency` with exactly one `r_service_latency_report_t` built
+from the effective `ratelimitly_report` tracker:
 
 | C-client field | Value |
 | --- | --- |
-| `latency_tracker_id` | copied from the corresponding request guard |
+| `latency_tracker_id` | canonical ID derived from the report tracker's rendered service and state settings |
 | `observed_latency` | nginx request-start to log-phase duration, clamped to `1..4294967295` ms |
-| `ttl_ms` | copied from guard configuration |
-| `max_samples` | copied from guard configuration |
-| `buffer_size` | copied from guard configuration |
-| `min_sample_threshold` | copied from guard configuration |
+| `ttl_ms` | report tracker configuration |
+| `max_samples` | report tracker configuration |
+| `buffer_size` | report tracker's explicit value or the credential quota when omitted |
+| `min_sample_threshold` | report tracker configuration |
 
 The C client creates the report request ID, tenant/authentication framing, and
 wire blocks and sends the packet to every currently usable endpoint. The call
@@ -124,4 +125,6 @@ is fire-and-forget: no response is awaited and its result cannot change the
 HTTP decision. A report has no request-level relationship to the rate request
 that admitted the HTTP operation, and the server does not correlate the two by
 UDP source port. A steering-driven source-port replacement therefore neither
-invalidates a report nor waits for one.
+invalidates a report nor waits for one. On a cold worker, discovery may still
+be in progress when the first report-only request completes; that best-effort
+report can be dropped rather than delayed.
