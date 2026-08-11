@@ -395,34 +395,36 @@ location /api/ {
 }
 ```
 
-## Latency guards
+## Latency trackers, guards, and reports
+
+Define the latency history once, then choose independently whether a request
+uses that history as an admission guard, contributes one measured sample, or
+does both:
 
 ```nginx
-ratelimitly_guard api_latency
+ratelimitly_tracker api_latency_tracker
   "service=v1|service=public-api"
-  threshold=100ms
   ttl=30s
   max_samples=128
   buffer_size=32
   min_sample_threshold=8;
+
+ratelimitly_guard api_latency
+  tracker=api_latency_tracker
+  threshold=100ms;
 ```
 
-A guard names a latency tracker, supplies its state-defining settings, and asks
-RateLimitly to reject the combined request when observed latency crosses the
-configured threshold. Prefer a fixed service name per protected application or
-a finite route-to-service map. Do not use raw `$host`, `$uri`, request
-arguments, headers, cookies, or user IDs; doing so creates attacker-controlled
-service cardinality and fragments latency history.
+The tracker owns every state-defining field. A guard only names that tracker
+and supplies an admission threshold. This permits several guards with
+different thresholds to evaluate the same history without defining duplicate
+trackers.
 
-The module reports a post-response latency sample only after RateLimitly has
-returned a valid allow and the admitted request reaches nginx log phase without
-a client abort. It does not report valid denials, request-start failures,
-missing or invalid verdicts, dependency fail-open/fail-close outcomes,
-timeouts, cardinality mismatches, or aborted clients. A fail-open request may
-reach content, but it did so without a RateLimitly admission and therefore must
-not affect guard history.
+Prefer a fixed service name per application or a finite route-to-service map.
+Do not use raw `$host`, `$uri`, request arguments, headers, cookies, or user
+IDs; doing so creates attacker-controlled service cardinality and fragments
+latency history.
 
-Attach a guard to a protected location:
+Attach the guard when admission depends on the history:
 
 ```nginx
 location /api/ {
@@ -431,8 +433,40 @@ location /api/ {
 }
 ```
 
-If access depends only on service health and consumes no rate-limited
-resource, omit the zone or group:
+This does not report latency. Reporting is an explicit, independent choice:
+
+```nginx
+location /api/ {
+  ratelimitly zone=api_per_ip guard=api_latency;
+  ratelimitly_report api_latency_tracker;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+The module then measures from nginx request start to log phase and makes one
+best-effort report attempt after completed work. The final application status
+does not suppress the sample. A valid RateLimitly denial, fail-close result,
+internal nginx failure, or client abort does suppress it. Completed fail-open
+work is reported because the report describes serving the HTTP request, not
+proof of resource consumption. Delivery failure never changes the response.
+
+A report does not require a guard or a Rate Request:
+
+```nginx
+location /observe-only/ {
+  ratelimitly_report api_latency_tracker;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+On a cold worker, the first best-effort report can be dropped while DNS
+membership is still resolving; nginx does not delay the response to await
+discovery. A parent report setting is inherited. Use
+`ratelimitly_report off;` in a child location that must not contribute a
+sample.
+
+If access depends only on service health and consumes no rate-limited resource,
+use a guard-only Rate Request:
 
 ```nginx
 location /health-sensitive/ {
@@ -441,48 +475,38 @@ location /health-sensitive/ {
 }
 ```
 
-This sends a normal Rate Request with zero resources and the referenced guard.
 A passing guard admits the request, a failing guard returns `429`, and a client
-or transport failure follows `ratelimitly_fail`. The latency-report eligibility
-rules are identical to those of a guard attached to a resource request.
+or transport failure follows `ratelimitly_fail`. It still sends no latency
+report unless `ratelimitly_report` is also present.
 
-Guard threshold and TTL milliseconds and the three sample-count fields must fit
-an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
-unitless duration means seconds. `max_samples` must be nonzero. When
-`buffer_size` is omitted, nginx uses the configured API key's
-`latency_buffer_size_max` quota. An explicit `buffer_size` must be nonzero;
-nginx does **not** compare it against the credential's `latency_buffer_size_max`,
-so an over-quota value loads cleanly and is rejected or clamped by the
-RateLimitly server at runtime rather than at `nginx -t`.
+Tracker TTL and the three sample-count fields must fit an unsigned 32-bit wire
+field. TTL must be positive, and a unitless duration means seconds.
+`max_samples` must be nonzero. When `buffer_size` is omitted, nginx uses the
+configured API key's `latency_buffer_size_max` quota. An explicit value must be
+nonzero; nginx does not compare it with the credential quota at `nginx -t`.
 
-Because the effective `buffer_size` is one of the inputs to the latency-tracker
-ID, omitting it ties tracker identity to the credential: rotating to an API key
-whose `latency_buffer_size_max` differs re-identifies every guard that relies on
-the fallback, and each one restarts with no samples until it passes
-`min_sample_threshold` again. Set `buffer_size` explicitly on every guard in a
-configuration that must survive key rotation, and see
-[operations](operations.md) before rotating a key in production.
+Because effective `buffer_size` contributes to the latency-tracker ID, rotating
+to a credential with a different quota re-identifies a tracker that relies on
+the fallback. Set `buffer_size` explicitly when tracker identity must survive
+key rotation, and review [operations](operations.md) first.
 
-Rendered service keys must contain
-`1..1024` bytes; static oversized values fail `nginx -t`, while empty or
-oversized dynamic values follow the failure policy. Quote the complete
-`"service=value"` argument when needed, never only the value.
-The tuning fields are static and validated while loading configuration.
+Rendered service keys must contain `1..1024` bytes. Static oversized values
+fail `nginx -t`; empty or oversized dynamic values make that guard follow the
+failure policy and make that report ineligible. Quote the complete
+`"service=value"` argument when needed, never only the value. Tracker tuning
+fields are static and validated while loading configuration.
 
-A static invalid `threshold` makes `nginx -t` fail. A dynamic threshold is
+A static invalid guard threshold makes `nginx -t` fail. A dynamic threshold is
 validated per request and follows the failure policy when invalid. Use a finite
-map for dynamic thresholds; never render them directly from client input.
+map; never render a threshold directly from client input.
 
 `min_sample_threshold=0` disables only the insertion-rate sufficiency gate. A
 retained, non-expired sample is still required before minimum latency is
 available. A positive value requires the estimated insertion rate to reach
 that threshold. The default is `8`.
 
-Tracker fields and the independence of reports from resource requests are
-defined in the C client's
+The C client defines tracker fields and operation independence in
 [Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#latency-guards-and-independent-reports).
-This module adds the HTTP-specific eligibility rule and the measurement from
-request start to nginx log phase described above.
 
 ## Labels and data exposure
 
@@ -520,11 +544,12 @@ protect and rotate the logs, and plan for volume on hot paths.
 
 ## Directive scope
 
-Tenant, credential, request-policy, failure, bind, debug, zone, group, and guard
-definitions belong at `http` scope. Protected `server` or `location` blocks
-reference zones, groups, and guards with `ratelimitly` directives. A location
-without a `ratelimitly zone=...`, `ratelimitly group=...`, or guard-only
-`ratelimitly guard=...` reference is not protected.
+Tenant, credential, request-policy, failure, bind, debug, zone, group, tracker,
+and guard definitions belong at `http` scope. Protected `server` or `location`
+blocks reference zones, groups, and guards with `ratelimitly`. They opt into one
+post-response sample independently with `ratelimitly_report <tracker>`, or
+suppress an inherited report with `ratelimitly_report off`. A report-only
+location is observed but not protected by RateLimitly admission.
 
 See [the DSL reference](../spec/dsl.md) for complete syntax and
 [Operations](operations.md) for rollout, monitoring, outage, and recovery

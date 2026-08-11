@@ -14,7 +14,8 @@ and earlier pre-content routing or preparation handlers MUST complete before
 the module sends a RateLimitly request. A request rejected or finalized before
 that point MUST NOT consume a RateLimitly resource. Subrequests and requests
 without an effective `ratelimitly` rule MUST continue without a RateLimitly
-request.
+admission request. An independent `ratelimitly_report` does not turn such a
+request into an admission request.
 
 A protected main request that reaches the final admission point MUST expand all
 effective rules into one combined rate-limit check containing:
@@ -36,8 +37,8 @@ therefore consumes once even when an index, error page, or another content
 handler internally redirects before producing the response. Subrequests remain
 unprotected by this module and MUST NOT create an independent admission.
 
-The effective label, zone bucket/rate values, and guard service/threshold
-values are rendered for the request. An empty bucket or service, a bucket or
+The effective label, zone bucket/rate values, tracker service values, and guard
+threshold values are rendered for the request. An empty bucket or service, a bucket or
 service over 1024 bytes, a label over 256 bytes, another invalid dynamic value,
 or a C-client request-construction error MUST follow the configured failure
 policy. An empty label omits the label from the request. Internal nginx
@@ -45,7 +46,7 @@ allocation or event-registration failures MAY return `500 Internal Server
 Error` instead.
 
 The worker-local UDP socket and C client are created lazily by the first
-protected request handled by that worker. A running nginx worker therefore
+request with an effective admission rule or report handled by that worker. A running nginx worker therefore
 proves process liveness, not that the worker has initialized RateLimitly
 enforcement or completed discovery. Failed initialization retries use bounded
 backoff; protected requests during that interval immediately follow
@@ -192,26 +193,27 @@ endpoint.
 
 ## Latency reporting
 
-For a main request that used at least one distinct guard, the nginx log-phase
-handler MUST attempt one fire-and-forget latency report only when RateLimitly
-returned a valid, exact-cardinality allow and the admitted request reached log
-phase without a client connection error, timeout, or destruction. Reaching log
-phase represents the request processing that follows consumed admission; the
-resulting HTTP status does not refund or invalidate that admission.
+For a main request with an effective `ratelimitly_report <tracker>`, the nginx
+log-phase handler MUST make at most one fire-and-forget latency-report attempt.
+Reporting is explicit and independent: applying a guard never enables a
+report, the report tracker need not be guarded, and a report-only location
+does not send a Rate Request.
 
-A valid deny, request-start failure, absent or invalid verdict, dependency
-fail-open or fail-close result, response timeout, cardinality mismatch, and
-client abort MUST NOT produce or attempt a latency report. In particular,
-fail-open continuation preserves availability but is not evidence that
-RateLimitly admitted or consumed the request, so it MUST NOT add a guard
-latency sample.
+The module attempts the report after completed content when there was no
+admission rule, after a valid exact-cardinality allow, or after fail-open
+continuation. In all three cases nginx performed the work whose latency was
+requested. The final application or upstream HTTP status does not change that
+fact. A valid RateLimitly deny, fail-close outcome, internal nginx failure, or
+client connection error, timeout, destruction, or abort MUST NOT produce a
+report because the configured work was not completed for the client.
 
 The observed duration starts at the nginx request timestamp and ends when the
 log-phase handler runs. It is clamped to the inclusive unsigned 32-bit range
-`1..4294967295` milliseconds. The report contains one entry per distinct
-applied guard, using the same service identifier and sampling settings as the
-rate request. Report construction or send failure MUST NOT change the HTTP
-result.
+`1..4294967295` milliseconds. The report contains exactly one entry derived
+from the explicitly selected tracker. Report construction or send failure MUST
+NOT change the HTTP result. Because reports are best effort, the first report
+on a cold worker MAY fail while DNS discovery is still in progress; the module
+does not delay the HTTP response to wait for membership.
 
 ## Observability
 

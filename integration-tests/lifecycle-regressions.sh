@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lifecycle-oracles.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-report-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|report-only|report-inheritance|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the complete required public lifecycle matrix against the locked
 rl-c-client test responder. Every case pins the original nginx worker PID,
@@ -46,7 +46,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-report-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|report-only|report-inheritance|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -398,9 +398,10 @@ run_guard_latency() {
   local scenario
 
   prepare_binaries
-  for scenario in guard-pass guard-deny guard-multiple \
+  for scenario in guard-pass guard-report-pass guard-deny guard-multiple \
       guard-only-pass guard-only-deny \
-      guard-start-fail-open guard-timeout-fail-open guard-aborted-client; do
+      guard-start-fail-open guard-timeout-fail-open guard-aborted-client \
+      report-only report-inheritance; do
     fail_policy=close
     case "${scenario}" in
       guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client)
@@ -519,7 +520,7 @@ dns_failure_mode() {
 
 is_guard_case() {
   case "${MODE}" in
-    steering-rebind|guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
+    steering-rebind|guard-pass|guard-report-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -564,6 +565,9 @@ write_nginx_config() {
   local fault_directive=""
   local guard_defs=""
   local load_module_directive=""
+  local report_directive=""
+  local server_report_directive=""
+  local health_report_directive=""
   local ratelimitly_rule="ratelimitly zone=lifecycle_zone;"
   local zone_rate="10000r/s"
   auth_key="$(synthetic_auth_key)"
@@ -575,16 +579,33 @@ write_nginx_config() {
     debug_mode="off"
   fi
   if is_guard_case; then
-    guard_defs='  ratelimitly_guard lifecycle_guard "service=svc:lifecycle:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+    guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_guard lifecycle_guard tracker=lifecycle_tracker threshold=100ms;'
     ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard;"
     if [[ "${MODE}" == "guard-multiple" ]]; then
-      guard_defs="${guard_defs}"$'\n''  ratelimitly_guard lifecycle_guard_secondary "service=svc:lifecycle:secondary:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      guard_defs="${guard_defs}"$'\n''  ratelimitly_guard lifecycle_guard_secondary tracker=lifecycle_tracker threshold=200ms;'
       ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard guard=lifecycle_guard_secondary;"
     fi
     if [[ "${MODE}" == guard-only-* ]]; then
       ratelimitly_rule="ratelimitly guard=lifecycle_guard guard=lifecycle_guard;"
     fi
   fi
+  case "${MODE}" in
+    steering-rebind|guard-report-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client)
+      report_directive="ratelimitly_report lifecycle_tracker;"
+      ;;
+    report-only)
+      guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      ratelimitly_rule=""
+      report_directive="ratelimitly_report lifecycle_tracker;"
+      ;;
+    report-inheritance)
+      guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      ratelimitly_rule=""
+      server_report_directive="ratelimitly_report lifecycle_tracker;"
+      health_report_directive="ratelimitly_report off;"
+      ;;
+  esac
   if [[ -n "${NGINX_LOAD_MODULE}" ]]; then
     load_module_directive="load_module \"${NGINX_LOAD_MODULE}\";"
   fi
@@ -629,20 +650,25 @@ ${fault_directive}
   ratelimitly_zone redirect_zone "bucket=redirect:one-request" rate=10000r/s;
   ratelimitly_zone rendered_bucket_zone "bucket=\$arg_value" rate=10000r/s;
   ratelimitly_zone boundary_zone "bucket=boundary:\$arg_value" rate=10000r/s;
-  ratelimitly_guard rendered_service_guard "service=\$arg_value" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
-  ratelimitly_guard rendered_threshold_guard service=rendered-threshold threshold=\$arg_value ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_tracker rendered_service_tracker "service=\$arg_value" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_guard rendered_service_guard tracker=rendered_service_tracker threshold=100ms;
+  ratelimitly_tracker rendered_threshold_tracker service=rendered-threshold ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_guard rendered_threshold_guard tracker=rendered_threshold_tracker threshold=\$arg_value;
 ${guard_defs}
 
   server {
     listen ${NGINX_HOST}:${NGINX_PORT};
+    ${server_report_directive}
 
     location = /health {
+      ${health_report_directive}
       return 204;
     }
 
     location = /limited {
       ratelimitly_label "LIFECYCLE:\$uri";
       ${ratelimitly_rule}
+      ${report_directive}
       root ${RN_ROOT}/tests;
       try_files /ok.txt =404;
     }
@@ -650,6 +676,7 @@ ${guard_defs}
     location = /steering-latency {
       ratelimitly_label "STEERING-LATENCY:\$uri";
       ${ratelimitly_rule}
+      ${report_directive}
       limit_rate_after 1k;
       limit_rate 4k;
       root ${PREFIX}/html;
@@ -1232,6 +1259,7 @@ run_guard_case() {
   local expected_code
   local expected_guards
   local expected_rate_requests
+  local expected_report_attempts
   local expected_reports
   local expected_resources
   local expect_rate_request
@@ -1240,6 +1268,7 @@ run_guard_case() {
   expected_code="200"
   expected_guards=1
   expected_rate_requests=1
+  expected_report_attempts=1
   expected_reports=1
   expected_resources=1
   expect_rate_request=1
@@ -1248,24 +1277,33 @@ run_guard_case() {
   case "${MODE}" in
     guard-pass)
       scenario="guard-pass"
+      expected_report_attempts=0
+      expected_reports=0
+      ;;
+    guard-report-pass)
+      scenario="guard-pass"
       ;;
     guard-deny)
       scenario="guard-deny"
       expected_code="429"
+      expected_report_attempts=0
       expected_reports=0
       ;;
     guard-multiple)
       scenario="guard-pass"
       expected_guards=2
-      expected_reports=2
+      expected_reports=1
       ;;
     guard-only-pass)
       scenario="guard-pass"
       expected_resources=0
+      expected_report_attempts=0
+      expected_reports=0
       ;;
     guard-only-deny)
       scenario="guard-deny"
       expected_code="429"
+      expected_report_attempts=0
       expected_reports=0
       expected_resources=0
       ;;
@@ -1277,12 +1315,28 @@ run_guard_case() {
     guard-timeout-fail-open)
       scenario="drop"
       expected_rate_requests=2
-      expected_reports=0
+      ;;
+    report-only)
+      scenario="allow"
+      expected_guards=0
+      expected_resources=0
+      expected_rate_requests=0
+      expect_rate_request=0
       ;;
   esac
 
   error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
   start_responder "${scenario}" keep 0
+  if [[ "${MODE}" == "report-only" ]]; then
+    code="$(request_code)"
+    if [[ "${code}" != "200" ]]; then
+      record_failure "report-only DNS warm-up returned ${code}, expected 200"
+    fi
+    wait_for_log 'rn: addr=127.0.0.1' "${NGINX_ERROR_LOG}" 40 \
+      || record_failure "report-only DNS warm-up did not resolve the synthetic server"
+    start_responder "${scenario}" keep 0
+    error_log_start="$(wc -l <"${NGINX_ERROR_LOG}")"
+  fi
   code="$(request_code)"
   if [[ "${code}" != "${expected_code}" ]]; then
     record_failure "${MODE} returned ${code}, expected ${expected_code}"
@@ -1291,7 +1345,7 @@ run_guard_case() {
     wait_for_log '"event":"rate_request"' "${RESPONDER_LOG}" 20 \
       || record_failure "${MODE} responder did not observe the rate request"
   elif grep -q '"event":"rate_request"' "${RESPONDER_LOG}"; then
-    record_failure "${MODE} unexpectedly reached the responder"
+    record_failure "${MODE} unexpectedly sent a Rate Request"
   fi
   if (( expect_rate_request > 0 )) && ! awk \
       -v expected="${expected_rate_requests}" \
@@ -1323,10 +1377,15 @@ run_guard_case() {
     tail -n "+$((error_log_start + 1))" "${NGINX_ERROR_LOG}" \
       >"${ARTIFACT_DIR}/guard-trigger.log"
     if grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
-      record_failure "${MODE} sent a latency report without a valid allow verdict"
+      record_failure "${MODE} delivered a latency report when reporting was not eligible"
     fi
-    if grep -q 'rn: latency_report' "${ARTIFACT_DIR}/guard-trigger.log"; then
-      record_failure "${MODE} attempted a latency report without a valid allow verdict"
+    if (( expected_report_attempts > 0 )); then
+      if ! rn_expect_log_count "${ARTIFACT_DIR}/guard-trigger.log" \
+          'rn: latency_report count=1' "${expected_report_attempts}"; then
+        record_failure "${MODE} did not make the expected best-effort latency report attempt"
+      fi
+    elif grep -q 'rn: latency_report' "${ARTIFACT_DIR}/guard-trigger.log"; then
+      record_failure "${MODE} attempted a latency report when reporting was not eligible"
     fi
   fi
 
@@ -1342,7 +1401,57 @@ run_guard_case() {
   fi
 
   check_worker_survival "${MODE} decision"
-  check_follow_up "${MODE} decision"
+  if [[ "${MODE}" == "report-only" ]]; then
+    start_responder allow keep 0
+    code="$(request_code)"
+    if [[ "${code}" != "200" ]]; then
+      record_failure "report-only follow-up returned ${code}, expected 200"
+    fi
+    wait_for_log '"event":"latency_report"' "${RESPONDER_LOG}" 20 \
+      || record_failure "report-only follow-up did not deliver a latency report"
+    if grep -q '"event":"rate_request"' "${RESPONDER_LOG}"; then
+      record_failure "report-only follow-up sent a Rate Request"
+    fi
+    check_worker_survival "report-only follow-up"
+  else
+    check_follow_up "${MODE} decision"
+  fi
+}
+
+run_report_inheritance_case() {
+  local code
+
+  code="$(request_code)"
+  if [[ "${code}" != "200" ]]; then
+    record_failure "report inheritance DNS warm-up returned ${code}, expected 200"
+  fi
+  wait_for_log 'rn: addr=127.0.0.1' "${NGINX_ERROR_LOG}" 40 \
+    || record_failure "report inheritance DNS warm-up did not resolve the synthetic server"
+
+  start_responder allow keep 0
+  code="$(request_path_code /health 1)"
+  if [[ "${code}" != "204" ]]; then
+    record_failure "report-off child returned ${code}, expected 204"
+  fi
+  sleep 0.2
+  if grep -q '"event":"latency_report"' "${RESPONDER_LOG}"; then
+    record_failure "ratelimitly_report off did not suppress the inherited report"
+  fi
+
+  code="$(request_code)"
+  if [[ "${code}" != "200" ]]; then
+    record_failure "inherited report location returned ${code}, expected 200"
+  fi
+  wait_for_log '"event":"latency_report"' "${RESPONDER_LOG}" 20 \
+    || record_failure "server-level ratelimitly_report was not inherited"
+  if ! rn_expect_log_count "${RESPONDER_LOG}" \
+      '"event":"latency_report"' 1; then
+    record_failure "inherited report was not sent exactly once"
+  fi
+  if grep -q '"event":"rate_request"' "${RESPONDER_LOG}"; then
+    record_failure "report inheritance case sent a Rate Request"
+  fi
+  check_worker_survival "report inheritance and off override"
 }
 
 run_malformed_protocol_case() {
@@ -1893,6 +2002,8 @@ run_one() {
     log "skipping healthy warm-up so the resolver-override location initializes the worker"
   elif [[ "${MODE}" == rendered-values-* ]]; then
     log "skipping healthy warm-up before rendered-value boundary checks"
+  elif [[ "${MODE}" == "report-only" || "${MODE}" == "report-inheritance" ]]; then
+    log "skipping Rate Request warm-up for the report-only location"
   elif dns_failure_mode >/dev/null 2>&1; then
     log "skipping healthy warm-up before ${MODE}; DNS starts in failure mode"
   else
@@ -1906,7 +2017,8 @@ run_one() {
     steering-rebind) run_steering_rebind_case ;;
     outage) run_outage_case ;;
     dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;
-    guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open) run_guard_case ;;
+    guard-pass|guard-report-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|report-only) run_guard_case ;;
+    report-inheritance) run_report_inheritance_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     rendered-values-close|rendered-values-open) run_rendered_values_case ;;

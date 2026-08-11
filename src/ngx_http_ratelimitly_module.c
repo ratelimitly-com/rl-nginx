@@ -39,14 +39,27 @@ typedef struct {
     ngx_str_t name;
     ngx_str_t service_template;
     ngx_http_complex_value_t service_cv;
-    ngx_str_t threshold_template;
-    ngx_http_complex_value_t threshold_cv;
     uint32_t ttl_ms;
     uint32_t max_samples;
     uint32_t buffer_size;
     ngx_flag_t buffer_size_set;
     uint32_t min_sample_threshold;
+} rn_tracker_t;
+
+typedef struct {
+    ngx_str_t name;
+    ngx_str_t tracker_name;
+    ngx_str_t threshold_template;
+    ngx_http_complex_value_t threshold_cv;
 } rn_guard_t;
+
+typedef struct {
+    uint8_t id[16];
+    uint32_t ttl_ms;
+    uint32_t max_samples;
+    uint32_t buffer_size;
+    uint32_t min_sample_threshold;
+} rn_tracker_values_t;
 
 typedef struct {
     ngx_str_t name;
@@ -55,6 +68,7 @@ typedef struct {
 
 typedef struct {
     ngx_array_t *zones;   /* rn_zone_t[] */
+    ngx_array_t *trackers; /* rn_tracker_t[] */
     ngx_array_t *guards;  /* rn_guard_t[] */
     ngx_array_t *groups;  /* rn_group_t[] */
 
@@ -102,6 +116,9 @@ typedef struct {
 typedef struct {
     ngx_flag_t enabled;
     ngx_array_t *rules; /* rn_rule_ref_t[] */
+    ngx_flag_t report_set;
+    ngx_flag_t report_enabled;
+    ngx_str_t report_tracker_name;
     ngx_str_t label_template;
     ngx_http_complex_value_t label_cv;
     ngx_flag_t label_set;
@@ -110,6 +127,9 @@ typedef struct {
 typedef struct {
     ngx_flag_t enabled;
     ngx_array_t *rules; /* rn_rule_ref_t[] */
+    ngx_flag_t report_set;
+    ngx_flag_t report_enabled;
+    ngx_str_t report_tracker_name;
     ngx_str_t label_template;
     ngx_http_complex_value_t label_cv;
     ngx_flag_t label_set;
@@ -170,8 +190,7 @@ typedef struct {
     ngx_http_request_t *r;
     rn_worker_ctx_t *worker;
     r_client_req_t *req;
-    r_service_latency_report_t *lat_reports;
-    size_t lat_report_count;
+    r_service_latency_report_t lat_report;
     size_t expected_guard_count;
     size_t expected_resource_count;
     ngx_event_t timer;
@@ -207,12 +226,15 @@ static char *ngx_http_rn_set_fail(ngx_conf_t *cf, ngx_command_t *cmd, void *conf
 static char *ngx_http_rn_set_bind(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_set_debug(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_zone(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_group(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_rn_label(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_rn_report(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 static rn_zone_t *rn_find_zone(rn_main_conf_t *mcf, ngx_str_t *name);
+static rn_tracker_t *rn_find_tracker(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_guard_t *rn_find_guard(rn_main_conf_t *mcf, ngx_str_t *name);
 static rn_group_t *rn_find_group(rn_main_conf_t *mcf, ngx_str_t *name);
 static ngx_int_t rn_worker_init(rn_main_conf_t *mcf);
@@ -231,6 +253,12 @@ static void rn_request_teardown(
 );
 static void rn_request_cleanup(void *data);
 static rn_req_ctx_t *rn_get_request_ctx(ngx_http_request_t *r);
+static ngx_int_t rn_finish_preflight_failure(
+    rn_req_ctx_t *ctx,
+    rn_main_conf_t *mcf,
+    rn_completion_cause_t cause
+);
+static ngx_int_t rn_finish_internal_error(rn_req_ctx_t *ctx);
 #if (RN_TEST_FAULT_INJECTION)
 static ngx_flag_t rn_test_fault_active(rn_worker_ctx_t *worker, const char *name);
 #endif
@@ -276,8 +304,21 @@ static ngx_int_t rn_build_guard_entries(
     rn_worker_ctx_t *worker,
     rn_main_conf_t *mcf,
     rn_guard_t *guard,
-    r_latency_guard_t *out_guard,
+    r_latency_guard_t *out_guard
+);
+static ngx_int_t rn_build_latency_report(
+    ngx_http_request_t *r,
+    rn_worker_ctx_t *worker,
+    rn_main_conf_t *mcf,
+    rn_tracker_t *tracker,
     r_service_latency_report_t *out_report
+);
+static ngx_int_t rn_build_tracker_values(
+    ngx_http_request_t *r,
+    rn_worker_ctx_t *worker,
+    rn_main_conf_t *mcf,
+    rn_tracker_t *tracker,
+    rn_tracker_values_t *out
 );
 
 static ngx_command_t ngx_http_rn_commands[] = {
@@ -353,8 +394,15 @@ static ngx_command_t ngx_http_rn_commands[] = {
       0,
       NULL },
 
+    { ngx_string("ratelimitly_tracker"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_2MORE,
+      ngx_http_rn_tracker,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      0,
+      NULL },
+
     { ngx_string("ratelimitly_guard"),
-      NGX_HTTP_MAIN_CONF|NGX_CONF_1MORE,
+      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE3,
       ngx_http_rn_guard,
       NGX_HTTP_MAIN_CONF_OFFSET,
       0,
@@ -370,6 +418,13 @@ static ngx_command_t ngx_http_rn_commands[] = {
     { ngx_string("ratelimitly_label"),
       NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
       ngx_http_rn_label,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("ratelimitly_report"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_http_rn_report,
       NGX_HTTP_LOC_CONF_OFFSET,
       0,
       NULL },
@@ -509,6 +564,35 @@ ngx_http_rn_verdict_variable(
 }
 
 static ngx_int_t
+rn_finish_preflight_failure(
+    rn_req_ctx_t *ctx,
+    rn_main_conf_t *mcf,
+    rn_completion_cause_t cause
+) {
+    if (ctx == NULL || mcf == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ctx->decision = mcf->fail_open
+        ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+    ctx->admission_outcome = mcf->fail_open
+        ? RN_ADMISSION_FAIL_OPEN : RN_ADMISSION_FAIL_CLOSE;
+    ctx->completion_cause = cause;
+    ctx->done = 1;
+    return ctx->decision;
+}
+
+static ngx_int_t
+rn_finish_internal_error(rn_req_ctx_t *ctx) {
+    if (ctx != NULL) {
+        ctx->decision = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        ctx->admission_outcome = RN_ADMISSION_INTERNAL_ERROR;
+        ctx->completion_cause = RN_COMPLETION_NGINX_ERROR;
+        ctx->done = 1;
+    }
+    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+}
+
+static ngx_int_t
 ngx_http_rn_handler(ngx_http_request_t *r) {
     rn_loc_conf_t *lcf;
     rn_main_conf_t *mcf;
@@ -517,8 +601,9 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     r_client_req_t *req = NULL;
     r_resource_request_t *resources;
     r_latency_guard_t *guards = NULL;
-    r_service_latency_report_t *lat_reports = NULL;
     rn_guard_t **guard_defs = NULL;
+    rn_tracker_t *report_tracker;
+    ngx_flag_t admission_enabled;
     ngx_uint_t total = 0;
     ngx_uint_t total_guard_refs = 0;
     ngx_uint_t guard_idx = 0;
@@ -542,7 +627,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     ctx = rn_get_request_ctx(r);
     lcf = ngx_http_get_module_loc_conf(r, ngx_http_rn_module);
     mcf = ngx_http_get_module_main_conf(r, ngx_http_rn_module);
-    if (lcf == NULL || !lcf->enabled) {
+    admission_enabled = lcf != NULL && lcf->enabled;
+    if (lcf == NULL || (!admission_enabled && !lcf->report_enabled)) {
         if (mcf && mcf->debug) {
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
                 "rn: bypass uri=%V reason=loc_disabled", &r->uri);
@@ -564,8 +650,36 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             return NGX_AGAIN;
         }
     }
+
+    ctx = ngx_pcalloc(r->pool, sizeof(rn_req_ctx_t));
+    if (ctx == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ctx->r = r;
+    ctx->decision = NGX_DECLINED;
+    ctx->admission_outcome = admission_enabled
+        ? (mcf->fail_open ? RN_ADMISSION_FAIL_OPEN : RN_ADMISSION_FAIL_CLOSE)
+        : RN_ADMISSION_NONE;
+    ctx->completion_cause = RN_COMPLETION_NONE;
+    ngx_http_set_ctx(r, ctx, ngx_http_rn_module);
+
+    cln = ngx_http_cleanup_add(r, 0);
+    if (cln == NULL) {
+        ctx->admission_outcome = RN_ADMISSION_INTERNAL_ERROR;
+        ctx->completion_cause = RN_COMPLETION_NGINX_ERROR;
+        ctx->done = 1;
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    cln->handler = rn_request_cleanup;
+    cln->data = ctx;
+
     if (mcf->worker == NULL && rn_worker_ensure(mcf) != NGX_OK) {
-        return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->done = 1;
+        ctx->completion_cause = RN_COMPLETION_DEPENDENCY_ERROR;
+        ctx->decision = admission_enabled
+            ? (mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS)
+            : NGX_DECLINED;
+        return ctx->decision;
     }
     worker = mcf->worker;
     if (worker == NULL || worker->client == NULL) {
@@ -574,7 +688,35 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 "rn: bypass uri=%V reason=no_client fail_open=%d",
                 &r->uri, (int) mcf->fail_open);
         }
-        return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+        ctx->done = 1;
+        ctx->completion_cause = RN_COMPLETION_DEPENDENCY_ERROR;
+        ctx->decision = admission_enabled
+            ? (mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS)
+            : NGX_DECLINED;
+        return ctx->decision;
+    }
+    ctx->worker = worker;
+    ctx->timer.handler = rn_request_timeout_handler;
+    ctx->timer.data = ctx;
+    ctx->timer.log = worker->log;
+
+    if (lcf->report_enabled) {
+        report_tracker = rn_find_tracker(mcf, &lcf->report_tracker_name);
+        if (report_tracker != NULL
+            && rn_build_latency_report(r, worker, mcf, report_tracker,
+                &ctx->lat_report) == NGX_OK)
+        {
+            ctx->lat_report_enabled = 1;
+        } else if (mcf->debug) {
+            ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
+                "rn: latency_report_build_failed tracker=%V uri=%V",
+                &lcf->report_tracker_name, &r->uri);
+        }
+    }
+
+    if (!admission_enabled) {
+        ctx->done = 1;
+        return NGX_DECLINED;
     }
 
     if (lcf->rules == NULL || lcf->rules->nelts == 0) {
@@ -582,6 +724,9 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
                 "rn: bypass uri=%V reason=no_rules", &r->uri);
         }
+        ctx->admission_outcome = RN_ADMISSION_NONE;
+        ctx->decision = NGX_DECLINED;
+        ctx->done = 1;
         return NGX_DECLINED;
     }
     rules = lcf->rules->elts;
@@ -592,7 +737,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         } else if (rules[i].kind == RN_RULE_GROUP) {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
             if (group == NULL) {
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             total += group->zones.nelts;
         }
@@ -602,13 +748,16 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
                 "rn: bypass uri=%V reason=empty_rule_expansion", &r->uri);
         }
+        ctx->admission_outcome = RN_ADMISSION_NONE;
+        ctx->decision = NGX_DECLINED;
+        ctx->done = 1;
         return NGX_DECLINED;
     }
 
     if (total > 0) {
         resources = ngx_pcalloc(r->pool, total * sizeof(r_resource_request_t));
         if (resources == NULL) {
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+            return rn_finish_internal_error(ctx);
         }
     } else {
         resources = NULL;
@@ -616,10 +765,9 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
 
     if (total_guard_refs > 0) {
         guards = ngx_pcalloc(r->pool, total_guard_refs * sizeof(r_latency_guard_t));
-        lat_reports = ngx_pcalloc(r->pool, total_guard_refs * sizeof(r_service_latency_report_t));
         guard_defs = ngx_pcalloc(r->pool, total_guard_refs * sizeof(rn_guard_t *));
-        if (guards == NULL || lat_reports == NULL || guard_defs == NULL) {
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        if (guards == NULL || guard_defs == NULL) {
+            return rn_finish_internal_error(ctx);
         }
     }
 
@@ -631,7 +779,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             ngx_uint_t g;
 
             if (guard == NULL) {
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             for (g = 0; g < guard_idx; g++) {
                 if (guard_defs[g] == guard) {
@@ -644,14 +793,14 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             }
 
             ngx_int_t guard_rc = rn_build_guard_entries(
-                r, worker, mcf, guard, &guards[guard_idx], &lat_reports[guard_idx]);
+                r, worker, mcf, guard, &guards[guard_idx]);
             if (guard_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
                 if (mcf->debug) {
                     ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
                         "rn: guard_build_failed guard=%V rc=internal_error",
                         &guard->name);
                 }
-                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                return rn_finish_internal_error(ctx);
             }
             if (guard_rc != NGX_OK) {
                 if (mcf->debug) {
@@ -659,7 +808,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                         "rn: guard_build_failed guard=%V rc=%i fail_open=%d",
                         &guard->name, guard_rc, mcf->fail_open);
                 }
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             guard_defs[guard_idx] = guard;
             guard_idx++;
@@ -669,7 +819,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             rn_zone_t *zone = rn_find_zone(mcf, &rules[i].name);
             ngx_int_t build_rc;
             if (zone == NULL) {
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
             if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
@@ -678,7 +829,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                         "rn: zone_build_failed zone=%V rc=internal_error",
                         &zone->name);
                 }
-                return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                return rn_finish_internal_error(ctx);
             }
             if (build_rc != NGX_OK) {
                 if (mcf->debug) {
@@ -686,21 +837,24 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                         "rn: zone_build_failed zone=%V rc=%i fail_open=%d",
                         &zone->name, build_rc, mcf->fail_open);
                 }
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             idx++;
         } else if (rules[i].kind == RN_RULE_GROUP) {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
             ngx_str_t *zones;
             if (group == NULL) {
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             zones = group->zones.elts;
             for (j = 0; j < group->zones.nelts; j++) {
                 rn_zone_t *zone = rn_find_zone(mcf, &zones[j]);
                 ngx_int_t build_rc;
                 if (zone == NULL) {
-                    return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                    return rn_finish_preflight_failure(ctx, mcf,
+                        RN_COMPLETION_DEPENDENCY_ERROR);
                 }
                 build_rc = rn_build_zone_resource(r, worker, zone, &resources[idx]);
                 if (build_rc == NGX_HTTP_INTERNAL_SERVER_ERROR) {
@@ -709,7 +863,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                             "rn: zone_build_failed group=%V zone=%V rc=internal_error",
                             &group->name, &zone->name);
                     }
-                    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                    return rn_finish_internal_error(ctx);
                 }
                 if (build_rc != NGX_OK) {
                     if (mcf->debug) {
@@ -717,7 +871,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                             "rn: zone_build_failed group=%V zone=%V rc=%i fail_open=%d",
                             &group->name, &zone->name, build_rc, mcf->fail_open);
                     }
-                    return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                    return rn_finish_preflight_failure(ctx, mcf,
+                        RN_COMPLETION_DEPENDENCY_ERROR);
                 }
                 idx++;
             }
@@ -730,7 +885,8 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
                     "rn: label_build_failed uri=%V fail_open=%d", &r->uri, mcf->fail_open);
             }
-            return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+            return rn_finish_preflight_failure(ctx, mcf,
+                RN_COMPLETION_DEPENDENCY_ERROR);
         }
         if (label.len > 0) {
             if (label.len > RN_MAX_LABEL_LEN) {
@@ -739,43 +895,16 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                         "rn: label_build_failed uri=%V reason=too_long len=%uz max=%d fail_open=%d",
                         &r->uri, label.len, RN_MAX_LABEL_LEN, mcf->fail_open);
                 }
-                return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
+                return rn_finish_preflight_failure(ctx, mcf,
+                    RN_COMPLETION_DEPENDENCY_ERROR);
             }
             label_ptr = (const char *) label.data;
             label_len = label.len;
         }
     }
 
-    ctx = ngx_pcalloc(r->pool, sizeof(rn_req_ctx_t));
-    if (ctx == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ctx->r = r;
-    ctx->worker = worker;
-    ctx->timer.handler = rn_request_timeout_handler;
-    ctx->timer.data = ctx;
-    ctx->timer.log = worker->log;
-    ctx->lat_reports = lat_reports;
-    ctx->lat_report_count = guard_idx;
     ctx->expected_guard_count = guard_idx;
     ctx->expected_resource_count = idx;
-    ctx->waiting = 0;
-    ctx->done = 0;
-    ctx->decision = NGX_DECLINED;
-    ctx->admission_outcome = RN_ADMISSION_NONE;
-    ctx->completion_cause = RN_COMPLETION_NONE;
-    ctx->nginx_counted = 0;
-    ctx->inflight_counted = 0;
-    ctx->lat_report_enabled = (guard_idx > 0);
-    ctx->lat_report_sent = 0;
-    ngx_http_set_ctx(r, ctx, ngx_http_rn_module);
-
-    cln = ngx_http_cleanup_add(r, 0);
-    if (cln == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    cln->handler = rn_request_cleanup;
-    cln->data = ctx;
 
     int async_rc = r_client_check_rate_limit_async_borrowed(
         worker->client,
@@ -954,6 +1083,7 @@ ngx_http_rn_create_main_conf(ngx_conf_t *cf) {
     }
 
     mcf->zones = NULL;
+    mcf->trackers = NULL;
     mcf->guards = NULL;
     mcf->groups = NULL;
     mcf->tenant_dns.len = 0;
@@ -993,6 +1123,9 @@ ngx_http_rn_create_srv_conf(ngx_conf_t *cf) {
 
     scf->enabled = NGX_CONF_UNSET;
     scf->rules = NULL;
+    scf->report_set = 0;
+    scf->report_enabled = 0;
+    ngx_str_null(&scf->report_tracker_name);
     scf->label_template.len = 0;
     scf->label_template.data = NULL;
     scf->label_set = 0;
@@ -1011,6 +1144,9 @@ ngx_http_rn_create_loc_conf(ngx_conf_t *cf) {
 
     lcf->enabled = NGX_CONF_UNSET;
     lcf->rules = NULL;
+    lcf->report_set = 0;
+    lcf->report_enabled = 0;
+    ngx_str_null(&lcf->report_tracker_name);
     lcf->label_template.len = 0;
     lcf->label_template.data = NULL;
     lcf->label_set = 0;
@@ -1026,6 +1162,11 @@ ngx_http_rn_merge_srv_conf(ngx_conf_t *cf, void *parent, void *child) {
     ngx_conf_merge_value(conf->enabled, prev->enabled, 0);
     if (conf->rules == NULL) {
         conf->rules = prev->rules;
+    }
+    if (!conf->report_set && prev->report_set) {
+        conf->report_set = 1;
+        conf->report_enabled = prev->report_enabled;
+        conf->report_tracker_name = prev->report_tracker_name;
     }
     if (!conf->label_set && prev->label_set) {
         conf->label_template = prev->label_template;
@@ -1043,6 +1184,11 @@ ngx_http_rn_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
     ngx_conf_merge_value(conf->enabled, prev->enabled, 0);
     if (conf->rules == NULL) {
         conf->rules = prev->rules;
+    }
+    if (!conf->report_set && prev->report_set) {
+        conf->report_set = 1;
+        conf->report_enabled = prev->report_enabled;
+        conf->report_tracker_name = prev->report_tracker_name;
     }
     if (!conf->label_set && prev->label_set) {
         conf->label_template = prev->label_template;
@@ -1701,21 +1847,20 @@ rn_build_guard_entries(
     rn_worker_ctx_t *worker,
     rn_main_conf_t *mcf,
     rn_guard_t *guard,
-    r_latency_guard_t *out_guard,
-    r_service_latency_report_t *out_report
+    r_latency_guard_t *out_guard
 ) {
-    ngx_str_t service = ngx_null_string;
     ngx_str_t threshold = ngx_null_string;
+    rn_tracker_t *tracker;
+    rn_tracker_values_t tracker_values;
     uint32_t threshold_ms = 0;
 
     if (r == NULL || worker == NULL || mcf == NULL || guard == NULL
-        || out_guard == NULL || out_report == NULL) {
+        || out_guard == NULL) {
         return NGX_ERROR;
     }
 
-    if (ngx_http_complex_value(r, &guard->service_cv, &service) != NGX_OK
-        || service.len == 0 || service.len > RN_MAX_SERVICE_LEN)
-    {
+    tracker = rn_find_tracker(mcf, &guard->tracker_name);
+    if (tracker == NULL) {
         return NGX_ERROR;
     }
     if (ngx_http_complex_value(r, &guard->threshold_cv, &threshold) != NGX_OK) {
@@ -1724,32 +1869,20 @@ rn_build_guard_entries(
     if (rn_parse_protocol_duration_ms(&threshold, &threshold_ms) != NGX_OK) {
         return NGX_ERROR;
     }
-
-    out_guard->threshold_ms = threshold_ms;
-    out_guard->ttl_ms = guard->ttl_ms;
-    out_guard->max_samples = guard->max_samples;
-    out_guard->buffer_size = guard->buffer_size_set
-        ? guard->buffer_size : mcf->latency_buffer_size_max;
-    if (out_guard->buffer_size == 0) {
-        return NGX_ERROR;
-    }
-    out_guard->min_sample_threshold = guard->min_sample_threshold;
-    if (r_client_derive_latency_tracker_id(service.data, service.len,
-            out_guard->ttl_ms, out_guard->max_samples,
-            out_guard->buffer_size, out_guard->min_sample_threshold,
-            out_guard->latency_tracker_id) != RCLIENT_OK)
+    if (rn_build_tracker_values(r, worker, mcf, tracker,
+            &tracker_values) != NGX_OK)
     {
         return NGX_ERROR;
     }
 
-    ngx_memcpy(out_report->latency_tracker_id,
-        out_guard->latency_tracker_id,
-        sizeof(out_report->latency_tracker_id));
-    out_report->observed_latency = 0;
-    out_report->ttl_ms = guard->ttl_ms;
-    out_report->max_samples = guard->max_samples;
-    out_report->buffer_size = out_guard->buffer_size;
-    out_report->min_sample_threshold = guard->min_sample_threshold;
+    out_guard->threshold_ms = threshold_ms;
+    out_guard->ttl_ms = tracker_values.ttl_ms;
+    out_guard->max_samples = tracker_values.max_samples;
+    out_guard->buffer_size = tracker_values.buffer_size;
+    out_guard->min_sample_threshold = tracker_values.min_sample_threshold;
+    ngx_memcpy(out_guard->latency_tracker_id,
+        tracker_values.id,
+        sizeof(out_guard->latency_tracker_id));
 
     if (worker->debug) {
         u_char hex[33];
@@ -1757,6 +1890,81 @@ rn_build_guard_entries(
         ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
             "rn: guard=%V latency_tracker_id=%s threshold_ms=%uD",
             &guard->name, hex, out_guard->threshold_ms);
+    }
+
+    return NGX_OK;
+}
+
+static ngx_int_t
+rn_build_latency_report(
+    ngx_http_request_t *r,
+    rn_worker_ctx_t *worker,
+    rn_main_conf_t *mcf,
+    rn_tracker_t *tracker,
+    r_service_latency_report_t *out_report
+) {
+    rn_tracker_values_t values;
+
+    if (out_report == NULL
+        || rn_build_tracker_values(r, worker, mcf, tracker, &values) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    ngx_memzero(out_report, sizeof(*out_report));
+    ngx_memcpy(out_report->latency_tracker_id, values.id,
+        sizeof(out_report->latency_tracker_id));
+    out_report->ttl_ms = values.ttl_ms;
+    out_report->max_samples = values.max_samples;
+    out_report->buffer_size = values.buffer_size;
+    out_report->min_sample_threshold = values.min_sample_threshold;
+    return NGX_OK;
+}
+
+static ngx_int_t
+rn_build_tracker_values(
+    ngx_http_request_t *r,
+    rn_worker_ctx_t *worker,
+    rn_main_conf_t *mcf,
+    rn_tracker_t *tracker,
+    rn_tracker_values_t *out
+) {
+    ngx_str_t service = ngx_null_string;
+
+    if (r == NULL || worker == NULL || mcf == NULL || tracker == NULL
+        || out == NULL)
+    {
+        return NGX_ERROR;
+    }
+    if (ngx_http_complex_value(r, &tracker->service_cv, &service) != NGX_OK
+        || service.len == 0 || service.len > RN_MAX_SERVICE_LEN)
+    {
+        return NGX_ERROR;
+    }
+
+    ngx_memzero(out, sizeof(*out));
+    out->ttl_ms = tracker->ttl_ms;
+    out->max_samples = tracker->max_samples;
+    out->buffer_size = tracker->buffer_size_set
+        ? tracker->buffer_size : mcf->latency_buffer_size_max;
+    if (out->buffer_size == 0) {
+        return NGX_ERROR;
+    }
+    out->min_sample_threshold = tracker->min_sample_threshold;
+    if (r_client_derive_latency_tracker_id(service.data, service.len,
+            out->ttl_ms, out->max_samples,
+            out->buffer_size, out->min_sample_threshold,
+            out->id) != RCLIENT_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    if (worker->debug) {
+        u_char hex[33];
+        rn_hex_id(out->id, hex);
+        ngx_log_error(NGX_LOG_DEBUG, worker->log, 0,
+            "rn: tracker=%V latency_tracker_id=%s",
+            &tracker->name, hex);
     }
 
     return NGX_OK;
@@ -1908,76 +2116,102 @@ ngx_http_rn_group(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 }
 
 static char *
-ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     rn_main_conf_t *mcf = conf;
     ngx_str_t *value = cf->args->elts;
     ngx_uint_t i;
-    ngx_str_t guard_name = value[1];
+    ngx_str_t tracker_name = value[1];
     ngx_str_t service = ngx_null_string;
-    ngx_str_t threshold = ngx_null_string;
     uint32_t ttl_ms = 30000;
     uint32_t max_samples = 128;
     uint32_t buffer_size;
     ngx_flag_t buffer_size_set = 0;
     uint32_t min_sample_threshold = 8;
-    uint32_t static_threshold_ms;
+    ngx_flag_t service_set = 0;
+    ngx_flag_t ttl_set = 0;
+    ngx_flag_t max_samples_set = 0;
+    ngx_flag_t min_sample_threshold_set = 0;
 
-    if (cf->args->nelts < 4) {
-        return "ratelimitly_guard requires <name>, service=, threshold=";
+    if (cf->args->nelts < 3) {
+        return "ratelimitly_tracker requires <name> and service=";
     }
-    if (guard_name.len == 0 || ngx_strlchr(guard_name.data, guard_name.data + guard_name.len, '=') != NULL) {
-        return "ratelimitly_guard requires positional <name> as first argument";
+    if (tracker_name.len == 0
+        || ngx_strlchr(tracker_name.data,
+            tracker_name.data + tracker_name.len, '=') != NULL)
+    {
+        return "ratelimitly_tracker requires positional <name> as first argument";
+    }
+    if (tracker_name.len == 3
+        && ngx_strncmp(tracker_name.data, "off", 3) == 0)
+    {
+        return "ratelimitly_tracker name \"off\" is reserved";
     }
 
     for (i = 2; i < cf->args->nelts; i++) {
         if (ngx_strncmp(value[i].data, "service=", 8) == 0) {
+            if (service_set) {
+                return "duplicate ratelimitly_tracker service=";
+            }
+            service_set = 1;
             service.data = value[i].data + 8;
             service.len = value[i].len - 8;
-        } else if (ngx_strncmp(value[i].data, "threshold=", 10) == 0) {
-            threshold.data = value[i].data + 10;
-            threshold.len = value[i].len - 10;
         } else if (ngx_strncmp(value[i].data, "ttl=", 4) == 0) {
             ngx_str_t ttl;
+            if (ttl_set) {
+                return "duplicate ratelimitly_tracker ttl=";
+            }
+            ttl_set = 1;
             ttl.data = value[i].data + 4;
             ttl.len = value[i].len - 4;
             if (rn_parse_protocol_duration_ms(&ttl, &ttl_ms) != NGX_OK) {
-                return "invalid ratelimitly_guard ttl";
+                return "invalid ratelimitly_tracker ttl";
             }
         } else if (ngx_strncmp(value[i].data, "max_samples=", 12) == 0) {
             ngx_str_t n;
+            if (max_samples_set) {
+                return "duplicate ratelimitly_tracker max_samples=";
+            }
+            max_samples_set = 1;
             n.data = value[i].data + 12;
             n.len = value[i].len - 12;
             if (rn_numeric_parse_u32(n.data, n.len, &max_samples) != 0
                 || max_samples == 0)
             {
-                return "invalid ratelimitly_guard max_samples";
+                return "invalid ratelimitly_tracker max_samples";
             }
         } else if (ngx_strncmp(value[i].data, "buffer_size=", 12) == 0) {
             ngx_str_t n;
+            if (buffer_size_set) {
+                return "duplicate ratelimitly_tracker buffer_size=";
+            }
             n.data = value[i].data + 12;
             n.len = value[i].len - 12;
             if (rn_numeric_parse_u32(n.data, n.len, &buffer_size) != 0
                 || buffer_size == 0)
             {
-                return "invalid ratelimitly_guard buffer_size";
+                return "invalid ratelimitly_tracker buffer_size";
             }
             buffer_size_set = 1;
         } else if (ngx_strncmp(value[i].data, "min_sample_threshold=", 21) == 0) {
             ngx_str_t n;
+            if (min_sample_threshold_set) {
+                return "duplicate ratelimitly_tracker min_sample_threshold=";
+            }
+            min_sample_threshold_set = 1;
             n.data = value[i].data + 21;
             n.len = value[i].len - 21;
             if (rn_numeric_parse_u32(n.data, n.len,
                     &min_sample_threshold) != 0)
             {
-                return "invalid ratelimitly_guard min_sample_threshold";
+                return "invalid ratelimitly_tracker min_sample_threshold";
             }
         } else {
-            return "invalid ratelimitly_guard argument";
+            return "invalid ratelimitly_tracker argument";
         }
     }
 
-    if (service.len == 0 || threshold.len == 0) {
-        return "ratelimitly_guard requires <name>, service=, threshold=";
+    if (service.len == 0) {
+        return "ratelimitly_tracker requires <name> and service=";
     }
     if (rn_has_literal_value_quotes(&service)) {
         return "quote the complete service= argument, not only its value";
@@ -1986,9 +2220,93 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         && service.len > RN_MAX_SERVICE_LEN)
     {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-            "ratelimitly_guard service is %uz bytes; maximum is %d",
+            "ratelimitly_tracker service is %uz bytes; maximum is %d",
             service.len, RN_MAX_SERVICE_LEN);
         return NGX_CONF_ERROR;
+    }
+
+    if (mcf->trackers == NULL) {
+        mcf->trackers = ngx_array_create(cf->pool, 4, sizeof(rn_tracker_t));
+        if (mcf->trackers == NULL) {
+            return NGX_CONF_ERROR;
+        }
+    }
+    if (rn_find_tracker(mcf, &tracker_name) != NULL) {
+        return "duplicate ratelimitly_tracker name";
+    }
+
+    rn_tracker_t *tracker = ngx_array_push(mcf->trackers);
+    if (tracker == NULL) {
+        return NGX_CONF_ERROR;
+    }
+    ngx_memzero(tracker, sizeof(*tracker));
+    tracker->name = tracker_name;
+    tracker->service_template = service;
+    tracker->ttl_ms = ttl_ms;
+    tracker->max_samples = max_samples;
+    tracker->buffer_size_set = buffer_size_set;
+    if (buffer_size_set) {
+        tracker->buffer_size = buffer_size;
+    }
+    tracker->min_sample_threshold = min_sample_threshold;
+
+    ngx_http_compile_complex_value_t ccv;
+    ngx_memzero(&ccv, sizeof(ccv));
+    ccv.cf = cf;
+    ccv.value = &tracker->service_template;
+    ccv.complex_value = &tracker->service_cv;
+    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
+        return NGX_CONF_ERROR;
+    }
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    rn_main_conf_t *mcf = conf;
+    ngx_str_t *value = cf->args->elts;
+    ngx_uint_t i;
+    ngx_str_t guard_name = value[1];
+    ngx_str_t tracker_name = ngx_null_string;
+    ngx_str_t threshold = ngx_null_string;
+    ngx_flag_t tracker_set = 0;
+    ngx_flag_t threshold_set = 0;
+    uint32_t static_threshold_ms;
+    ngx_http_compile_complex_value_t ccv;
+
+    if (guard_name.len == 0
+        || ngx_strlchr(guard_name.data,
+            guard_name.data + guard_name.len, '=') != NULL)
+    {
+        return "ratelimitly_guard requires positional <name> as first argument";
+    }
+
+    for (i = 2; i < cf->args->nelts; i++) {
+        if (ngx_strncmp(value[i].data, "tracker=", 8) == 0) {
+            if (tracker_set) {
+                return "duplicate ratelimitly_guard tracker=";
+            }
+            tracker_set = 1;
+            tracker_name.data = value[i].data + 8;
+            tracker_name.len = value[i].len - 8;
+        } else if (ngx_strncmp(value[i].data, "threshold=", 10) == 0) {
+            if (threshold_set) {
+                return "duplicate ratelimitly_guard threshold=";
+            }
+            threshold_set = 1;
+            threshold.data = value[i].data + 10;
+            threshold.len = value[i].len - 10;
+        } else {
+            return "ratelimitly_guard expects tracker= and threshold=";
+        }
+    }
+
+    if (tracker_name.len == 0 || threshold.len == 0) {
+        return "ratelimitly_guard requires <name>, tracker=, threshold=";
+    }
+    if (rn_find_tracker(mcf, &tracker_name) == NULL) {
+        return "ratelimitly_guard references unknown tracker";
     }
     if (ngx_http_script_variables_count(&threshold) == 0
         && rn_parse_protocol_duration_ms(&threshold,
@@ -2013,24 +2331,8 @@ ngx_http_rn_guard(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     }
     ngx_memzero(guard, sizeof(*guard));
     guard->name = guard_name;
-    guard->service_template = service;
+    guard->tracker_name = tracker_name;
     guard->threshold_template = threshold;
-    guard->ttl_ms = ttl_ms;
-    guard->max_samples = max_samples;
-    guard->buffer_size_set = buffer_size_set;
-    if (buffer_size_set) {
-        guard->buffer_size = buffer_size;
-    }
-    guard->min_sample_threshold = min_sample_threshold;
-
-    ngx_http_compile_complex_value_t ccv;
-    ngx_memzero(&ccv, sizeof(ccv));
-    ccv.cf = cf;
-    ccv.value = &guard->service_template;
-    ccv.complex_value = &guard->service_cv;
-    if (ngx_http_compile_complex_value(&ccv) != NGX_OK) {
-        return NGX_CONF_ERROR;
-    }
 
     ngx_memzero(&ccv, sizeof(ccv));
     ccv.cf = cf;
@@ -2194,6 +2496,36 @@ ngx_http_rn_label(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     return NGX_CONF_OK;
 }
 
+static char *
+ngx_http_rn_report(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+    rn_loc_conf_t *lcf = conf;
+    rn_main_conf_t *mcf;
+    ngx_str_t *value = cf->args->elts;
+
+    if (lcf->report_set) {
+        return "is duplicate";
+    }
+    lcf->report_set = 1;
+    if (value[1].len == 3
+        && ngx_strncmp(value[1].data, "off", 3) == 0)
+    {
+        lcf->report_enabled = 0;
+        ngx_str_null(&lcf->report_tracker_name);
+        return NGX_CONF_OK;
+    }
+
+    mcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_rn_module);
+    if (rn_find_tracker(mcf, &value[1]) == NULL) {
+        return "ratelimitly_report references unknown tracker";
+    }
+    lcf->report_enabled = 1;
+    lcf->report_tracker_name = value[1];
+    if (mcf != NULL) {
+        mcf->enabled = 1;
+    }
+    return NGX_CONF_OK;
+}
+
 static rn_zone_t *
 rn_find_zone(rn_main_conf_t *mcf, ngx_str_t *name) {
     if (mcf == NULL || mcf->zones == NULL || name == NULL) {
@@ -2204,6 +2536,23 @@ rn_find_zone(rn_main_conf_t *mcf, ngx_str_t *name) {
         if (zones[i].name.len == name->len
             && ngx_strncmp(zones[i].name.data, name->data, name->len) == 0) {
             return &zones[i];
+        }
+    }
+    return NULL;
+}
+
+static rn_tracker_t *
+rn_find_tracker(rn_main_conf_t *mcf, ngx_str_t *name) {
+    if (mcf == NULL || mcf->trackers == NULL || name == NULL) {
+        return NULL;
+    }
+    rn_tracker_t *trackers = mcf->trackers->elts;
+    for (ngx_uint_t i = 0; i < mcf->trackers->nelts; i++) {
+        if (trackers[i].name.len == name->len
+            && ngx_strncmp(trackers[i].name.data,
+                name->data, name->len) == 0)
+        {
+            return &trackers[i];
         }
     }
     return NULL;
@@ -3517,7 +3866,6 @@ ngx_http_rn_log_handler(ngx_http_request_t *r) {
     uint64_t start_ms;
     uint64_t end_ms;
     uint64_t observed;
-    size_t i;
     int rc;
 
     if (r == NULL || r != r->main) {
@@ -3536,8 +3884,9 @@ ngx_http_rn_log_handler(ngx_http_request_t *r) {
         ctx->lat_report_sent = 1;
         return NGX_OK;
     }
-    if (ctx->admission_outcome != RN_ADMISSION_VALID_ALLOW
-        || ctx->lat_reports == NULL || ctx->lat_report_count == 0)
+    if (ctx->admission_outcome != RN_ADMISSION_NONE
+        && ctx->admission_outcome != RN_ADMISSION_VALID_ALLOW
+        && ctx->admission_outcome != RN_ADMISSION_FAIL_OPEN)
     {
         ctx->lat_report_sent = 1;
         return NGX_OK;
@@ -3566,16 +3915,14 @@ ngx_http_rn_log_handler(ngx_http_request_t *r) {
         observed = 0xFFFFFFFFu;
     }
 
-    for (i = 0; i < ctx->lat_report_count; i++) {
-        ctx->lat_reports[i].observed_latency = (uint32_t) observed;
-    }
+    ctx->lat_report.observed_latency = (uint32_t) observed;
 
-    rc = r_client_report_latency(worker->client, ctx->lat_reports, ctx->lat_report_count);
+    rc = r_client_report_latency(worker->client, &ctx->lat_report, 1);
     if (worker->debug) {
         ngx_uint_t lvl = (rc == RCLIENT_OK) ? NGX_LOG_DEBUG : NGX_LOG_WARN;
         ngx_log_error(lvl, worker->log, 0,
             "rn: latency_report count=%uz observed_ms=%uL rc=%d",
-            ctx->lat_report_count, (unsigned long) observed, rc);
+            (size_t) 1, (unsigned long) observed, rc);
     }
     ctx->lat_report_sent = 1;
     return NGX_OK;

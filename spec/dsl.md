@@ -22,16 +22,19 @@ The following directives are valid only in the nginx `http` context:
 - `ratelimitly_bind`
 - `ratelimitly_debug`
 - `ratelimitly_zone`
+- `ratelimitly_tracker`
 - `ratelimitly_guard`
 - `ratelimitly_group`
 
-`ratelimitly` and `ratelimitly_label` are valid in `server` and `location`
-contexts. The module is enabled only when at least one effective `ratelimitly`
-rule exists. When enabled anywhere in `http`, `ratelimitly_auth_key` MUST be
-present or nginx configuration loading fails. `ratelimitly_dns_srv` is OPTIONAL.
+`ratelimitly`, `ratelimitly_report`, and `ratelimitly_label` are valid in
+`server` and `location` contexts. The module is enabled when at least one
+effective admission rule or latency report exists. When enabled anywhere in
+`http`, `ratelimitly_auth_key` MUST be present or nginx configuration loading
+fails. `ratelimitly_dns_srv` is OPTIONAL.
 
-Zones, guards, and groups MUST be defined before a rule references them. Zones
-MUST be defined before a group references them. Names are case-sensitive.
+Zones, trackers, guards, and groups MUST be defined before a location
+references them. A tracker MUST be defined before a guard references it, and
+zones MUST be defined before a group references them. Names are case-sensitive.
 
 ## Directives
 
@@ -257,21 +260,21 @@ Canonical configurations SHOULD use an omitted period for one unit (`10r/s`)
 and a positive explicit period otherwise (`100r/2s`), rather than the accepted
 but redundant `0` form.
 
-### `ratelimitly_guard`
+### `ratelimitly_tracker`
 
 ```nginx
-ratelimitly_guard <name>
+ratelimitly_tracker <name>
   "service=<template>"
-  threshold=<duration-or-template>
   [ttl=<duration>]
   [max_samples=<uint32>]
   [buffer_size=<uint32>]
   [min_sample_threshold=<uint32>];
 ```
 
-The positional name, nonempty `service=`, and nonempty `threshold=` are
-required. A name containing `=` or a duplicate guard name is a configuration
-error. Unknown named arguments are rejected.
+The tracker defines one content-derived latency-history identity. The
+positional name and nonempty `service=` are required. A name containing `=`,
+the reserved name `off`, or a duplicate tracker name is a configuration error.
+Unknown or duplicate named arguments are rejected.
 When quoting is needed, the quotes MUST enclose the complete `service=`
 argument. `service="value"` is invalid because those quotes would be literal
 identifier bytes.
@@ -286,17 +289,33 @@ The rendered service MUST contain `1..1024` bytes. An oversized static template
 is a configuration error. An empty or oversized dynamic result follows
 `ratelimitly_fail` and MUST NOT be sent to the C client.
 
-`threshold` is an nginx complex value parsed as milliseconds. A static value is
-validated at configuration load; a value containing variables is validated per
-request and follows the failure policy on error. `ttl` and all sample fields
-are static and validated at configuration load.
-
-Threshold and TTL use the same duration grammar as `ratelimitly_policy unit`; a
-unitless value means seconds. Their millisecond values MUST fit
-`1..4294967295`, so zero is invalid. All sample fields MUST fit an unsigned
-32-bit wire field. `max_samples` and `buffer_size` MUST be nonzero.
+TTL uses the same duration grammar as `ratelimitly_policy unit`; a unitless
+value means seconds. Its millisecond value MUST fit `1..4294967295`, so zero is
+invalid. All sample fields MUST fit an unsigned 32-bit wire field.
+`max_samples` and an explicit `buffer_size` MUST be nonzero.
 `min_sample_threshold=0` is valid and disables only the insertion-rate
 sufficiency gate; it does not synthesize a retained latency sample.
+
+### `ratelimitly_guard`
+
+```nginx
+ratelimitly_guard <name>
+  tracker=<tracker-name>
+  threshold=<duration-or-template>;
+```
+
+A guard evaluates the named tracker's state as one condition in a Rate
+Request. The tracker reference and threshold are both required exactly once,
+and the tracker MUST already exist. A name containing `=` or a duplicate guard
+name is a configuration error. Tracker state settings do not belong to a
+guard; this permits several guards with different thresholds to evaluate the
+same tracker.
+
+`threshold` is an nginx complex value parsed as milliseconds. A static value
+is validated at configuration load; a value containing variables is validated
+per request and follows the failure policy on error. The duration grammar is
+the same as `ratelimitly_policy unit`; a unitless value means seconds, and the
+result MUST fit `1..4294967295ms`.
 
 ### `ratelimitly_group`
 
@@ -338,6 +357,24 @@ nested locations, only when the child has no rule of its own. Once a child
 declares a `ratelimitly` rule, its rule list replaces rather than appends to the
 inherited list.
 
+### `ratelimitly_report`
+
+```nginx
+ratelimitly_report <tracker-name>;
+ratelimitly_report off;
+```
+
+The named form requests one best-effort latency report for the completed main
+HTTP request. It references one previously defined tracker and is independent
+of `ratelimitly` admission rules: the tracker need not be used by a guard, and
+a guard never enables reporting implicitly. Only one effective report target
+is permitted for a request.
+
+The directive is inherited from `server` and enclosing `location` contexts.
+`off` explicitly suppresses an inherited report. A second occurrence in the
+same context is a configuration error. Report construction or delivery
+failure never changes the HTTP response.
+
 ### `ratelimitly_label`
 
 ```nginx
@@ -365,10 +402,10 @@ source addresses MUST NOT be used as label values.
 | `ratelimitly_fail` | `open` |
 | `ratelimitly_bind` | kernel-selected local address, ephemeral port |
 | `ratelimitly_debug` | `off` |
-| `ratelimitly_guard ttl` | `30s` |
-| `ratelimitly_guard max_samples` | `128` |
-| `ratelimitly_guard buffer_size` | credential's `latency_buffer_size_max` |
-| `ratelimitly_guard min_sample_threshold` | `8` |
+| `ratelimitly_tracker ttl` | `30s` |
+| `ratelimitly_tracker max_samples` | `128` |
+| `ratelimitly_tracker buffer_size` | credential's `latency_buffer_size_max` |
+| `ratelimitly_tracker min_sample_threshold` | `8` |
 
 Production configurations SHOULD set request and failure policy explicitly
 after assessing enforcement bypass, dependency denial, and request-latency

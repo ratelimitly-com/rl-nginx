@@ -47,11 +47,12 @@ consumption. Because a real deny and a fail-closed dependency error both return
 `429`, HTTP status alone cannot distinguish them. Use the module log markers
 described below.
 
-Guard latency reporting follows the same distinction: an admitted request can
-report its completed processing latency even when the eventual HTTP response
-is an application or upstream error, but a fail-open request cannot report a
-sample because no valid RateLimitly allow exists. A client abort suppresses the
-sample without refunding an already consumed admission.
+Latency reporting is configured independently from guards and admission. When
+`ratelimitly_report` is effective, completed report-only, valid-allow, and
+fail-open work can contribute one sample even when the eventual HTTP response
+is an application or upstream error. A valid deny, fail-close outcome, or
+client abort suppresses the sample. Reporting never proves that a resource was
+consumed; `$ratelimitly_verdict` remains the decision-provenance signal.
 
 ## DNS discovery and network path
 
@@ -406,7 +407,8 @@ It uses the locked public C-client test responder, strict local DNS fixture,
 pinned nginx source, and this module. It needs no RateLimitly server, tenant,
 credential, or private repository. It verifies lifecycle cleanup, exact
 allow/deny enforcement, fail-open/fail-close outages, DNS failure and
-same-worker recovery, timeouts, aborted clients, steering rebinds, guards,
+same-worker recovery, timeouts, aborted clients, steering rebinds, independent
+guards and reports,
 malformed responses, response cardinality, reload, and clean shutdown. The
 responder's `--listen` option exists only to bind that local UDP test fixture;
 it is not a RateLimitly server option or a deployable server-address feature.
