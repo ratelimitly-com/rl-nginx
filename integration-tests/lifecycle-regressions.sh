@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lifecycle-oracles.sh"
 
 usage() {
   cat <<EOF
-Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
+Usage: integration-tests/lifecycle-regressions.sh [all|list-all|admission-contract|cardinality|rendered-values|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra]
 
 Runs the complete required public lifecycle matrix against the locked
 rl-c-client test responder. Every case pins the original nginx worker PID,
@@ -46,7 +46,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 case "${MODE}" in
-  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
+  all|list-all|admission-contract|admission-contract-close|admission-contract-open|cardinality|rendered-values|rendered-values-close|rendered-values-open|protocol-policy|outage-policy|dns-policy|guard-latency|fault-injection|fault|enforcement-boundary|worker-resolver-scope|timeout|aborted-client|udp-ingress-fairness|steering-rebind|outage|dns-missing-srv|dns-bad-target|dns-timeout|guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client|malformed-auth|malformed-truncated|malformed-request-id|count-empty|count-short|count-extra) ;;
   *)
     echo "Unknown lifecycle case: ${MODE}" >&2
     usage >&2
@@ -399,6 +399,7 @@ run_guard_latency() {
 
   prepare_binaries
   for scenario in guard-pass guard-deny guard-multiple \
+      guard-only-pass guard-only-deny \
       guard-start-fail-open guard-timeout-fail-open guard-aborted-client; do
     fail_policy=close
     case "${scenario}" in
@@ -518,7 +519,7 @@ dns_failure_mode() {
 
 is_guard_case() {
   case "${MODE}" in
-    steering-rebind|guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
+    steering-rebind|guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open|guard-aborted-client) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -579,6 +580,9 @@ write_nginx_config() {
     if [[ "${MODE}" == "guard-multiple" ]]; then
       guard_defs="${guard_defs}"$'\n''  ratelimitly_guard lifecycle_guard_secondary "service=svc:lifecycle:secondary:$uri" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
       ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard guard=lifecycle_guard_secondary;"
+    fi
+    if [[ "${MODE}" == guard-only-* ]]; then
+      ratelimitly_rule="ratelimitly guard=lifecycle_guard guard=lifecycle_guard;"
     fi
   fi
   if [[ -n "${NGINX_LOAD_MODULE}" ]]; then
@@ -1229,6 +1233,7 @@ run_guard_case() {
   local expected_guards
   local expected_rate_requests
   local expected_reports
+  local expected_resources
   local expect_rate_request
   local scenario
 
@@ -1236,6 +1241,7 @@ run_guard_case() {
   expected_guards=1
   expected_rate_requests=1
   expected_reports=1
+  expected_resources=1
   expect_rate_request=1
   scenario="${MODE}"
 
@@ -1252,6 +1258,16 @@ run_guard_case() {
       scenario="guard-pass"
       expected_guards=2
       expected_reports=2
+      ;;
+    guard-only-pass)
+      scenario="guard-pass"
+      expected_resources=0
+      ;;
+    guard-only-deny)
+      scenario="guard-deny"
+      expected_code="429"
+      expected_reports=0
+      expected_resources=0
       ;;
     guard-start-fail-open)
       scenario="allow"
@@ -1279,10 +1295,11 @@ run_guard_case() {
   fi
   if (( expect_rate_request > 0 )) && ! awk \
       -v expected="${expected_rate_requests}" \
-      -v guards="${expected_guards}" '
+      -v guards="${expected_guards}" \
+      -v resources="${expected_resources}" '
       /"event":"rate_request"/ {
         count++
-        if (index($0, "\"guards\":" guards ",\"resources\":1,") == 0) bad = 1
+        if (index($0, "\"guards\":" guards ",\"resources\":" resources ",") == 0) bad = 1
       }
       END { exit count == expected && !bad ? 0 : 1 }
     ' "${RESPONDER_LOG}"; then
@@ -1889,7 +1906,7 @@ run_one() {
     steering-rebind) run_steering_rebind_case ;;
     outage) run_outage_case ;;
     dns-missing-srv|dns-bad-target|dns-timeout) run_dns_failure_case ;;
-    guard-pass|guard-deny|guard-multiple|guard-start-fail-open|guard-timeout-fail-open) run_guard_case ;;
+    guard-pass|guard-deny|guard-multiple|guard-only-pass|guard-only-deny|guard-start-fail-open|guard-timeout-fail-open) run_guard_case ;;
     malformed-auth|malformed-truncated|malformed-request-id) run_malformed_protocol_case ;;
     enforcement-boundary) run_enforcement_boundary_case ;;
     rendered-values-close|rendered-values-open) run_rendered_values_case ;;

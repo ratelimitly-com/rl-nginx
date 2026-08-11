@@ -17,12 +17,12 @@ values, nginx phase behavior, ownership, failure mapping, and HTTP latency
 measurement. It does not fork or redefine behavior owned by the locked C
 client.
 
-For `rl-c-client v0.5.1`, the following upstream documents are the normative
+For `rl-c-client v0.6.0`, the following upstream documents are the normative
 dependency contract:
 
-- [Public API and operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md);
-- [event-loop I/O, DNS, timer, buffer, and steering contract](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/IO_ABSTRACTION.md); and
-- [client design and ownership boundary](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/DESIGN.md).
+- [Public API and operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md);
+- [event-loop I/O, DNS, timer, buffer, and steering contract](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/IO_ABSTRACTION.md); and
+- [client design and ownership boundary](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/DESIGN.md).
 
 The summaries in this specification lock the particular client behavior that
 is observable through nginx. If a summary disagrees with the supported tag,

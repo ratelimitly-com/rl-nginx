@@ -48,6 +48,9 @@ remain preview software and must not be treated as ABI-stable versions.
 
 ### Changed
 
+- updated the supported public `rl-c-client` dependency to `v0.6.0` and
+  allowed a `ratelimitly` rule to contain one or more latency guards without a
+  resource zone or group;
 - updated the supported public `rl-c-client` dependency to `v0.5.0` and
   replaced `ratelimitly_timeout` with `ratelimitly_policy`: `standard` exposes
   the locked three-unit default, `single_round` provides a literal one-round

@@ -93,6 +93,7 @@ VALID_AUTH_KEY='rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjm
 VALID_AUTH="  ratelimitly_auth_key ${VALID_AUTH_KEY};"
 VALID_DNS_SRV='  ratelimitly_dns_srv tenant.example.invalid;'
 VALID_ZONE='  ratelimitly_zone primary "bucket=primary" rate=100r/s;'
+VALID_GUARD='  ratelimitly_guard latency "service=service:latency" threshold=100ms;'
 VALID_RESOLVER='  resolver 127.0.0.1;'
 ENABLED_SERVER=$'  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly zone=primary;\n      return 204;\n    }\n  }'
 printf -v MAX_IDENTIFIER '%*s' 1024 ''
@@ -105,6 +106,9 @@ OVERSIZED_LABEL="${MAX_LABEL}l"
 run_case representative accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'\
 $'  log_format ratelimitly_test "$status $ratelimitly_verdict";\n  access_log off;\n  ratelimitly_policy standard unit=50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_guard latency "service=service:$host" threshold=4294967295ms ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency;\n      return 204;\n    }\n  }'
+
+run_case guard_only_rule accept \
+  "${VALID_RESOLVER}"$'\n'"${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_GUARD}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / { ratelimitly guard=latency; return 204; }\n  }'
 
 run_case min_sample_zero accept \
   $'  ratelimitly_guard zero "service=service:zero" threshold=100ms ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
@@ -201,6 +205,12 @@ run_case unknown_rule_group reject \
 run_case unknown_rule_guard reject \
   "${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_ZONE}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / { ratelimitly zone=primary guard=missing; }\n  }' \
   'ratelimitly references unknown guard'
+run_case unknown_guard_only_rule reject \
+  "${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / { ratelimitly guard=missing; }\n  }' \
+  'ratelimitly references unknown guard'
+run_case empty_rule reject \
+  $'  server { listen unix:__SOCKET__; location / { ratelimitly; } }' \
+  'invalid number of arguments in "ratelimitly" directive'
 run_case empty_rule_zone_reference reject \
   $'  server { listen unix:__SOCKET__; location / { ratelimitly zone=; } }' \
   'ratelimitly requires a nonempty zone= or group= reference'

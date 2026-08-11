@@ -242,7 +242,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     require(behavior, "final HTTP pre-content handler", "admission contract", failures)
     require(
         behavior,
-        "consumption of the requested resources",
+        "consumption of every requested resource, if any",
         "consumption contract",
         failures,
     )

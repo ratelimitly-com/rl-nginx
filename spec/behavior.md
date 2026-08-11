@@ -5,7 +5,7 @@ Configuration syntax and wire-field construction are specified separately in
 [Configuration DSL](dsl.md) and [Wire mapping](mapping.md).
 The meanings of a resource request and an independent latency report come from
 the locked C-client
-[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model).
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model).
 
 ## Activation and request construction
 
@@ -23,6 +23,11 @@ effective rules into one combined rate-limit check containing:
   and group entries; and
 - one guard for every distinct referenced guard definition, in first-seen
   order.
+
+The combined check MAY contain zero resources when at least one guard remains.
+Such a request is still an admission decision: nginx proceeds only when every
+guard passes. The configuration DSL does not expose a request containing
+neither resources nor guards.
 
 An nginx internal redirect remains part of the same main HTTP request. Once
 that request has obtained an admission result, later internal routing MUST
@@ -79,14 +84,14 @@ DNS refresh policy remains client-owned and is not configurable through rl-nginx
 
 Fan-out, response preference, replay scheduling, completion delivery, and TTL
 derivation are client-owned and are defined in the locked
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy).
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy).
 The paragraphs above specify the supported nginx selections and their
 externally visible effect.
 
 The locked client requires SRV discovery. A failed, empty, or non-conforming
 membership fails with `RCLIENT_ERR_DNS`; there is no direct tenant-name/UDP
 port fallback. The client owns the corresponding
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh)
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh)
 behavior.
 
 ## Decision contract
@@ -105,10 +110,10 @@ request to content processing only if all of the following are true:
 
 Otherwise the module MUST return `429 Too Many Requests`. A valid RateLimitly
 deny returns `429` under both failure policies. A valid allow represents
-consumption of the requested resources and MUST advance directly to nginx
-content processing without another pre-content handler. The admitted client,
-content handler, or upstream can still fail afterward; such failures do not
-reverse the consumption.
+consumption of every requested resource, if any, and MUST advance directly to
+nginx content processing without another pre-content handler. The admitted
+client, content handler, or upstream can still fail afterward; such failures
+do not reverse the consumption.
 
 ## Verdict variable
 

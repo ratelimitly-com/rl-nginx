@@ -90,6 +90,7 @@ typedef struct {
 typedef enum {
     RN_RULE_ZONE = 0,
     RN_RULE_GROUP = 1,
+    RN_RULE_GUARD_ONLY = 2,
 } rn_rule_kind_t;
 
 typedef struct {
@@ -588,7 +589,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         total_guard_refs += rules[i].guards.nelts;
         if (rules[i].kind == RN_RULE_ZONE) {
             total++;
-        } else {
+        } else if (rules[i].kind == RN_RULE_GROUP) {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
             if (group == NULL) {
                 return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
@@ -596,7 +597,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
             total += group->zones.nelts;
         }
     }
-    if (total == 0) {
+    if (total == 0 && total_guard_refs == 0) {
         if (mcf->debug) {
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
                 "rn: bypass uri=%V reason=empty_rule_expansion", &r->uri);
@@ -604,9 +605,13 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
         return NGX_DECLINED;
     }
 
-    resources = ngx_pcalloc(r->pool, total * sizeof(r_resource_request_t));
-    if (resources == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    if (total > 0) {
+        resources = ngx_pcalloc(r->pool, total * sizeof(r_resource_request_t));
+        if (resources == NULL) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+    } else {
+        resources = NULL;
     }
 
     if (total_guard_refs > 0) {
@@ -684,7 +689,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
                 return mcf->fail_open ? NGX_OK : NGX_HTTP_TOO_MANY_REQUESTS;
             }
             idx++;
-        } else {
+        } else if (rules[i].kind == RN_RULE_GROUP) {
             rn_group_t *group = rn_find_group(mcf, &rules[i].name);
             ngx_str_t *zones;
             if (group == NULL) {
@@ -2099,8 +2104,8 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         }
     }
 
-    if (!zone_seen && !group_seen) {
-        return "ratelimitly requires zone=<name> or group=<name>";
+    if (!zone_seen && !group_seen && guard_names->nelts == 0) {
+        return "ratelimitly requires zone=<name>, group=<name>, or guard=<name>";
     }
     if ((zone_seen && zone_name.len == 0)
         || (group_seen && group_name.len == 0))
@@ -2118,7 +2123,7 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         ngx_memzero(rule, sizeof(*rule));
         rule->kind = RN_RULE_ZONE;
         rule->name = zone_name;
-    } else {
+    } else if (group_seen) {
         if (rn_find_group(mcf, &group_name) == NULL) {
             return "ratelimitly references unknown group";
         }
@@ -2129,6 +2134,14 @@ ngx_http_rn_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
         ngx_memzero(rule, sizeof(*rule));
         rule->kind = RN_RULE_GROUP;
         rule->name = group_name;
+    } else {
+        rule = ngx_array_push(lcf->rules);
+        if (rule == NULL) {
+            return NGX_CONF_ERROR;
+        }
+        ngx_memzero(rule, sizeof(*rule));
+        rule->kind = RN_RULE_GUARD_ONLY;
+        ngx_str_null(&rule->name);
     }
 
     if (ngx_array_init(&rule->guards, cf->pool,

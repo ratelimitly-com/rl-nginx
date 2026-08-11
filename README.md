@@ -9,8 +9,9 @@ observed service latencies remain below application-defined thresholds.
 
 `rl-nginx` is the nginx HTTP integration for that decision. After nginx access
 control and pre-content routing have succeeded, the module turns configured
-nginx values into one RateLimitly resource request. A valid grant consumes the
-requested resources and nginx proceeds directly to content processing. A
+nginx values into one RateLimitly resource request containing resource
+consumptions, latency guards, or both. A valid grant consumes every requested
+resource, if any, and nginx proceeds directly to content processing. A
 rejection consumes nothing and returns `429 Too Many Requests`.
 
 The module uses the public
@@ -24,10 +25,11 @@ latency measurement, and operations.
 
 RateLimitly exposes two independent logical operations:
 
-- A **resource request** describes work nginx wants to admit as one or more
-  resource consumptions and zero or more latency guards. RateLimitly evaluates
-  the complete request atomically. A grant consumes every requested quantity;
-  a rejection consumes none.
+- A **resource request** describes work nginx wants to admit as zero or more
+  resource consumptions and zero or more latency guards. `rl-nginx` requires
+  at least one of the two. RateLimitly evaluates the complete request
+  atomically. A grant consumes every requested quantity; a rejection consumes
+  none.
 - A **latency report** contributes measured service latency to a tracker that
   future latency guards can evaluate. It neither requests nor consumes a
   resource and does not make an admission decision.
@@ -42,20 +44,20 @@ dependency failure does not produce one.
 ```mermaid
 flowchart LR
     HTTP["HTTP request"] --> Checks["nginx access control<br/>and pre-content routing"]
-    Checks --> Request["Resource request<br/>consumptions + optional guards"]
+    Checks --> Request["Resource request<br/>resources, guards, or both"]
     Request --> Decision{"RateLimitly decision"}
     Decision -->|Rejected| Deny["429<br/>nothing consumed"]
     Decision -->|Failure| Policy["Configured<br/>fail-open / fail-close"]
-    Decision -->|Granted| Content["Resources consumed<br/>serve or proxy content"]
+    Decision -->|Granted| Content["Requested resources consumed, if any<br/>serve or proxy content"]
     Content -. "when guarded and completed" .-> Report["Optional latency report"]
     Report --> Trackers["Latency trackers"]
     Trackers -. "evaluated by future guards" .-> Decision
 ```
 
 The version-matched C-client documentation is authoritative for the
-[operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model)
+[operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model)
 and the distinction between
-[resource requests and latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/README.md#core-operations).
+[resource requests and latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/README.md#core-operations).
 
 ## Three small nginx examples
 
@@ -126,6 +128,21 @@ valid grant, `rl-nginx` measures from nginx request start to log phase and sends
 the resulting service latency independently. The module sends no report for a
 rejection, dependency failure, or aborted client.
 
+A guard can also be the complete admission policy when the operation does not
+consume a rate-limited resource:
+
+```nginx
+location /inventory-health/ {
+  ratelimitly guard=inventory_latency;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+This sends a Rate Request with no resource consumptions and one latency guard.
+A passing guard admits the HTTP request; a failing guard returns `429`. After
+a valid grant and completed admitted work, nginx reports the measured latency
+under the same eligibility rules as a mixed resource-and-guard request.
+
 ## Allow, deny, and failure are different outcomes
 
 Every protected request must distinguish three outcomes:
@@ -147,7 +164,7 @@ exact release scope is in [the compatibility guide](docs/compatibility.md).
 ## Quick Start
 
 The commands below use the repository's pinned nginx `1.31.1` submodule and
-automatically fetch the locked public `rl-c-client` `v0.5.1` release. No private
+automatically fetch the locked public `rl-c-client` `v0.6.0` release. No private
 repository, RateLimitly server, tenant, or API key is needed to build and run
 the public test suite.
 
@@ -270,12 +287,12 @@ read the [configuration guide](docs/configuration.md) before deploying. Treat
   Runtime failures apply `ratelimitly_fail` and leave the variable unset.
 
 `rl-c-client` owns the client mechanics beneath this contract. Its
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy)
 defines fan-out, oldest-server preference, replay, completion delivery, and
 deduplication TTL. Its
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh)
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh)
 and
-[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#error-codes)
+[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#error-codes)
 sections define the client behavior that the module adapts to nginx.
 
 This module does not create tenants, issue credentials, manage RateLimitly DNS,
@@ -296,7 +313,9 @@ or include a RateLimitly server.
 - `ratelimitly_zone <name> "bucket=<template>" rate=<rate>;`
 - `ratelimitly_group <name> zone=<zone> ...;`
 - `ratelimitly_guard <name> "service=<template>" threshold=<duration> ...;`
-- `ratelimitly zone=<name>|group=<name> [guard=<name>] ...;`
+- `ratelimitly zone=<name> [guard=<name>] ...;`,
+  `ratelimitly group=<name> [guard=<name>] ...;`, or
+  `ratelimitly guard=<name> [guard=<name>] ...;`
 - `ratelimitly_label "<template>";`
 
 Rendered bucket and service keys are limited to 1024 bytes; labels are limited
@@ -320,7 +339,7 @@ Supported builds use immutable inputs:
 | --- | --- |
 | nginx stable | `release-1.30.2` at `a92a537860c7b87d3793d9eb41c9cf3ed833b53c` |
 | nginx mainline and default submodule | `release-1.31.1` at `d44205284fa41662da803b796d6056fc1e59b1f3` |
-| `rl-c-client` | `v0.5.0` at `22cdd47b2cc802e2d758423c7eab02bf1c94bfe4` |
+| `rl-c-client` | `v0.6.0` at `a9cfc87e7eb90a99d77028b18d1079b301cf619c` |
 
 Set `NGINX_SRC=/path/to/nginx-src` when testing another supported nginx source
 tree. Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally developing
@@ -378,8 +397,8 @@ for those workflows.
 
 ## Documentation and Project Links
 
-- [RateLimitly operations in rl-c-client v0.5.0](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/README.md#core-operations)
-- [C-client v0.5.0 public API and policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md)
+- [RateLimitly operations in rl-c-client v0.6.0](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/README.md#core-operations)
+- [C-client v0.6.0 public API and policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md)
 - [Documentation index](docs/index.md)
 - [Build and installation](docs/build.md)
 - [Configuration](docs/configuration.md)

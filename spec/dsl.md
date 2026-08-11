@@ -5,9 +5,9 @@ guidance for selecting variables and constructing identities is normative here
 and explained with examples in
 [Configuring rl-nginx](../docs/configuration.md).
 The locked C-client remains authoritative for the underlying
-[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials)
+[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#credentials)
 and
-[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids);
+[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids);
 this document defines how nginx directives provide and validate those values.
 
 ## Scope and activation
@@ -315,16 +315,21 @@ deduplicate repeated zone references; each occurrence maps to a ResourceBlock.
 ```nginx
 ratelimitly zone=<name> [guard=<guard1> ...];
 ratelimitly group=<name> [guard=<guard1> ...];
+ratelimitly guard=<guard1> [guard=<guard2> ...];
 ```
 
-Each directive MUST contain exactly one `zone=` or `group=` reference and MAY
-contain zero or more `guard=` references. Every reference MUST be nonempty and
-MUST already exist. Unknown arguments and a rule containing both or neither
-resource reference are configuration errors, including when either textual
+Each directive MUST contain either exactly one `zone=` or `group=` reference,
+or at least one `guard=` reference. A resource reference MAY be accompanied by
+zero or more guards; a rule without a resource reference MUST contain one or
+more guards. Every reference MUST be nonempty and MUST already exist. Unknown
+arguments, both resource-reference kinds in one rule, and a rule with neither
+a resource nor a guard are configuration errors, including when a textual
 reference has an empty value.
 
 Multiple rules in one effective context are combined into one RateLimitly
-request. Zones, including repeated references, remain separate ResourceBlocks.
+request. A request MAY contain zero ResourceBlocks when its effective rules
+contain guards only. Zones, including repeated references, remain separate
+ResourceBlocks.
 Repeated references to the same guard definition are deduplicated; distinct
 guards remain in first-seen rule order.
 
