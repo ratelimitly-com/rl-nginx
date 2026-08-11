@@ -218,6 +218,18 @@ create_client(fixture_t *fixture)
 }
 
 static void
+fill_guard(r_latency_guard_t *guard)
+{
+    memset(guard, 0, sizeof(*guard));
+    memcpy(guard->latency_tracker_id, "contract-service", 16u);
+    guard->threshold_ms = 50u;
+    guard->ttl_ms = 1000u;
+    guard->max_samples = 10u;
+    guard->buffer_size = 16u;
+    guard->min_sample_threshold = 1u;
+}
+
+static void
 fill_request(r_resource_request_t *resource, r_latency_guard_t *guard,
     char label[16])
 {
@@ -227,13 +239,7 @@ fill_request(r_resource_request_t *resource, r_latency_guard_t *guard,
     resource->rate_limit = 10u;
     resource->tokens_requested = 1u;
 
-    memset(guard, 0, sizeof(*guard));
-    memcpy(guard->latency_tracker_id, "contract-service", 16u);
-    guard->threshold_ms = 50u;
-    guard->ttl_ms = 1000u;
-    guard->max_samples = 10u;
-    guard->buffer_size = 16u;
-    guard->min_sample_threshold = 1u;
+    fill_guard(guard);
     memcpy(label, "contract-label", sizeof("contract-label"));
 }
 
@@ -341,6 +347,56 @@ test_success_callback(void)
         r_client_destroy(client);
         return 1;
     }
+    r_client_destroy(client);
+    return 0;
+}
+
+static int
+test_guard_only_success_callback(void)
+{
+    fixture_t fixture = { .now_ms = 1000000u };
+    r_latency_guard_t guard;
+    r_client_req_t *request = NULL;
+    uint8_t response[1200];
+    size_t response_len = 0u;
+    r_addr_t source;
+    r_client_t *client = create_client(&fixture);
+    int start_status;
+
+    fill_guard(&guard);
+    start_status = client == NULL ? RCLIENT_ERR_CONFIG
+        : r_client_check_rate_limit_async_borrowed(client, NULL, 0u,
+            &guard, 1u, NULL, 0u, rate_callback, &fixture, &request);
+    if (check(client != NULL, "could not create guard-only fixture")
+        || check(start_status == RCLIENT_OK,
+            "valid guard-only borrowed start failed")
+        || check(request != NULL,
+            "guard-only start did not publish a request handle")
+        || check(build_response(&fixture, response, &response_len) == 0,
+            "could not build a valid guard-only response"))
+    {
+        r_client_destroy(client);
+        return 1;
+    }
+
+    fixture.expected_request = request;
+    fill_source(&source);
+    if (check(r_client_on_datagram(client, response, response_len, &source)
+            == RCLIENT_OK,
+            "valid guard-only response was rejected")
+        || check(fixture.rate_callback_count == 1u
+            && fixture.rate_status == RCLIENT_OK
+            && fixture.callback_request_matched
+            && fixture.callback_had_result,
+            "guard-only callback contract changed")
+        || check(fixture.callback_resource_count == 0u
+            && fixture.callback_guard_count == 1u,
+            "guard-only callback result cardinality changed"))
+    {
+        r_client_destroy(client);
+        return 1;
+    }
+
     r_client_destroy(client);
     return 0;
 }
@@ -546,6 +602,7 @@ int
 main(void)
 {
     if (test_success_callback() != 0
+        || test_guard_only_success_callback() != 0
         || test_start_failure() != 0
         || test_timeout_completion() != 0
         || test_cancel_retires_request() != 0

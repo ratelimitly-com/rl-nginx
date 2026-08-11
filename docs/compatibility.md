@@ -14,7 +14,7 @@ gates below pass for the release candidate.
 | Architectures | `x86_64` and `aarch64` |
 | nginx module modes | Static and dynamic |
 | nginx releases | Stable `1.30.2` and mainline `1.31.1` |
-| `rl-c-client` | [`v0.5.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.5.1) at `22cdd47b2cc802e2d758423c7eab02bf1c94bfe4` |
+| `rl-c-client` | [`v0.6.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.6.0) at `a9cfc87e7eb90a99d77028b18d1079b301cf619c` |
 
 Public preview means the module is suitable for evaluation and controlled
 deployments after operators test their exact nginx build and failure policy. It
@@ -38,7 +38,7 @@ include the rendered service, TTL, maximum samples, final effective buffer
 size, and minimum sample threshold. These canonical IDs prevent two different
 server-state definitions from accidentally sharing one counter or tracker.
 The derivation contract itself is owned by the C client and documented in
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids);
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids);
 this section documents only the deployment impact of adopting it in rl-nginx.
 
 Consequently, the first v0.5.0 request for an existing configuration does not

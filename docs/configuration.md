@@ -10,7 +10,7 @@ This guide explains how nginx directives construct those operations. For the
 underlying meanings of resource requests, latency reports, API-key quotas, and
 client policy, follow the versioned `rl-c-client` links in the relevant
 sections or start with its
-[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#operation-model).
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model).
 
 ## Minimal configuration
 
@@ -60,9 +60,9 @@ first resolves its access policy, including `allow`/`deny`, `auth_basic`,
 routing such as `try_files` also runs before the RateLimitly request.
 
 A request rejected or finalized before that point does not reach RateLimitly
-and does not consume a RateLimitly resource. A valid RateLimitly allow means the
-requested resource has been consumed; the module then advances directly to the
-selected content handler or upstream. A later disconnect, content error, or
+and does not consume a RateLimitly resource. A valid RateLimitly allow means
+every requested resource, if any, has been consumed; the module then advances
+directly to the selected content handler or upstream. A later disconnect, content error, or
 upstream failure does not refund that consumption. `ratelimitly_fail open` is
 different: it advances without a valid decision and therefore without a
 guarantee that RateLimitly recorded consumption.
@@ -114,7 +114,7 @@ change produces a new resource ID and starts new bucket state, so version and
 roll out such a change as an identity migration.
 
 The exact, cross-client identity contract is defined by the C client's
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids).
 `rl-nginx` owns only the rendered name and effective nginx rate/window values
 passed to those helpers.
 
@@ -213,9 +213,9 @@ its unredacted output.
 
 The encoded fields, client-side checks, and server-enforced quota boundaries
 are documented in the C client's
-[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#credentials)
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#credentials)
 section. DNS target naming and refresh behavior are client-owned; see
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#dns-refresh).
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh).
 
 ## Request and failure policy
 
@@ -306,7 +306,7 @@ against one API key and be rejected against another.
 See the normative
 [Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
 the authoritative C-client
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy)
 for response selection, replay, final-phase, completion-delivery, and
 deduplication semantics.
 
@@ -431,6 +431,21 @@ location /api/ {
 }
 ```
 
+If access depends only on service health and consumes no rate-limited
+resource, omit the zone or group:
+
+```nginx
+location /health-sensitive/ {
+  ratelimitly guard=api_latency;
+  proxy_pass http://127.0.0.1:9000;
+}
+```
+
+This sends a normal Rate Request with zero resources and the referenced guard.
+A passing guard admits the request, a failing guard returns `429`, and a client
+or transport failure follows `ratelimitly_fail`. The latency-report eligibility
+rules are identical to those of a guard attached to a resource request.
+
 Guard threshold and TTL milliseconds and the three sample-count fields must fit
 an unsigned 32-bit wire field. Threshold and TTL must be positive, and a
 unitless duration means seconds. `max_samples` must be nonzero. When
@@ -465,7 +480,7 @@ that threshold. The default is `8`.
 
 Tracker fields and the independence of reports from resource requests are
 defined in the C client's
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#latency-guards-and-independent-reports).
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#latency-guards-and-independent-reports).
 This module adds the HTTP-specific eligibility rule and the measurement from
 request start to nginx log phase described above.
 
@@ -508,8 +523,8 @@ protect and rotate the logs, and plan for volume on hot paths.
 Tenant, credential, request-policy, failure, bind, debug, zone, group, and guard
 definitions belong at `http` scope. Protected `server` or `location` blocks
 reference zones, groups, and guards with `ratelimitly` directives. A location
-without a `ratelimitly zone=...` or `ratelimitly group=...` reference is not
-protected.
+without a `ratelimitly zone=...`, `ratelimitly group=...`, or guard-only
+`ratelimitly guard=...` reference is not protected.
 
 See [the DSL reference](../spec/dsl.md) for complete syntax and
 [Operations](operations.md) for rollout, monitoring, outage, and recovery

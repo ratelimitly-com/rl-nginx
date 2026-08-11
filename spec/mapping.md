@@ -6,10 +6,10 @@ configuration validation are defined in [Configuration DSL](dsl.md).
 
 The client structures and canonical derivation algorithms are defined by the
 locked C-client's
-[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#resource-requests),
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#latency-guards-and-independent-reports),
+[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-requests),
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#latency-guards-and-independent-reports),
 and
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.5.1/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids).
 This document specifies which nginx values rl-nginx supplies to that API.
 
 ## Resource mapping
@@ -75,9 +75,10 @@ rate-request and latency-report construction.
 ## Rate request composition
 
 The module passes the resource array, guard array, and optional metrics label
-to `r_client_check_rate_limit_async_borrowed`. The C client builds one rate
-request using the configured tenant key ID and authentication material and a
-fresh request ID.
+to `r_client_check_rate_limit_async_borrowed`. For a guard-only rule the
+resource pointer is null and the resource count is zero. The C client builds
+one rate request using the configured tenant key ID and authentication
+material and a fresh request ID.
 
 The effective label is passed with its explicit byte length. An unset or empty
 rendered label is represented by a null pointer/zero length and MUST omit the

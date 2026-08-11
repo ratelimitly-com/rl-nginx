@@ -84,7 +84,8 @@ reported count and output order to contain only usable addresses.
 `test-c-client-contract.sh` links to the selected C client and its released
 responder protocol fixture. It makes the module's otherwise out-of-tree
 assumptions executable: create-time borrowing, non-callback start errors,
-asynchronous successful start, callback identity and lifetime, deadline and
+asynchronous successful start, guard-only zero-resource request and callback
+cardinality, callback identity and lifetime, deadline and
 synchronous timeout behavior, callback-free cancel/destroy, late-response
 suppression, and resolver-cancel reentrancy. It runs against the lock in
 required CI and against `rl-c-client/main` in the scheduled drift workflow.

@@ -148,9 +148,11 @@ post-response latency reporting:
 ```
 
 The matrix covers a passing guard, a denying guard, two guards attached to one
-protected location, request-start fail-open, timeout fail-open, and client
-abort before a verdict. It verifies the public responder sees the expected
-guard/resource request shape, guard denial returns `429`, valid allowed guarded
+protected location, guard-only allow and deny requests with zero resources,
+request-start fail-open, timeout fail-open, and client abort before a verdict.
+It verifies the public responder sees the expected guard/resource request
+shape, including exact zero-resource cardinality and duplicate-guard
+deduplication. Guard denial returns `429`, valid allowed guarded
 requests send a post-response `latency_report` with the expected report count,
 and every invalid or absent admission suppresses both attempted and delivered
 latency reports. Each case still requires worker survival, a valid follow-up,

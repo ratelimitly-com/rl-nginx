@@ -52,8 +52,8 @@ is Linux with glibc on `x86_64` and `aarch64`, nginx `1.30.2` and `1.31.1`, and
 the locked `rl-c-client` `v0.4.0` revision that `0.1.0-rc.3` actually shipped.
 
 `main` — and therefore the next release candidate — has moved to the locked
-`rl-c-client` `v0.5.0` revision. Report against the combination you are running:
-a published `0.1.0-rc.3` deployment pairs with `v0.4.0`, not `v0.5.0`.
+`rl-c-client` `v0.6.0` revision. Report against the combination you are running:
+a published `0.1.0-rc.3` deployment pairs with `v0.4.0`, not `v0.6.0`.
 
 The preview does not promise ABI or configuration stability across the `0.1.x`
 line.
