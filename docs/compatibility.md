@@ -14,7 +14,7 @@ gates below pass for the release candidate.
 | Architectures | `x86_64` and `aarch64` |
 | nginx module modes | Static and dynamic |
 | nginx releases | Stable `1.30.2` and mainline `1.31.1` |
-| `rl-c-client` | [`v0.6.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v0.6.0) at `a9cfc87e7eb90a99d77028b18d1079b301cf619c` |
+| `rl-c-client` | [`v1.0.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v1.0.0) at `22fc045717ef01e37ab483e9a48e539845ae8124` |
 
 Public preview means the module is suitable for evaluation and controlled
 deployments after operators test their exact nginx build and failure policy. It
@@ -30,6 +30,16 @@ the default checkout contains local changes. The direct
 [C-client lifecycle probe](c-client.md#executable-compatibility-probe) binds the
 callback and ownership behavior required by the nginx adapter.
 
+### v1.0.0 API-key migration
+
+`rl-c-client v1.0.0` accepts API-key credential format 1 only. Legacy
+unversioned keys and unknown versions are invalid; there is no compatibility
+decoder or fallback. Reissue API keys before upgrading rl-nginx and validate
+the rendered configuration with `nginx -t`. Because the C public structure
+also gained `format_version` and `rate_window_size_ms_max`, rebuild rl-nginx
+and the C client together from the exact locked sources rather than combining
+old headers or libraries with the new module.
+
 ### v0.5.0 state-ID migration
 
 The v0.5.0 dependency changes the identifier boundary deliberately. Resource
@@ -38,7 +48,7 @@ include the rendered service, TTL, maximum samples, final effective buffer
 size, and minimum sample threshold. These canonical IDs prevent two different
 server-state definitions from accidentally sharing one counter or tracker.
 The derivation contract itself is owned by the C client and documented in
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids);
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids);
 this section documents only the deployment impact of adopting it in rl-nginx.
 
 Consequently, the first v0.5.0 request for an existing configuration does not

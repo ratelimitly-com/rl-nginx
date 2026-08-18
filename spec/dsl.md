@@ -5,9 +5,9 @@ guidance for selecting variables and constructing identities is normative here
 and explained with examples in
 [Configuring rl-nginx](../docs/configuration.md).
 The locked C-client remains authoritative for the underlying
-[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#credentials)
+[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials)
 and
-[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids);
+[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids);
 this document defines how nginx directives provide and validate those values.
 
 ## Scope and activation

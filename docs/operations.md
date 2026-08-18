@@ -36,7 +36,7 @@ nginx behavior from the client behavior linked to its locked release.
   every nginx failure.
 
 The C client's
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy)
 is authoritative for response selection, replay schedules, completion
 delivery, and deduplication semantics.
 
@@ -85,9 +85,9 @@ Server or location resolver overrides do not affect RateLimitly discovery.
 
 Target naming, membership validation, and refresh pacing are client-owned. See
 the version-matched C-client
-[DNS contract](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/IO_ABSTRACTION.md#dns)
+[DNS contract](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/IO_ABSTRACTION.md#dns)
 and
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh)
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh)
 instead of inferring client behavior from nginx resolver configuration alone.
 
 The worker socket is unconnected and can receive any datagram addressed to its
@@ -205,7 +205,7 @@ does not fall back to the tenant name on a fixed UDP port.
 For the exact distinction between synchronous submission errors, asynchronous
 timeouts, discarded packet-local errors, and server-side silent rejection, see
 the C-client
-[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#error-codes).
+[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#error-codes).
 
 ## Observability and log handling
 
@@ -288,7 +288,7 @@ production credential:
 
 The encoded credential fields and quota enforcement points are defined in the
 C-client
-[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#credentials)
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials)
 section. This runbook owns the additional nginx process-memory, configuration,
 reload, and support-bundle controls below.
 
@@ -350,7 +350,7 @@ unit or select a different policy only after confirming the path is healthy
 but legitimately slower than the configured budget. In particular, the client
 documents why a wrong credential,
 wrong key ID, skewed clock, or unusable authenticated response can all end as
-[`RCLIENT_ERR_TIMEOUT`](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#error-codes).
+[`RCLIENT_ERR_TIMEOUT`](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#error-codes).
 
 ### Unexpected `429`
 

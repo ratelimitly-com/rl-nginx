@@ -10,7 +10,7 @@ This guide explains how nginx directives construct those operations. For the
 underlying meanings of resource requests, latency reports, API-key quotas, and
 client policy, follow the versioned `rl-c-client` links in the relevant
 sections or start with its
-[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model).
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#operation-model).
 
 ## Minimal configuration
 
@@ -114,7 +114,7 @@ change produces a new resource ID and starts new bucket state, so version and
 roll out such a change as an identity migration.
 
 The exact, cross-client identity contract is defined by the C client's
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids).
 `rl-nginx` owns only the rendered name and effective nginx rate/window values
 passed to those helpers.
 
@@ -195,15 +195,17 @@ redirect decision traffic or turn enforcement into an outage. Set an explicit
 deployment network policy, and monitor DNS failure/recovery as described in
 [Operations](operations.md).
 
-`ratelimitly_auth_key` is a tenant credential. It embeds the auth mode and key
-ID, and nginx rejects a malformed key during configuration loading. Keep the
+`ratelimitly_auth_key` is an API-key credential. Format 1 embeds a format
+version, auth mode, key ID, 32-byte secret, and six packed quotas. The locked
+C client intentionally rejects legacy unversioned credentials, unknown
+versions, and malformed quota words during configuration loading. Keep the
 real value out of the repository and copyable examples. A deployment secret
 manager can render an include file readable only by the nginx master identity,
 for example:
 
 ```nginx
 # Main nginx configuration:
-include /etc/nginx/ratelimitly/tenant.conf;
+include /etc/nginx/ratelimitly/api-key.conf;
 ```
 
 Protect the included file according to the nginx master process and deployment
@@ -213,9 +215,15 @@ its unredacted output.
 
 The encoded fields, client-side checks, and server-enforced quota boundaries
 are documented in the C client's
-[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#credentials)
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials)
 section. DNS target naming and refresh behavior are client-owned; see
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh).
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh).
+
+The client also rejects a complete resource request before DNS or UDP when a
+rendered zone's rate window exceeds `rate_window_size_ms_max`. Static and
+variable-driven `rate=` values follow the same request-time check. This is a
+configuration or dependency failure governed by `ratelimitly_fail`; it is not
+a valid RateLimitly rejection.
 
 ## Request and failure policy
 
@@ -306,7 +314,7 @@ against one API key and be rejected against another.
 See the normative
 [Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
 the authoritative C-client
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy)
 for response selection, replay, final-phase, completion-delivery, and
 deduplication semantics.
 
@@ -506,7 +514,7 @@ available. A positive value requires the estimated insertion rate to reach
 that threshold. The default is `8`.
 
 The C client defines tracker fields and operation independence in
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#latency-guards-and-independent-reports).
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#latency-guards-and-independent-reports).
 
 ## Labels and data exposure
 

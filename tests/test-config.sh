@@ -89,7 +89,10 @@ run_example_case() {
   fi
 }
 
-VALID_AUTH_KEY='rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjmkmcwk6tqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqq0n6jux'
+VALID_AUTH_KEY='rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcvcn0x5'
+LEGACY_AUTH_KEY='rl-aes1qyqqqqqqqqqqq6uxkfel7d8uuxwkhqzwladr74684kjw4g30r4yuq8jjmkmcwk6tqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqq0n6jux'
+UNKNOWN_VERSION_AUTH_KEY='rl-aes1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcchgqf0'
+INVALID_QUOTA_AUTH_KEY='rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqqqqqurys6m'
 VALID_AUTH="  ratelimitly_auth_key ${VALID_AUTH_KEY};"
 VALID_DNS_SRV='  ratelimitly_dns_srv tenant.example.invalid;'
 VALID_ZONE='  ratelimitly_zone primary "bucket=primary" rate=100r/s;'
@@ -170,6 +173,15 @@ run_case missing_auth reject \
   'ratelimitly_auth_key is required'
 run_case invalid_auth reject \
   $'  ratelimitly_auth_key not-a-key;' \
+  'invalid ratelimitly_auth_key bech32 value'
+run_case legacy_unversioned_auth reject \
+  "  ratelimitly_auth_key ${LEGACY_AUTH_KEY};" \
+  'invalid ratelimitly_auth_key bech32 value'
+run_case unknown_auth_format_version reject \
+  "  ratelimitly_auth_key ${UNKNOWN_VERSION_AUTH_KEY};" \
+  'invalid ratelimitly_auth_key bech32 value'
+run_case invalid_auth_quota_word reject \
+  "  ratelimitly_auth_key ${INVALID_QUOTA_AUTH_KEY};" \
   'invalid ratelimitly_auth_key bech32 value'
 
 run_case malformed_static_rate reject \
