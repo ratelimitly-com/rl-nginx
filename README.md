@@ -57,9 +57,9 @@ flowchart LR
 ```
 
 The version-matched C-client documentation is authoritative for the
-[operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model)
+[operation model](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#operation-model)
 and the distinction between
-[resource requests and latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/README.md#core-operations).
+[resource requests and latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/README.md#core-operations).
 
 ## Three small nginx examples
 
@@ -170,7 +170,7 @@ exact release scope is in [the compatibility guide](docs/compatibility.md).
 ## Quick Start
 
 The commands below use the repository's pinned nginx `1.31.1` submodule and
-automatically fetch the locked public `rl-c-client` `v0.6.0` release. No private
+automatically fetch the locked public `rl-c-client` `v1.0.0` release. No private
 repository, RateLimitly server, tenant, or API key is needed to build and run
 the public test suite.
 
@@ -295,12 +295,12 @@ read the [configuration guide](docs/configuration.md) before deploying. Treat
   Runtime failures apply `ratelimitly_fail` and leave the variable unset.
 
 `rl-c-client` owns the client mechanics beneath this contract. Its
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy)
 defines fan-out, oldest-server preference, replay, completion delivery, and
 deduplication TTL. Its
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh)
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh)
 and
-[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#error-codes)
+[Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#error-codes)
 sections define the client behavior that the module adapts to nginx.
 
 This module does not create tenants, issue credentials, manage RateLimitly DNS,
@@ -349,7 +349,7 @@ Supported builds use immutable inputs:
 | --- | --- |
 | nginx stable | `release-1.30.2` at `a92a537860c7b87d3793d9eb41c9cf3ed833b53c` |
 | nginx mainline and default submodule | `release-1.31.1` at `d44205284fa41662da803b796d6056fc1e59b1f3` |
-| `rl-c-client` | `v0.6.0` at `a9cfc87e7eb90a99d77028b18d1079b301cf619c` |
+| `rl-c-client` | `v1.0.0` at `22fc045717ef01e37ab483e9a48e539845ae8124` |
 
 Set `NGINX_SRC=/path/to/nginx-src` when testing another supported nginx source
 tree. Set `RCLIENT_DIR=/path/to/rl-c-client` only when intentionally developing
@@ -407,8 +407,8 @@ for those workflows.
 
 ## Documentation and Project Links
 
-- [RateLimitly operations in rl-c-client v0.6.0](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/README.md#core-operations)
-- [C-client v0.6.0 public API and policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md)
+- [RateLimitly operations in rl-c-client v1.0.0](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/README.md#core-operations)
+- [C-client v1.0.0 public API and policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md)
 - [Documentation index](docs/index.md)
 - [Build and installation](docs/build.md)
 - [Configuration](docs/configuration.md)

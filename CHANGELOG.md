@@ -7,6 +7,12 @@ remain preview software and must not be treated as ABI-stable versions.
 
 ### Breaking
 
+- **API keys must use credential format 1.** The locked C-client dependency is
+  now `v1.0.0`, which intentionally rejects legacy unversioned credentials and
+  unknown format versions. Reissue every API key before deploying this
+  rl-nginx revision; a legacy value fails `nginx -t` instead of reaching a
+  worker.
+
 - **Latency tracker identity, guards, and reporting are now separate.** Define
   tracker state with `ratelimitly_tracker`, reference it from
   `ratelimitly_guard tracker=... threshold=...`, and opt into exactly one
@@ -55,6 +61,9 @@ remain preview software and must not be treated as ABI-stable versions.
 
 ### Changed
 
+- updated the supported public `rl-c-client` dependency to `v1.0.0`; resource
+  requests now inherit the client's local enforcement of the API key's
+  `rate_window_size_ms_max` before DNS, serialization, or UDP transmission;
 - updated the supported public `rl-c-client` dependency to `v0.6.0` and
   allowed a `ratelimitly` rule to contain one or more latency guards without a
   resource zone or group;

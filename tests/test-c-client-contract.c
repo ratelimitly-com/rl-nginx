@@ -182,6 +182,11 @@ create_client(fixture_t *fixture)
     if (r_client_parse_auth_key(auth_key, &key_info) != RCLIENT_OK) {
         return NULL;
     }
+    if (key_info.format_version != 1u
+        || key_info.rate_window_size_ms_max != UINT32_MAX)
+    {
+        return NULL;
+    }
 
     memset(&io, 0, sizeof(io));
     io.ctx = fixture;

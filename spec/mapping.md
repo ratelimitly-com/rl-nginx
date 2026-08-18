@@ -6,10 +6,10 @@ configuration validation are defined in [Configuration DSL](dsl.md).
 
 The client structures and canonical derivation algorithms are defined by the
 locked C-client's
-[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-requests),
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#latency-guards-and-independent-reports),
+[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-requests),
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#latency-guards-and-independent-reports),
 and
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids).
 This document specifies which nginx values rl-nginx supplies to that API.
 
 ## Resource mapping

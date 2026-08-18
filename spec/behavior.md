@@ -5,7 +5,7 @@ Configuration syntax and wire-field construction are specified separately in
 [Configuration DSL](dsl.md) and [Wire mapping](mapping.md).
 The meanings of a resource request and an independent latency report come from
 the locked C-client
-[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#operation-model).
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#operation-model).
 
 ## Activation and request construction
 
@@ -85,14 +85,14 @@ DNS refresh policy remains client-owned and is not configurable through rl-nginx
 
 Fan-out, response preference, replay scheduling, completion delivery, and TTL
 derivation are client-owned and are defined in the locked
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#resource-request-ha-policy).
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy).
 The paragraphs above specify the supported nginx selections and their
 externally visible effect.
 
 The locked client requires SRV discovery. A failed, empty, or non-conforming
 membership fails with `RCLIENT_ERR_DNS`; there is no direct tenant-name/UDP
 port fallback. The client owns the corresponding
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v0.6.0/docs/api.md#dns-refresh)
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh)
 behavior.
 
 ## Decision contract
