@@ -67,7 +67,7 @@ the RateLimitly server ID used to validate and route responses. This synthetic
 shape uses the reserved, non-working `example.invalid` domain:
 
 ```text
-10 50 8080 s-396140499959812.tenant.example.invalid.
+10 50 29292 s-396140499959812.tenant.example.invalid.
 ```
 
 nginx must have a trusted runtime resolver declared directly in `http`:
