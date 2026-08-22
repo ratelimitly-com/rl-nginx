@@ -1,0 +1,1141 @@
+name: release
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'CHANGELOG.md'
+      - 'Makefile'
+      - 'VERSION'
+      - 'config'
+      - 'dependencies/**'
+      - 'integration-tests/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'tools/**'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.metadata.outputs.commit }}
+      epoch: ${{ steps.metadata.outputs.epoch }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve immutable build metadata
+        id: metadata
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d ' \r\n' < VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be numeric MAJOR.MINOR.PATCH, found: $version" >&2
+            echo "Release candidates such as 0.1.0-rc.3 are not releasable versions." >&2
+            exit 1
+          fi
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          release_tag="v${version}"
+          publish=false
+
+          remote_tag_exists() {
+            git ls-remote --exit-code --tags origin \
+              "refs/tags/${release_tag}" >/dev/null 2>&1
+          }
+
+          verify_tag_commit() {
+            git fetch --no-tags origin \
+              "+refs/tags/${release_tag}:refs/tags/${release_tag}"
+            local tag_commit
+            tag_commit="$(git rev-list -n 1 "refs/tags/${release_tag}")"
+            if [[ "$tag_commit" != "$commit" ]]; then
+              echo "$release_tag points to $tag_commit, expected $commit" >&2
+              exit 1
+            fi
+          }
+
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+                echo "refusing to publish from $GITHUB_REF" >&2
+                exit 1
+              fi
+              if gh release view "$release_tag" >/dev/null 2>&1; then
+                state="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
+                if [[ "$state" == true ]]; then
+                  # A leftover draft is a failed publish, not a shipped release.
+                  # Its tag is only created when the draft is published, so it is
+                  # verified only when it already exists on the remote.
+                  if remote_tag_exists; then
+                    verify_tag_commit
+                  fi
+                  publish=true
+                else
+                  echo "$release_tag already published; bump VERSION for the next release"
+                fi
+              elif remote_tag_exists; then
+                verify_tag_commit
+                publish=true
+              else
+                publish=true
+              fi
+              ;;
+            pull_request|workflow_dispatch)
+              ;;
+            *)
+              echo "unsupported release event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$epoch" =~ ^[0-9]+$ ]]
+          {
+            echo "commit=$commit"
+            echo "epoch=$epoch"
+            echo "publish=$publish"
+            echo "tag=$release_tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release metadata"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| version | \`$version\` |"
+            echo "| tag | \`$release_tag\` |"
+            echo "| commit | \`$commit\` |"
+            echo "| SOURCE_DATE_EPOCH | \`$epoch\` |"
+            echo "| publish | \`$publish\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  contracts:
+    name: Focused release contracts
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run repository workflow gates
+        run: |
+          make workflow-pin-test
+          make syntax
+
+      - name: Check release inputs agree with required CI
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          failures = []
+
+          entry = re.compile(
+              r"^[ \t]*- line:[ \t]*(\S+)[ \t]*$"
+              r"\n^[ \t]+ref:[ \t]*(\S+)[ \t]*$"
+              r"\n^[ \t]+commit:[ \t]*([0-9a-f]{40})[ \t]*$",
+              re.MULTILINE,
+          )
+          ci = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+          release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+          ci_matrix = {(ref, commit) for _line, ref, commit in entry.findall(ci)}
+          release_matrix = {
+              (ref, commit) for _line, ref, commit in entry.findall(release)
+          }
+          if len(release_matrix) != 2:
+              failures.append(
+                  f"release must build exactly two nginx releases, found {len(release_matrix)}"
+              )
+          if release_matrix != ci_matrix:
+              failures.append(
+                  "release nginx matrix diverges from required CI: "
+                  f"release={sorted(release_matrix)} ci={sorted(ci_matrix)}"
+              )
+
+          gitlink = subprocess.run(
+              ["git", "ls-files", "--stage", "--", "upstream-nginx"],
+              capture_output=True,
+              text=True,
+              check=False,
+          ).stdout.strip()
+          match = re.fullmatch(r"160000 ([0-9a-f]{40}) 0\tupstream-nginx", gitlink)
+          if match is None:
+              failures.append("could not read the upstream-nginx gitlink")
+          elif match.group(1) not in {commit for _ref, commit in release_matrix}:
+              failures.append("release nginx matrix does not contain the nginx gitlink")
+
+          # The asset set asserted by `aggregate` is written out by hand so a
+          # partial release is impossible to miss. Keep it identical to the
+          # matrix that produces it.
+          declared = re.search(
+              r"^          EXPECTED_MODULE_CELLS: \|\n((?:^            .*\n)+)",
+              release,
+              re.MULTILINE,
+          )
+          if declared is None:
+              failures.append("aggregate declares no expected module cells")
+          else:
+              cells = {
+                  tuple(row.split())
+                  for row in declared.group(1).strip().splitlines()
+              }
+              architectures = re.search(
+                  r"^        architecture:\n((?:^          - \S+\n)+)",
+                  release,
+                  re.MULTILINE,
+              )
+              if architectures is None:
+                  failures.append("release module job declares no architectures")
+              else:
+                  names = [
+                      row.strip().removeprefix("- ")
+                      for row in architectures.group(1).strip().splitlines()
+                  ]
+                  expected = {
+                      (line, ref, architecture)
+                      for line, ref, _commit in entry.findall(release)
+                      for architecture in names
+                  }
+                  if cells != expected:
+                      failures.append(
+                          "expected module cells diverge from the build matrix: "
+                          f"declared={sorted(cells)} matrix={sorted(expected)}"
+                      )
+
+          declared_sanitizers = re.search(
+              r"^          EXPECTED_SANITIZER_CELLS: \|\n((?:^            .*\n)+)",
+              release,
+              re.MULTILINE,
+          )
+          if declared_sanitizers is None:
+              failures.append("aggregate declares no expected sanitizer cells")
+          else:
+              sanitizer_cells = {
+                  tuple(row.split())
+                  for row in declared_sanitizers.group(1).strip().splitlines()
+              }
+              expected_sanitizers = {
+                  (line, ref) for line, ref, _commit in entry.findall(release)
+              }
+              if sanitizer_cells != expected_sanitizers:
+                  failures.append(
+                      "expected sanitizer cells diverge from the build matrix: "
+                      f"declared={sorted(sanitizer_cells)} "
+                      f"matrix={sorted(expected_sanitizers)}"
+                  )
+
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          heading = re.compile(rf"^## {re.escape(version)}(?:\s|$)", re.MULTILINE)
+          if heading.search(changelog) is None:
+              failures.append(
+                  f"CHANGELOG.md has no '## {version}' section for the release"
+              )
+
+          lock = Path("dependencies/rl-c-client.env").read_text(encoding="utf-8")
+          tag = re.search(r'^RL_C_CLIENT_TAG="(v[0-9]+\.[0-9]+\.[0-9]+)"$', lock, re.M)
+          commit = re.search(r'^RL_C_CLIENT_COMMIT="([0-9a-f]{40})"$', lock, re.M)
+          if tag is None or commit is None:
+              failures.append("dependencies/rl-c-client.env is not a pinned release")
+
+          if failures:
+              for failure in failures:
+                  print(f"FAIL release contracts: {failure}", file=sys.stderr)
+              sys.exit(1)
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("## Release contracts\n\n")
+              handle.write(f"- rl-c-client lock: `{tag.group(1)}` at `{commit.group(1)}`\n")
+              for ref, nginx_commit in sorted(release_matrix):
+                  handle.write(f"- nginx `{ref}` at `{nginx_commit}`\n")
+          print(
+              f"PASS release contracts: {len(release_matrix)} nginx releases, "
+              f"{len(cells)} module cells, CHANGELOG section for {version}"
+          )
+          PY
+
+  source:
+    name: Deterministic source archive
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the source archive twice and require identical bytes
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          staging="$RUNNER_TEMP/release-source"
+          mkdir -p "$staging"
+          archive="$staging/rl-nginx-${VERSION}-source.tar.gz"
+          repeat="$RUNNER_TEMP/repeat.tar.gz"
+          for target in "$archive" "$repeat"; do
+            git archive \
+              --format=tar \
+              --prefix="rl-nginx-${VERSION}/" \
+              "$COMMIT" \
+              | gzip -9 -n > "$target"
+          done
+          first="$(sha256sum "$archive" | cut -d' ' -f1)"
+          second="$(sha256sum "$repeat" | cut -d' ' -f1)"
+          if [[ "$first" != "$second" ]]; then
+            echo "source archive is not byte-reproducible: $first != $second" >&2
+            exit 1
+          fi
+          rm -f "$repeat"
+          echo "SOURCE_ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Verify the archive is complete, self-contained, and timestamped
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import sys
+          import tarfile
+
+          archive = os.environ["SOURCE_ARCHIVE"]
+          version = os.environ["VERSION"]
+          epoch = int(os.environ["SOURCE_DATE_EPOCH"])
+          root = f"rl-nginx-{version}"
+          prefix = f"{root}/"
+          required = [
+              "CHANGELOG.md",
+              "LICENSE",
+              "Makefile",
+              "VERSION",
+              "config",
+              "dependencies/rl-c-client.env",
+              "examples/minimal.conf",
+              "src/ngx_http_ratelimitly_module.c",
+              "tools/build-nginx.sh",
+              "tools/fetch-rl-c-client.sh",
+          ]
+          failures = []
+          with tarfile.open(archive, "r:gz") as handle:
+              members = handle.getmembers()
+              names = {member.name for member in members}
+              for member in members:
+                  if member.name != root and not member.name.startswith(prefix):
+                      failures.append(f"member escapes the version prefix: {member.name}")
+                  if ".." in member.name.split("/"):
+                      failures.append(f"member contains a parent path: {member.name}")
+                  if member.mtime != epoch:
+                      failures.append(
+                          f"{member.name} carries mtime {member.mtime}, expected {epoch}"
+                      )
+              for path in required:
+                  if f"{prefix}{path}" not in names:
+                      failures.append(f"archive is missing {path}")
+              try:
+                  recorded = handle.extractfile(f"{prefix}VERSION")
+              except KeyError:
+                  recorded = None
+              if recorded is None or recorded.read().decode().strip() != version:
+                  failures.append("archived VERSION does not match the release version")
+
+          if failures:
+              for failure in sorted(set(failures)):
+                  print(f"FAIL source archive: {failure}", file=sys.stderr)
+              sys.exit(1)
+          print(f"PASS source archive: {len(names)} members at epoch {epoch}")
+          PY
+
+      - name: Run the script syntax gate from the extracted archive
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          extracted="$RUNNER_TEMP/extracted"
+          mkdir -p "$extracted"
+          tar -xzf "$SOURCE_ARCHIVE" -C "$extracted"
+          make -C "$extracted/rl-nginx-${VERSION}" syntax
+
+      - name: Upload the source archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-source
+          path: ${{ runner.temp }}/release-source/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  module:
+    name: Module gate (${{ matrix.nginx.line }}, ${{ matrix.architecture }})
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+        architecture:
+          - amd64
+          - aarch64
+        include:
+          - architecture: amd64
+            machine: x86_64
+            runner: ubuntu-latest
+          - architecture: aarch64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Verify native architecture
+        run: test "$(uname -m)" = "${{ matrix.machine }}"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
+      - name: Build dynamic module
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+        run: make build BUILD_FLAGS="--dynamic --compat --clean --debug"
+
+      - name: Run the release-only dynamic relocation gate
+        run: make dynamic-relocation-test
+
+      - name: Record build evidence
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          NGINX_COMMIT: ${{ matrix.nginx.commit }}
+          NGINX_LINE: ${{ matrix.nginx.line }}
+          NGINX_REF: ${{ matrix.nginx.ref }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-module"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          architecture = os.environ["ARCHITECTURE"]
+          nginx_ref = os.environ["NGINX_REF"]
+          version = os.environ["VERSION"]
+          nginx_version = nginx_ref.removeprefix("release-")
+
+          module = Path("upstream-nginx/objs/ngx_http_rn_module.so")
+          if not module.is_file():
+              print("FAIL build evidence: dynamic module was not produced", file=sys.stderr)
+              sys.exit(1)
+          payload = module.read_bytes()
+
+          header = Path("upstream-nginx/src/core/nginx.h").read_text(encoding="utf-8")
+          declared = re.search(r'^#define nginx_version\s+(\d+)$', header, re.MULTILINE)
+          named = re.search(r'^#define NGINX_VERSION\s+"([^"]+)"$', header, re.MULTILINE)
+          if named is None or named.group(1) != nginx_version:
+              found = None if named is None else named.group(1)
+              print(
+                  f"FAIL build evidence: {nginx_ref} declares nginx {found}, "
+                  f"expected {nginx_version}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          auto_config = Path("upstream-nginx/objs/ngx_auto_config.h").read_text(
+              encoding="utf-8"
+          )
+          configure = re.search(
+              r'^#define NGX_CONFIGURE\s+"(.*)"$', auto_config, re.MULTILINE
+          )
+
+          def first_line(*command):
+              try:
+                  result = subprocess.run(
+                      command, capture_output=True, text=True, check=False
+                  )
+              except OSError:
+                  return "unknown"
+              return result.stdout.splitlines()[0].strip() if result.stdout else "unknown"
+
+          needed = sorted(
+              set(
+                  re.findall(
+                      r"\(NEEDED\)\s+Shared library: \[([^\]]+)\]",
+                      subprocess.run(
+                          ["readelf", "-d", str(module)],
+                          capture_output=True,
+                          text=True,
+                          check=True,
+                      ).stdout,
+                  )
+              )
+          )
+
+          lock = Path("dependencies/rl-c-client.env").read_text(encoding="utf-8")
+          client_tag = re.search(r'^RL_C_CLIENT_TAG="([^"]+)"$', lock, re.MULTILINE)
+          client_commit = re.search(r'^RL_C_CLIENT_COMMIT="([^"]+)"$', lock, re.MULTILINE)
+          if client_tag is None or client_commit is None:
+              print("FAIL build evidence: rl-c-client lock is unreadable", file=sys.stderr)
+              sys.exit(1)
+
+          evidence = {
+              "architecture": architecture,
+              "machine": os.uname().machine,
+              "runner_image": f"{os.environ.get('ImageOS', 'unknown')}"
+              f"/{os.environ.get('ImageVersion', 'unknown')}",
+              "rl_nginx_commit": os.environ["COMMIT"],
+              "nginx_line": os.environ["NGINX_LINE"],
+              "nginx_ref": nginx_ref,
+              "nginx_version": nginx_version,
+              "nginx_abi_version": int(declared.group(1)) if declared else None,
+              "nginx_commit": os.environ["NGINX_COMMIT"],
+              "nginx_configure": configure.group(1) if configure else "unknown",
+              "rl_c_client_tag": client_tag.group(1),
+              "rl_c_client_commit": client_commit.group(1),
+              "compiler": first_line("cc", "--version"),
+              "libc": first_line("ldd", "--version"),
+              "module_mode": "dynamic",
+              "module_bytes": len(payload),
+              "module_sha256": hashlib.sha256(payload).hexdigest(),
+              "module_needed": needed,
+              "gates": [
+                  'make build BUILD_FLAGS="--dynamic --compat --clean --debug"',
+                  "make dynamic-relocation-test",
+              ],
+          }
+
+          name = f"rl-nginx-{version}-nginx{nginx_version}-linux-{architecture}.json"
+          destination = Path(os.environ["RUNNER_TEMP"]) / "release-module" / name
+          destination.write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write(f"## nginx {nginx_version} / {architecture}\n\n")
+              handle.write(f"- nginx `{nginx_ref}` at `{evidence['nginx_commit']}`\n")
+              handle.write(
+                  f"- rl-c-client `{evidence['rl_c_client_tag']}` at "
+                  f"`{evidence['rl_c_client_commit']}`\n"
+              )
+              handle.write(f"- configure: `{evidence['nginx_configure']}`\n")
+              handle.write(f"- module sha256: `{evidence['module_sha256']}`\n")
+              handle.write(f"- shared libraries: `{', '.join(needed)}`\n")
+          print(f"PASS build evidence: {name}")
+          PY
+
+      - name: Upload build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-module-${{ matrix.nginx.line }}-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/release-module/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  sanitizers:
+    name: Sanitizer gate (${{ matrix.nginx.line }})
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx:
+          - line: stable
+            ref: release-1.30.2
+            commit: a92a537860c7b87d3793d9eb41c9cf3ed833b53c
+          - line: mainline
+            ref: release-1.31.1
+            commit: d44205284fa41662da803b796d6056fc1e59b1f3
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Select supported nginx release
+        run: |
+          git -C upstream-nginx fetch --depth=1 origin "refs/tags/${{ matrix.nginx.ref }}:refs/tags/${{ matrix.nginx.ref }}"
+          git -C upstream-nginx checkout --detach "${{ matrix.nginx.commit }}"
+          test "$(git -C upstream-nginx rev-parse HEAD)" = "${{ matrix.nginx.commit }}"
+
+      - name: Run sanitized lifecycle gate
+        run: SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 make sanitizers
+
+      - name: Record sanitizer evidence
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          NGINX_COMMIT: ${{ matrix.nginx.commit }}
+          NGINX_LINE: ${{ matrix.nginx.line }}
+          NGINX_REF: ${{ matrix.nginx.ref }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-sanitizers"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          nginx_ref = os.environ["NGINX_REF"]
+          version = os.environ["VERSION"]
+          nginx_version = nginx_ref.removeprefix("release-")
+
+          header = Path("upstream-nginx/src/core/nginx.h").read_text(encoding="utf-8")
+          named = re.search(r'^#define NGINX_VERSION\s+"([^"]+)"$', header, re.MULTILINE)
+          if named is None or named.group(1) != nginx_version:
+              found = None if named is None else named.group(1)
+              print(
+                  f"FAIL sanitizer evidence: {nginx_ref} declares nginx {found}, "
+                  f"expected {nginx_version}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          lock = Path("dependencies/rl-c-client.env").read_text(encoding="utf-8")
+          client_tag = re.search(r'^RL_C_CLIENT_TAG="([^"]+)"$', lock, re.MULTILINE)
+          client_commit = re.search(r'^RL_C_CLIENT_COMMIT="([^"]+)"$', lock, re.MULTILINE)
+          if client_tag is None or client_commit is None:
+              print("FAIL sanitizer evidence: rl-c-client lock is unreadable", file=sys.stderr)
+              sys.exit(1)
+
+          def first_line(*command):
+              try:
+                  result = subprocess.run(
+                      command, capture_output=True, text=True, check=False
+                  )
+              except OSError:
+                  return "unknown"
+              return result.stdout.splitlines()[0].strip() if result.stdout else "unknown"
+
+          evidence = {
+              "machine": os.uname().machine,
+              "runner_image": f"{os.environ.get('ImageOS', 'unknown')}"
+              f"/{os.environ.get('ImageVersion', 'unknown')}",
+              "rl_nginx_commit": os.environ["COMMIT"],
+              "nginx_line": os.environ["NGINX_LINE"],
+              "nginx_ref": nginx_ref,
+              "nginx_version": nginx_version,
+              "nginx_commit": os.environ["NGINX_COMMIT"],
+              "rl_c_client_tag": client_tag.group(1),
+              "rl_c_client_commit": client_commit.group(1),
+              "compiler": first_line("cc", "--version"),
+              "sanitizers": ["address", "undefined", "leak"],
+              "runs": 1,
+              "result": "pass",
+              "gates": ["SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 make sanitizers"],
+          }
+
+          name = f"rl-nginx-{version}-nginx{nginx_version}-sanitizers.json"
+          destination = Path(os.environ["RUNNER_TEMP"]) / "release-sanitizers" / name
+          destination.write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write(f"## Sanitizers / nginx {nginx_version}\n\n")
+              handle.write(f"- nginx `{nginx_ref}` at `{evidence['nginx_commit']}`\n")
+              handle.write(
+                  f"- rl-c-client `{evidence['rl_c_client_tag']}` at "
+                  f"`{evidence['rl_c_client_commit']}`\n"
+              )
+              handle.write("- ASan, UBSan, and LeakSanitizer: pass\n")
+          print(f"PASS sanitizer evidence: {name}")
+          PY
+
+      - name: Upload sanitizer evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-sanitizers-${{ matrix.nginx.line }}
+          path: ${{ runner.temp }}/release-sanitizers/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  aggregate:
+    name: Validate complete release
+    needs:
+      - metadata
+      - contracts
+      - source
+      - module
+      - sanitizers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download every release input
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/release-inputs
+
+      - name: Reject partial or unexpected release sets
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          EXPECTED_MODULE_CELLS: |
+            stable release-1.30.2 amd64
+            stable release-1.30.2 aarch64
+            mainline release-1.31.1 amd64
+            mainline release-1.31.1 aarch64
+          EXPECTED_SANITIZER_CELLS: |
+            stable release-1.30.2
+            mainline release-1.31.1
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          commit = os.environ["COMMIT"]
+          inputs = Path(os.environ["RUNNER_TEMP"]) / "release-inputs"
+          assets = Path(os.environ["RUNNER_TEMP"]) / "release-assets"
+          assets.mkdir(parents=True, exist_ok=True)
+          failures = []
+
+          cells = [
+              tuple(row.split())
+              for row in os.environ["EXPECTED_MODULE_CELLS"].strip().splitlines()
+          ]
+          sanitizer_cells = [
+              tuple(row.split())
+              for row in os.environ["EXPECTED_SANITIZER_CELLS"].strip().splitlines()
+          ]
+          expected_inputs = {"release-source": {f"rl-nginx-{version}-source.tar.gz"}}
+          for line, ref, architecture in cells:
+              nginx_version = ref.removeprefix("release-")
+              expected_inputs[f"release-module-{line}-{architecture}"] = {
+                  f"rl-nginx-{version}-nginx{nginx_version}-linux-{architecture}.json"
+              }
+          for line, ref in sanitizer_cells:
+              nginx_version = ref.removeprefix("release-")
+              expected_inputs[f"release-sanitizers-{line}"] = {
+                  f"rl-nginx-{version}-nginx{nginx_version}-sanitizers.json"
+              }
+
+          observed_inputs = {
+              directory.name: {item.name for item in directory.iterdir()}
+              for directory in sorted(inputs.iterdir())
+              if directory.is_dir()
+          }
+          if observed_inputs != expected_inputs:
+              missing = sorted(set(expected_inputs) - set(observed_inputs))
+              extra = sorted(set(observed_inputs) - set(expected_inputs))
+              if missing:
+                  failures.append(f"release is missing build outputs: {missing}")
+              if extra:
+                  failures.append(f"release carries unexpected build outputs: {extra}")
+              for name in sorted(set(expected_inputs) & set(observed_inputs)):
+                  if observed_inputs[name] != expected_inputs[name]:
+                      failures.append(
+                          f"{name} produced {sorted(observed_inputs[name])}, "
+                          f"expected {sorted(expected_inputs[name])}"
+                      )
+
+          if failures:
+              for failure in failures:
+                  print(f"FAIL release assembly: {failure}", file=sys.stderr)
+              sys.exit(1)
+
+          lock = Path("dependencies/rl-c-client.env").read_text(encoding="utf-8")
+          repository = re.search(r'^RL_C_CLIENT_REPOSITORY="([^"]+)"$', lock, re.M)
+          client_tag = re.search(r'^RL_C_CLIENT_TAG="([^"]+)"$', lock, re.M)
+          client_commit = re.search(r'^RL_C_CLIENT_COMMIT="([^"]+)"$', lock, re.M)
+
+          builds = []
+          sanitizer_runs = []
+          for name in sorted(expected_inputs):
+              if name == "release-source":
+                  continue
+              path = next((inputs / name).iterdir())
+              evidence = json.loads(path.read_text(encoding="utf-8"))
+              if evidence["rl_nginx_commit"] != commit:
+                  failures.append(
+                      f"{path.name} was built from {evidence['rl_nginx_commit']}, "
+                      f"expected {commit}"
+                  )
+              if (
+                  evidence["rl_c_client_tag"] != client_tag.group(1)
+                  or evidence["rl_c_client_commit"] != client_commit.group(1)
+              ):
+                  failures.append(
+                      f"{path.name} did not build against the locked rl-c-client"
+                  )
+              if name.startswith("release-module-"):
+                  builds.append(evidence)
+              else:
+                  sanitizer_runs.append(evidence)
+
+          archive_name = f"rl-nginx-{version}-source.tar.gz"
+          archive = inputs / "release-source" / archive_name
+          (assets / archive_name).write_bytes(archive.read_bytes())
+
+          manifest_name = f"rl-nginx-{version}-manifest.json"
+          manifest = {
+              "project": "rl-nginx",
+              "version": version,
+              "tag": os.environ["TAG"],
+              "commit": commit,
+              "source_date_epoch": int(os.environ["SOURCE_DATE_EPOCH"]),
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_run": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                  f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+              ),
+              "delivery": (
+                  "Source-only GitHub release. Prebuilt nginx modules are an explicit "
+                  "non-goal for the 0.1.x line; see docs/compatibility.md. Build the "
+                  "module from this archive against your own nginx release."
+              ),
+              "rl_c_client": {
+                  "repository": repository.group(1),
+                  "tag": client_tag.group(1),
+                  "commit": client_commit.group(1),
+              },
+              "source_archive": {
+                  "name": archive_name,
+                  "bytes": archive.stat().st_size,
+                  "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+              },
+              "validated_builds": builds,
+              "sanitizer_runs": sanitizer_runs,
+          }
+          (assets / manifest_name).write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+
+          expected_assets = {archive_name, manifest_name, "SHA256SUMS"}
+          digests = []
+          for item in sorted(assets.iterdir()):
+              digest = hashlib.sha256(item.read_bytes()).hexdigest()
+              digests.append(f"{digest}  {item.name}")
+          (assets / "SHA256SUMS").write_text("\n".join(digests) + "\n", encoding="utf-8")
+
+          observed_assets = {item.name for item in assets.iterdir()}
+          if observed_assets != expected_assets:
+              failures.append(
+                  f"release assets are {sorted(observed_assets)}, "
+                  f"expected {sorted(expected_assets)}"
+              )
+
+          if failures:
+              for failure in failures:
+                  print(f"FAIL release assembly: {failure}", file=sys.stderr)
+              sys.exit(1)
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("## Release assets\n\n")
+              handle.write(
+                  f"- rl-c-client `{client_tag.group(1)}` at "
+                  f"`{client_commit.group(1)}`\n"
+              )
+              handle.write(f"- validated builds: {len(builds)}\n")
+              handle.write(f"- sanitizer runs: {len(sanitizer_runs)}\n\n")
+              handle.write("```\n")
+              handle.write("\n".join(digests) + "\n")
+              handle.write("```\n")
+          print(
+              f"PASS release assembly: {len(expected_assets)} assets from "
+              f"{len(builds)} validated builds"
+          )
+          PY
+
+      - name: Upload exact release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  attest:
+    name: Attest release assets
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.metadata.outputs.publish == 'true'
+    needs:
+      - metadata
+      - aggregate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact release assets
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create build provenance attestations
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: 'release-assets/*'
+
+  publish:
+    name: Publish atomic GitHub release
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.metadata.outputs.publish == 'true'
+    needs:
+      - metadata
+      - aggregate
+      - attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact release assets
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Upload to a draft, verify, then publish
+        shell: bash
+        env:
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          notes="$RUNNER_TEMP/release-notes.md"
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## {re.escape(version)}(?:[^\n]*)\n(.*?)(?=^## |\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          match = pattern.search(changelog)
+          if match is None:
+              print(f"FAIL publish: CHANGELOG.md has no '## {version}' section", file=sys.stderr)
+              sys.exit(1)
+          body = match.group(1).strip()
+          if not body:
+              print(f"FAIL publish: the '## {version}' changelog section is empty", file=sys.stderr)
+              sys.exit(1)
+          notes = Path(os.environ["RUNNER_TEMP"]) / "release-notes.md"
+          notes.write_text(
+              f"{body}\n\n"
+              "## Verifying this release\n\n"
+              "```\nsha256sum -c SHA256SUMS\n```\n\n"
+              f"`rl-nginx-{version}-manifest.json` records the exact nginx releases, "
+              "compilers, and locked `rl-c-client` revision every gate ran against. "
+              "This is a source-only release; build the module from the archive "
+              "against your own nginx release.\n",
+              encoding="utf-8",
+          )
+          PY
+
+          # A leftover draft is a failed publish. Replace it so a stale asset can
+          # never survive into a published release.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            if [[ "$state" != true ]]; then
+              echo "$TAG is already published; refusing to overwrite it" >&2
+              exit 1
+            fi
+            gh release delete "$TAG" --yes
+          fi
+
+          gh release create "$TAG" \
+            --draft \
+            --prerelease \
+            --target "$COMMIT" \
+            --title "rl-nginx $TAG" \
+            --notes-file "$notes"
+          gh release upload "$TAG" release-assets/* --clobber
+
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          local = {
+              item.name: item.stat().st_size
+              for item in sorted(Path("release-assets").iterdir())
+          }
+          uploaded = json.loads(
+              subprocess.run(
+                  ["gh", "release", "view", tag, "--json", "assets,isDraft"],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              ).stdout
+          )
+          failures = []
+          remote = {asset["name"]: asset for asset in uploaded["assets"]}
+          if set(remote) != set(local):
+              failures.append(
+                  f"draft carries {sorted(remote)}, expected {sorted(local)}"
+              )
+          for name, asset in sorted(remote.items()):
+              if asset.get("state") != "uploaded":
+                  failures.append(f"{name} is in state {asset.get('state')!r}")
+              if name in local and asset.get("size") != local[name]:
+                  failures.append(
+                      f"{name} uploaded {asset.get('size')} bytes, "
+                      f"expected {local[name]}"
+                  )
+          if failures:
+              for failure in failures:
+                  print(f"FAIL publish: {failure}", file=sys.stderr)
+              sys.exit(1)
+          print(f"PASS draft verification: {len(remote)} assets")
+          PY
+
+          # Only the draft flag changes; the release stays a prerelease because
+          # docs/compatibility.md calls the whole 0.1.x line a public preview.
+          gh release edit "$TAG" --draft=false
+
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          expected = {item.name for item in Path("release-assets").iterdir()}
+          published = json.loads(
+              subprocess.run(
+                  ["gh", "release", "view", tag, "--json",
+                   "assets,isDraft,isPrerelease,tagName"],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              ).stdout
+          )
+          failures = []
+          if published["isDraft"]:
+              failures.append("release is still a draft")
+          if not published["isPrerelease"]:
+              failures.append("release lost its public-preview prerelease flag")
+          if published["tagName"] != tag:
+              failures.append(f"release tag is {published['tagName']}, expected {tag}")
+          names = {asset["name"] for asset in published["assets"]}
+          if names != expected:
+              failures.append(f"published assets are {sorted(names)}, expected {sorted(expected)}")
+          if failures:
+              for failure in failures:
+                  print(f"FAIL publish: {failure}", file=sys.stderr)
+              sys.exit(1)
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write(f"## Published {tag}\n\n")
+              for name in sorted(names):
+                  handle.write(f"- `{name}`\n")
+          print(f"PASS publish: {tag} is public with {len(names)} assets")
+          PY
