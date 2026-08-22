@@ -261,9 +261,15 @@ def validate(text: str, nginx_gitlink: str) -> list[str]:
             failures.append(
                 f"job {name!r} must not depend on a repository or organization secret"
             )
-    for secret in sorted(set(SECRET_REFERENCE.findall(text))):
-        if secret != ALLOWED_SECRET:
-            failures.append(f"CI must not read the {secret!r} secret")
+    # Report only how many unexpected references exist. Names scraped out of a
+    # workflow are exactly the kind of value a gate should not echo.
+    unexpected = set(SECRET_REFERENCE.findall(text)) - {ALLOWED_SECRET}
+    if unexpected:
+        failures.append(
+            "CI must read no repository or organization secret other than the "
+            f"one production credential ({len(unexpected)} other reference "
+            "name(s) found)"
+        )
     if len(SECRET_REFERENCE.findall(text)) != len(
         SECRET_REFERENCE.findall(blocks.get(CREDENTIALED_JOB, ""))
     ):
