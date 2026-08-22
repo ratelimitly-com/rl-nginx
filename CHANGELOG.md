@@ -40,6 +40,19 @@ remain preview software and must not be treated as ABI-stable versions.
   warning. `tests/test-ci-gates.py` red-case tests the job so it cannot quietly
   stop using clang.
 
+- **An IPv6 nameserver in `/etc/resolv.conf` no longer prevents nginx from
+  starting.** Derived system DNS now passes IPv6 nameservers to nginx in the
+  bracketed form its address parser requires, so a host whose resolv.conf lists
+  an address such as `fd7a:115c:a1e0::53` — common with Tailscale, IPv6-only,
+  and many dual-stack setups — no longer fails configuration with
+  `invalid port in resolver` and `failed to create system DNS resolver for
+  ratelimitly`. A `nameserver` nginx cannot parse, such as the zone-scoped
+  `fe80::1%eth0`, is now skipped with a warning instead of failing
+  configuration, and derived names are NUL-terminated for the resolver parser.
+  Setting `ratelimitly_dns_resolver` or an HTTP-scope `resolver` is no longer
+  required as a workaround.
+
+
 ## 0.1.0 — 2026-08-22
 
 ### Breaking

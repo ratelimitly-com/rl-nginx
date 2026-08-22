@@ -81,6 +81,13 @@ worker is started.
 IPv4/IPv6 answers with null, empty, and oversized inputs and requires the
 reported count and output order to contain only usable addresses.
 
+`test-resolv-conf.sh` exercises the pure `/etc/resolv.conf` nameserver reader.
+It requires an IPv6 nameserver to reach nginx bracketed, IPv4 nameservers and
+host names to survive unchanged, comments and non-`nameserver` lines to be
+ignored, and an entry nginx cannot parse — a zone-scoped address, an
+unterminated bracket, or a value larger than the output buffer — to be reported
+instead of passed through.
+
 `test-c-client-contract.sh` links to the selected C client and its released
 responder protocol fixture. It makes the module's otherwise out-of-tree
 assumptions executable: create-time borrowing, non-callback start errors,

@@ -7,6 +7,7 @@
 #include "rn_addr_records.h"
 #include "rn_async_state.h"
 #include "rn_numeric.h"
+#include "rn_resolv_conf.h"
 #include "rn_srv_records.h"
 
 #include <errno.h>
@@ -1229,42 +1230,44 @@ ngx_http_rn_set_dns_resolver(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
 static ngx_resolver_t *
 rn_create_system_dns_resolver(ngx_conf_t *cf) {
-    FILE        *fp;
-    char         line[256];
-    ngx_str_t    names[16];
-    ngx_uint_t   n = 0;
-    u_char      *p, *start;
-    size_t       len;
+    FILE                    *fp;
+    char                     line[256];
+    u_char                   address[RN_RESOLV_NAMESERVER_MAX];
+    size_t                   address_len;
+    rn_resolv_nameserver_t   kind;
+    ngx_str_t                names[16];
+    ngx_uint_t               n = 0;
 
     fp = fopen("/etc/resolv.conf", "r");
     if (fp != NULL) {
         while (fgets(line, sizeof(line), fp) != NULL && n < 16) {
-            p = (u_char *) line;
-            while (*p == ' ' || *p == '\t') {
-                p++;
-            }
-            if (ngx_strncmp(p, "nameserver", 10) != 0) {
+            kind = rn_resolv_conf_nameserver(line, ngx_strlen(line),
+                (char *) address, sizeof(address), &address_len);
+            if (kind == RN_RESOLV_NAMESERVER_NONE) {
                 continue;
             }
-            p += 10;
-            while (*p == ' ' || *p == '\t') {
-                p++;
-            }
-            start = p;
-            while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && *p != '#') {
-                p++;
-            }
-            len = p - start;
-            if (len == 0) {
+            if (kind == RN_RESOLV_NAMESERVER_UNUSABLE) {
+                ngx_conf_log_error(NGX_LOG_WARN, cf, 0,
+                    "ignoring /etc/resolv.conf nameserver \"%s\": nginx "
+                    "cannot parse this address", address);
                 continue;
             }
-            names[n].data = ngx_pnalloc(cf->pool, len);
+#if !(NGX_HAVE_INET6)
+            if (kind == RN_RESOLV_NAMESERVER_INET6) {
+                ngx_conf_log_error(NGX_LOG_WARN, cf, 0,
+                    "ignoring /etc/resolv.conf nameserver \"%s\": this nginx "
+                    "build has no IPv6 support", address);
+                continue;
+            }
+#endif
+            /* ngx_resolver_create() reads past the length, so keep the NUL. */
+            names[n].data = ngx_pnalloc(cf->pool, address_len + 1);
             if (names[n].data == NULL) {
                 fclose(fp);
                 return NULL;
             }
-            ngx_memcpy(names[n].data, start, len);
-            names[n].len = len;
+            ngx_memcpy(names[n].data, address, address_len + 1);
+            names[n].len = address_len;
             n++;
         }
         fclose(fp);

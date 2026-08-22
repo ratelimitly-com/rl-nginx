@@ -195,6 +195,14 @@ redirect decision traffic or turn enforcement into an outage. Set an explicit
 deployment network policy, and monitor DNS failure/recovery as described in
 [Operations](operations.md).
 
+System-DNS derivation reads at most the first 16 `nameserver` entries of
+`/etc/resolv.conf`, including IPv6 nameservers such as `fd7a:115c:a1e0::53`.
+An entry nginx cannot use — a zone-scoped address such as `fe80::1%eth0`, or
+any IPv6 address on an nginx built without IPv6 support — is skipped with a
+warning while loading configuration, and `127.0.0.1` is used when no usable
+entry remains. Declare an explicit `resolver` or `ratelimitly_dns_resolver`
+whenever the deployment must not depend on that derivation.
+
 `ratelimitly_auth_key` is an API-key credential. Format 1 embeds a format
 version, auth mode, key ID, 32-byte secret, and six packed quotas. The locked
 C client intentionally rejects legacy unversioned credentials, unknown
