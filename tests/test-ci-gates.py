@@ -18,6 +18,7 @@ JOB_HEADER = re.compile(r"^  ([A-Za-z][A-Za-z0-9-]*):$")
 REQUIRED_COMMANDS = {
     "hygiene": ("syntax", "unit", "whitespace"),
     "supported-build": ("build", "dynamic-relocation-test"),
+    "clang-build": ("build",),
     "configuration": ("config-test",),
     "public-behavior": ("public-test",),
     "architecture": ("check", "build", "dynamic-relocation-test"),
@@ -49,6 +50,7 @@ CREDENTIALED_STEP_ENV = (
 REQUIRED_MARKERS = {
     "hygiene": ("fetch-depth: 0", "WHITESPACE_BASE:"),
     "supported-build": ("module_mode:", "release-1.30.2", "release-1.31.1"),
+    "clang-build": ("CC=clang make build",),
     "architecture": (
         "runs-on: ubuntu-24.04-arm",
         "fetch-depth: 0",
@@ -228,6 +230,7 @@ def validate(text: str, nginx_gitlink: str) -> list[str]:
 
     matrix_jobs = (
         "supported-build",
+        "clang-build",
         "configuration",
         "public-behavior",
         "architecture",
@@ -448,6 +451,12 @@ def negative_fixture_failures(text: str, nginx_gitlink: str) -> list[str]:
     elif not validate(mismatched_gitlink, nginx_gitlink):
         failures.append("validator accepted an nginx matrix that omitted the gitlink")
 
+    gcc_only = mutate_job(text, "clang-build", "CC=clang make build", "make build")
+    if gcc_only == text:
+        failures.append("negative fixture could not drop clang from the clang build")
+    elif not validate(gcc_only, nginx_gitlink):
+        failures.append("validator accepted a clang build job that does not run clang")
+
     x64_architecture = mutate_job(
         text, "architecture", "runs-on: ubuntu-24.04-arm", "runs-on: ubuntu-latest"
     )
@@ -516,7 +525,7 @@ def main() -> int:
             {target for targets in REQUIRED_COMMANDS.values() for target in targets}
             | set(CREDENTIALED_COMMANDS)
         )
-        + 20
+        + 21
     )
     print(
         "PASS named CI gates execute and propagate failures: "
