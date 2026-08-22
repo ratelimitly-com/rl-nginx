@@ -276,6 +276,62 @@ Diagnostic artifacts are preserved under
 `integration-tests/artifacts/lifecycle/<case>/`; the commands above are the
 passing acceptance gate for lifecycle changes.
 
+## Live production protocol smoke
+
+`production-smoke.sh` is the only test in this repository that reaches the
+RateLimitly production fleet. It is a protocol proof, not a load test, and it
+is deliberately outside `make check` and `make test` so both stay runnable
+without a credential:
+
+```sh
+RATELIMITLY_AUTH_KEY='rl-aes1...' \
+RATELIMITLY_P0_TEST_NAMESPACE="local-$(date +%s)" \
+make production-smoke
+```
+
+It builds nginx with this module, starts nginx against production, and drives
+real HTTP requests through the ordinary pre-content admission path. Two
+authenticated server-side facts must hold:
+
+1. **Latency read-back.** One deliberately slow admitted request reports its
+   measured latency to a per-run tracker through `ratelimitly_report`. A later
+   request guarded by that same tracker must be denied at a `1000ms` threshold.
+   An identically configured control tracker, evaluated the same number of
+   times but never given a report, must keep admitting. The reported sample is
+   the only difference between the two, so the denial can only come from
+   production storing that sample and returning it.
+2. **Rate denial.** A one-token bucket must admit once and reject the next
+   request.
+
+Every decision is asserted as an HTTP status *and* a `$ratelimitly_verdict`.
+Fail-close also returns `429`, and both failure policies leave the verdict
+unset, so a transport or discovery failure can never be mistaken for an
+authenticated allow or deny.
+
+Discovery comes from the credential alone. The generated configuration declares
+no `ratelimitly_dns_srv` and no `ratelimitly_dns_resolver`, so nginx resolves
+`c-<api-key-id>.p0.ratelimitly.com` through the system resolver, and the script
+refuses to run when `RATELIMITLY_TENANT`,
+`RATELIMITLY_EXAMPLE_SERVER_HOST`, or `RATELIMITLY_EXAMPLE_SERVER_PORT` is set.
+
+Buckets and trackers are scoped by `RATELIMITLY_P0_TEST_NAMESPACE`, so
+concurrent runs cannot collide. A missing or malformed credential, a missing
+namespace, and an unreachable fleet all fail loudly; the script never reports
+success without an authenticated allow and an authenticated deny.
+
+The generated configuration embeds the API key, so the run directory is a
+private `mkdtemp` with mode `0700`, is removed on exit unless
+`KEEP_ARTIFACTS=1`, and is never published as a CI artifact. Diagnostics
+printed on failure are limited to module and nginx log lines, which contain the
+API key id and request ids but never the credential.
+
+In CI this runs as the `production-smoke` job in `ci.yml`. That job is pinned to
+`main`, runs for pushes or a maintainer's manual dispatch only, owns a
+`rl-nginx-production-smoke` concurrency group with `cancel-in-progress: false`,
+and reads the credential as step-level environment beside a
+`ci-<run_id>-<run_attempt>` namespace. `tests/test-ci-gates.py` keeps every one
+of those properties red-case tested and keeps all required jobs secret-free.
+
 ## Internal full-stack harness (optional)
 
 `internal-full-stack.sh` is not part of the public contributor or release

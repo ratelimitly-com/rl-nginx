@@ -24,6 +24,28 @@ REQUIRED_COMMANDS = {
     "sanitizers": ("sanitizers",),
 }
 
+# The one job allowed to hold a credential. It is main-only and actor-pinned,
+# so it never runs for a pull request, and it is not part of the required
+# gate: every job in REQUIRED_COMMANDS must stay runnable without a secret.
+CREDENTIALED_JOB = "production-smoke"
+CREDENTIALED_COMMANDS = ("production-smoke",)
+ALLOWED_SECRET = "RATELIMITLY_AUTH_KEY"
+SECRET_REFERENCE = re.compile(r"secrets\.([A-Za-z_][A-Za-z0-9_-]*)")
+CREDENTIALED_CONDITIONS = (
+    "github.ref == 'refs/heads/main'",
+    "github.event_name == 'push'",
+    "github.event_name == 'workflow_dispatch'",
+    "github.actor == 'edescourtis'",
+)
+# Step-level environment only, with a namespace that cannot collide between
+# concurrent runs.
+CREDENTIALED_STEP_ENV = (
+    "        env:\n"
+    "          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}\n"
+    "          RATELIMITLY_P0_TEST_NAMESPACE:"
+    " ci-${{ github.run_id }}-${{ github.run_attempt }}\n"
+)
+
 REQUIRED_MARKERS = {
     "hygiene": ("fetch-depth: 0", "WHITESPACE_BASE:"),
     "supported-build": ("module_mode:", "release-1.30.2", "release-1.31.1"),
@@ -143,6 +165,41 @@ def run_commands(block: str) -> set[str]:
     return commands
 
 
+def validate_credentialed_job(block: str | None) -> list[str]:
+    """Check the live production job that is trusted with the API key."""
+    if block is None:
+        return [f"missing job {CREDENTIALED_JOB!r}"]
+
+    failures: list[str] = []
+    timeout = re.search(r"^    timeout-minutes:\s*([0-9]+)\s*$", block, re.MULTILINE)
+    if timeout is None or int(timeout.group(1)) <= 0:
+        failures.append(f"job {CREDENTIALED_JOB!r} lacks a positive timeout")
+    if re.search(r"^\s+continue-on-error:", block, re.MULTILINE):
+        failures.append(
+            f"job {CREDENTIALED_JOB!r} must not discard a step or job failure"
+        )
+
+    observed_commands = run_commands(block)
+    for command in CREDENTIALED_COMMANDS:
+        if command not in observed_commands:
+            failures.append(
+                f"job {CREDENTIALED_JOB!r} does not execute 'make {command}'"
+            )
+    for condition in CREDENTIALED_CONDITIONS:
+        if condition not in block:
+            failures.append(f"job {CREDENTIALED_JOB!r} lacks {condition!r}")
+    if f"      group: rl-nginx-{CREDENTIALED_JOB}\n" not in block:
+        failures.append(f"job {CREDENTIALED_JOB!r} lacks its own concurrency group")
+    if "      cancel-in-progress: false\n" not in block:
+        failures.append(f"job {CREDENTIALED_JOB!r} must never cancel a live run")
+    if CREDENTIALED_STEP_ENV not in block:
+        failures.append(
+            f"job {CREDENTIALED_JOB!r} must read the credential as step-level "
+            "environment beside a unique per-run namespace"
+        )
+    return failures
+
+
 def validate(text: str, nginx_gitlink: str) -> list[str]:
     lines = text.splitlines()
     blocks = job_blocks(lines)
@@ -193,8 +250,24 @@ def validate(text: str, nginx_gitlink: str) -> list[str]:
 
     if "permissions:\n  contents: read" not in text:
         failures.append("workflow must retain least-privilege contents: read permissions")
-    if "RL_CI_TOKEN" in text or "secrets." in text:
-        failures.append("required CI must not depend on repository or organization secrets")
+    if "RL_CI_TOKEN" in text:
+        failures.append("CI must not depend on a repository or organization token")
+
+    failures.extend(validate_credentialed_job(blocks.get(CREDENTIALED_JOB)))
+    for name, block in blocks.items():
+        if name == CREDENTIALED_JOB:
+            continue
+        if SECRET_REFERENCE.search(block):
+            failures.append(
+                f"job {name!r} must not depend on a repository or organization secret"
+            )
+    for secret in sorted(set(SECRET_REFERENCE.findall(text))):
+        if secret != ALLOWED_SECRET:
+            failures.append(f"CI must not read the {secret!r} secret")
+    if len(SECRET_REFERENCE.findall(text)) != len(
+        SECRET_REFERENCE.findall(blocks.get(CREDENTIALED_JOB, ""))
+    ):
+        failures.append(f"only job {CREDENTIALED_JOB!r} may read a secret")
     if workflow_events(lines) != {"push", "pull_request", "workflow_dispatch"}:
         failures.append("workflow must use main pushes, pull requests, and manual dispatch")
     if "  push:\n    branches:\n      - main" not in text:
@@ -260,9 +333,72 @@ def remove_make_command(text: str, target: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def credentialed_negative_fixture_failures(
+    text: str, nginx_gitlink: str
+) -> list[str]:
+    """Prove the live-job rules turn red for the properties they claim."""
+    cases = {
+        "an unpinned dispatch actor": mutate_job(
+            text,
+            CREDENTIALED_JOB,
+            "        github.actor == 'edescourtis'))",
+            "        github.actor != ''))",
+        ),
+        "a live run that can be cancelled midway": mutate_job(
+            text,
+            CREDENTIALED_JOB,
+            "      cancel-in-progress: false",
+            "      cancel-in-progress: true",
+        ),
+        "a live job sharing another concurrency group": mutate_job(
+            text,
+            CREDENTIALED_JOB,
+            f"      group: rl-nginx-{CREDENTIALED_JOB}",
+            "      group: ${{ github.workflow }}",
+        ),
+        "a namespace shared by concurrent runs": mutate_job(
+            text,
+            CREDENTIALED_JOB,
+            "ci-${{ github.run_id }}-${{ github.run_attempt }}",
+            "ci-fixed",
+        ),
+        "a job-level credential": mutate_job(
+            text,
+            CREDENTIALED_JOB,
+            "        env:\n          RATELIMITLY_AUTH_KEY:",
+            "    env:\n      RATELIMITLY_AUTH_KEY:",
+        ),
+        "a missing live job": mutate_job(
+            text,
+            CREDENTIALED_JOB,
+            f"  {CREDENTIALED_JOB}:",
+            f"  {CREDENTIALED_JOB}-disabled:",
+        ),
+        "an unrelated secret": text.replace(
+            "secrets.RATELIMITLY_AUTH_KEY", "secrets.RATELIMITLY_OTHER_KEY", 1
+        ),
+        "a secret inside a required job": text.replace(
+            "  hygiene:\n",
+            "  hygiene:\n    env:\n      KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}\n",
+            1,
+        ),
+    }
+
+    failures: list[str] = []
+    for name, mutated in cases.items():
+        if mutated == text:
+            failures.append(f"negative fixture could not introduce {name}")
+        elif not validate(mutated, nginx_gitlink):
+            failures.append(f"validator accepted {name}")
+    return failures
+
+
 def negative_fixture_failures(text: str, nginx_gitlink: str) -> list[str]:
     failures: list[str] = []
-    targets = sorted({target for targets in REQUIRED_COMMANDS.values() for target in targets})
+    targets = sorted(
+        {target for targets in REQUIRED_COMMANDS.values() for target in targets}
+        | set(CREDENTIALED_COMMANDS)
+    )
     for target in targets:
         if not validate(remove_make_command(text, target), nginx_gitlink):
             failures.append(f"validator stayed green after removing 'make {target}'")
@@ -360,6 +496,7 @@ def main() -> int:
     dynamic_relocation = DYNAMIC_RELOCATION.read_text()
     failures = validate(text, nginx_gitlink)
     failures.extend(negative_fixture_failures(text, nginx_gitlink))
+    failures.extend(credentialed_negative_fixture_failures(text, nginx_gitlink))
     failures.extend(validate_dynamic_relocation(dynamic_relocation))
     failures.extend(dynamic_negative_fixture_failures(dynamic_relocation))
 
@@ -369,12 +506,16 @@ def main() -> int:
         return 1
 
     mutation_count = (
-        len({target for targets in REQUIRED_COMMANDS.values() for target in targets})
-        + 12
+        len(
+            {target for targets in REQUIRED_COMMANDS.values() for target in targets}
+            | set(CREDENTIALED_COMMANDS)
+        )
+        + 20
     )
     print(
         "PASS named CI gates execute and propagate failures: "
-        f"{', '.join(REQUIRED_COMMANDS)} ({mutation_count} red-case mutations)"
+        f"{', '.join((*REQUIRED_COMMANDS, CREDENTIALED_JOB))} "
+        f"({mutation_count} red-case mutations)"
     )
     return 0
 

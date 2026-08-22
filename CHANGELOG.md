@@ -3,6 +3,26 @@
 All notable changes to `rl-nginx` will be documented here. Release candidates
 remain preview software and must not be treated as ABI-stable versions.
 
+## Unreleased
+
+### Added
+
+- **Live production protocol smoke.** `make production-smoke` builds nginx with
+  this module, starts it against the RateLimitly production fleet using only a
+  `RATELIMITLY_AUTH_KEY`, and drives real HTTP requests through the ordinary
+  pre-content admission path. It proves that a reported latency sample is
+  stored and read back by a guard on the same tracker, and that a one-token
+  bucket admits once and then rejects, checking each decision as an HTTP status
+  and a `$ratelimitly_verdict` so fail-open and fail-close can never look like
+  an authenticated decision. Discovery is derived from the credential alone.
+  See [`integration-tests/README.md`](integration-tests/README.md).
+
+  The new `production-smoke` CI job is pinned to `main`, runs only for pushes
+  or a maintainer's manual dispatch, and is the only job permitted to read a
+  secret; `tests/test-ci-gates.py` now keeps every required job secret-free and
+  red-case tests the live job's actor pin, concurrency isolation, per-run
+  namespace, and step-level credential scope.
+
 ## 0.1.0 — 2026-08-22
 
 ### Breaking
