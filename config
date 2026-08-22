@@ -26,6 +26,7 @@ ngx_module_srcs="$ngx_addon_dir/src/ngx_http_ratelimitly_module.c \
                   $ngx_addon_dir/src/rn_addr_records.c \
                   $ngx_addon_dir/src/rn_async_state.c \
                   $ngx_addon_dir/src/rn_numeric.c \
+                  $ngx_addon_dir/src/rn_resolv_conf.c \
                   $ngx_addon_dir/src/rn_srv_records.c"
 ngx_module_incs="$RN_RCLIENT_DIR/include"
 ngx_module_libs="$RN_RCLIENT_LIB -lcrypto"

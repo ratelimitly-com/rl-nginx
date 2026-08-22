@@ -20,6 +20,7 @@ SH_SCRIPTS := \
 	tests/test-addr-records.sh \
 	tests/test-async-state.sh \
 	tests/test-numeric.sh \
+	tests/test-resolv-conf.sh \
 	tests/test-dependency-bootstrap.sh \
 	tests/test-lifecycle-oracles.sh \
 	tests/test-srv-records.sh \
@@ -132,6 +133,7 @@ unit: dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test
 	./tests/test-addr-records.sh
 	./tests/test-async-state.sh
 	./tests/test-numeric.sh
+	./tests/test-resolv-conf.sh
 	RCLIENT_DIR="$(RCLIENT_DIR)" ./tests/test-srv-records.sh
 
 build: fetch

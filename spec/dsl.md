@@ -61,6 +61,14 @@ resolver IP addresses used for RateLimitly SRV discovery. `ratelimitly_dns_resol
 is OPTIONAL. When omitted, RateLimitly uses nginx's HTTP-scope `resolver` if
 configured, or defaults to the system DNS (`/etc/resolv.conf`).
 
+System-DNS derivation reads at most the first 16 `nameserver` entries of
+`/etc/resolv.conf` in file order. An IPv6 nameserver MUST reach nginx in the
+bracketed form its address parser requires. A `nameserver` nginx cannot parse
+— a zone-scoped address such as `fe80::1%eth0`, or any IPv6 address on an
+nginx built without IPv6 support — MUST be skipped with a configuration
+warning instead of failing configuration, and derivation MUST fall back to
+`127.0.0.1` when no usable entry remains.
+
 The value is NOT syntactically validated while loading configuration. An
 incorrect or non-existent tenant name therefore passes `nginx -t` and surfaces
 only at runtime as a DNS resolution failure, which is handled by
