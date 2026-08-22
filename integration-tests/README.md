@@ -294,12 +294,19 @@ real HTTP requests through the ordinary pre-content admission path. Two
 authenticated server-side facts must hold:
 
 1. **Latency read-back.** One deliberately slow admitted request reports its
-   measured latency to a per-run tracker through `ratelimitly_report`. A later
-   request guarded by that same tracker must be denied at a `1000ms` threshold.
-   An identically configured control tracker, evaluated the same number of
-   times but never given a report, must keep admitting. The reported sample is
-   the only difference between the two, so the denial can only come from
-   production storing that sample and returning it.
+   measured latency to a per-run tracker through `ratelimitly_report`. Polling
+   then alternates between an identically configured control tracker that was
+   never given a report and the reported one, so both stay on the same number
+   of guard evaluations. The reported guard must deny at a `1000ms` threshold
+   on an evaluation where the control guard still admits. The reported sample
+   is the only difference between the two, so that denial can only come from
+   production storing the sample and returning it.
+
+   The comparison holds only at equal evaluation counts. A tracker configured
+   this narrowly (`max_samples=1 buffer_size=1 min_sample_threshold=1`) warms
+   up from admissions alone, so the control guard does start denying an
+   evaluation or two later; that says nothing about the report. Do not add a
+   trailing control check.
 2. **Rate denial.** A one-token bucket must admit once and reject the next
    request.
 
