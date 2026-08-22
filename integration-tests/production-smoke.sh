@@ -16,11 +16,12 @@ this module, starts nginx against production, and drives real HTTP requests
 that must produce two authenticated server-side facts.
 
   1. Latency read-back. One slow request reports its measured latency to a
-     per-run tracker. A later request guarded by that same tracker must be
-     denied, while an identically configured control tracker that received no
-     report must still admit. The reported sample is the only difference
-     between the two, so the denial can only come from production storing that
-     sample and returning it.
+     per-run tracker. Polling then alternates between an identically configured
+     control tracker that received no report and the reported one, so both stay
+     on the same number of guard evaluations. The reported guard must deny at an
+     evaluation where the control guard still admits. The reported sample is the
+     only difference between the two, so that denial can only come from
+     production storing the sample and returning it.
 
   2. Rate denial. A one-token bucket must admit once and reject the next
      request.
@@ -452,6 +453,11 @@ prove_latency_tracker() {
 
   # Interleaved polling keeps both trackers on the same number of guard
   # evaluations, so the reported sample stays the only difference between them.
+  #
+  # The comparison is only valid at equal evaluation counts. A tracker this
+  # narrow warms up from admissions alone, so an extra control evaluation after
+  # the reported guard has already denied will deny too, for reasons that have
+  # nothing to do with the report. Do not add a trailing control check.
   for (( attempt = 0; attempt < READBACK_ATTEMPTS; attempt++ )); do
     check_budget "latency read-back"
     expect_decision "control guard stays open" \
@@ -474,10 +480,6 @@ prove_latency_tracker() {
   (( denied == 1 )) \
     || fail "the reported slow sample never denied the" \
       "${GUARD_THRESHOLD_MS}ms guard within ${READBACK_ATTEMPTS} attempts"
-
-  # The control tracker received no report, so its guard must still admit.
-  expect_decision "control guard remains unaffected" \
-    /p0/latency/control 200 allow
 }
 
 prove_rate_limiter() {
