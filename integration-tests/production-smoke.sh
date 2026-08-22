@@ -264,10 +264,10 @@ http {
 
   ratelimitly_tracker p0_reported_tracker
     "service=p0|ns=${NAMESPACE}|svc=reported"
-    ttl=30s max_samples=1 buffer_size=1 min_sample_threshold=1;
+    ttl=60s max_samples=1 buffer_size=1 min_sample_threshold=1;
   ratelimitly_tracker p0_control_tracker
     "service=p0|ns=${NAMESPACE}|svc=control"
-    ttl=30s max_samples=1 buffer_size=1 min_sample_threshold=1;
+    ttl=60s max_samples=1 buffer_size=1 min_sample_threshold=1;
 
   ratelimitly_guard p0_reported_guard
     tracker=p0_reported_tracker
@@ -442,12 +442,13 @@ prove_latency_tracker() {
   local attempt
   local denied=0
 
-  # Both trackers start empty and take exactly one slow admitted request.
-  # Only the first one reports its measured latency.
-  expect_decision "reported tracker takes a slow sample" \
-    /p0/latency/reported-slow 200 allow "${SLOW_MAX_TIME}"
+  # Both trackers start empty and take exactly one slow admitted request. Only
+  # the second one reports its measured latency, so the read-back below starts
+  # as early as possible within the tracker TTL.
   expect_decision "control tracker withholds its sample" \
     /p0/latency/control-slow 200 allow "${SLOW_MAX_TIME}"
+  expect_decision "reported tracker takes a slow sample" \
+    /p0/latency/reported-slow 200 allow "${SLOW_MAX_TIME}"
 
   # Interleaved polling keeps both trackers on the same number of guard
   # evaluations, so the reported sample stays the only difference between them.
