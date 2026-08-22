@@ -3,7 +3,7 @@
 All notable changes to `rl-nginx` will be documented here. Release candidates
 remain preview software and must not be treated as ABI-stable versions.
 
-## Unreleased
+## 0.1.0 — 2026-08-22
 
 ### Breaking
 
