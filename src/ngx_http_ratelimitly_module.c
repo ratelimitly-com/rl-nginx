@@ -2124,7 +2124,7 @@ ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_str_t service = ngx_null_string;
     uint32_t ttl_ms = 30000;
     uint32_t max_samples = 128;
-    uint32_t buffer_size;
+    uint32_t buffer_size = 0;
     ngx_flag_t buffer_size_set = 0;
     uint32_t min_sample_threshold = 8;
     ngx_flag_t service_set = 0;
@@ -2245,9 +2245,7 @@ ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     tracker->ttl_ms = ttl_ms;
     tracker->max_samples = max_samples;
     tracker->buffer_size_set = buffer_size_set;
-    if (buffer_size_set) {
-        tracker->buffer_size = buffer_size;
-    }
+    tracker->buffer_size = buffer_size;
     tracker->min_sample_threshold = min_sample_threshold;
 
     ngx_http_compile_complex_value_t ccv;
