@@ -266,3 +266,42 @@ jobs:
 
       - name: Run sanitized lifecycle gate
         run: SANITIZER_RUNS=1 KEEP_SANITIZED_BUILD=1 make sanitizers
+
+  # The only job that holds a credential and reaches the production fleet. It
+  # never runs for a pull request, because fork pull requests cannot read the
+  # secret and every run consumes real quota. It builds nginx from source, so
+  # its timeout matches the other build jobs; the live phase itself is bounded
+  # inside the script.
+  production-smoke:
+    name: Production protocol smoke
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'edescourtis'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: rl-nginx-production-smoke
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out rl-nginx
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dnsutils libpcre2-dev zlib1g-dev libssl-dev
+
+      - name: Fetch locked rl-c-client release
+        run: make fetch
+
+      - name: Prove key-only rate and latency behavior through nginx
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+          RATELIMITLY_P0_TEST_NAMESPACE: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: make production-smoke

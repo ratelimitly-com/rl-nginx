@@ -25,6 +25,7 @@ SH_SCRIPTS := \
 	tests/test-srv-records.sh \
 	start-nginx.sh \
 	integration-tests/public.sh \
+	integration-tests/production-smoke.sh \
 	integration-tests/lifecycle-oracles.sh \
 	integration-tests/dynamic-module-relocation.sh \
 	integration-tests/lifecycle-regressions.sh \
@@ -46,7 +47,7 @@ PY_SCRIPTS := \
 	integration-tests/udp_flood.py \
 	integration-tests/worker_udp_port.py
 
-.PHONY: help check check-build-flags fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test public-example-safety-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test public-test-built dynamic-relocation-test test sanitizers test-internal whitespace
+.PHONY: help check check-build-flags fetch syntax dependency-bootstrap-test dependency-drift-workflow-test workflow-pin-test ci-gates-test sanitizer-policy-test public-example-safety-test spec-consistency-test make-gates-test lifecycle-oracles-test unit build config-test public-test public-test-built dynamic-relocation-test production-smoke test sanitizers test-internal whitespace
 
 help:
 	@printf '%s\n' \
@@ -65,6 +66,7 @@ help:
 		'  make test           unit, config, and public integration tests' \
 		'  make dynamic-relocation-test  required release-only dynamic gate' \
 		'  make sanitizers     required release-only ASan/UBSan/LSan gate' \
+		'  make production-smoke  live protocol smoke against production' \
 		'  make test-internal  optional supplemental private validation' \
 		'' \
 		'Variables:' \
@@ -146,6 +148,12 @@ public-test-built: fetch
 
 dynamic-relocation-test: fetch
 	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" ./integration-tests/dynamic-module-relocation.sh
+
+# Live gate. Requires RATELIMITLY_AUTH_KEY and a unique
+# RATELIMITLY_P0_TEST_NAMESPACE; it is deliberately outside make check and
+# make test because those must stay runnable without a credential.
+production-smoke: fetch
+	RCLIENT_DIR="$(RCLIENT_DIR)" NGINX_SRC="$(NGINX_SRC)" NGINX_BIN="$(NGINX_BIN)" SKIP_BUILD=0 ./integration-tests/production-smoke.sh
 
 test: unit build config-test public-test
 
