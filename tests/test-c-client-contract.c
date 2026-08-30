@@ -230,7 +230,6 @@ fill_guard(r_latency_guard_t *guard)
     guard->threshold_ms = 50u;
     guard->ttl_ms = 1000u;
     guard->max_samples = 10u;
-    guard->buffer_size = 16u;
     guard->min_sample_threshold = 1u;
 }
 

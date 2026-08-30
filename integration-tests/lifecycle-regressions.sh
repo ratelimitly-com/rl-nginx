@@ -579,7 +579,7 @@ write_nginx_config() {
     debug_mode="off"
   fi
   if is_guard_case; then
-    guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+    guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 min_sample_threshold=0;
   ratelimitly_guard lifecycle_guard tracker=lifecycle_tracker threshold=100ms;'
     ratelimitly_rule="ratelimitly zone=lifecycle_zone guard=lifecycle_guard;"
     if [[ "${MODE}" == "guard-multiple" ]]; then
@@ -595,12 +595,12 @@ write_nginx_config() {
       report_directive="ratelimitly_report lifecycle_tracker;"
       ;;
     report-only)
-      guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 min_sample_threshold=0;'
       ratelimitly_rule=""
       report_directive="ratelimitly_report lifecycle_tracker;"
       ;;
     report-inheritance)
-      guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+      guard_defs='  ratelimitly_tracker lifecycle_tracker "service=svc:lifecycle:$uri" ttl=30s max_samples=128 min_sample_threshold=0;'
       ratelimitly_rule=""
       server_report_directive="ratelimitly_report lifecycle_tracker;"
       health_report_directive="ratelimitly_report off;"
@@ -650,9 +650,9 @@ ${fault_directive}
   ratelimitly_zone redirect_zone "bucket=redirect:one-request" rate=10000r/s;
   ratelimitly_zone rendered_bucket_zone "bucket=\$arg_value" rate=10000r/s;
   ratelimitly_zone boundary_zone "bucket=boundary:\$arg_value" rate=10000r/s;
-  ratelimitly_tracker rendered_service_tracker "service=\$arg_value" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_tracker rendered_service_tracker "service=\$arg_value" ttl=30s max_samples=128 min_sample_threshold=0;
   ratelimitly_guard rendered_service_guard tracker=rendered_service_tracker threshold=100ms;
-  ratelimitly_tracker rendered_threshold_tracker service=rendered-threshold ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;
+  ratelimitly_tracker rendered_threshold_tracker service=rendered-threshold ttl=30s max_samples=128 min_sample_threshold=0;
   ratelimitly_guard rendered_threshold_guard tracker=rendered_threshold_tracker threshold=\$arg_value;
 ${guard_defs}
 

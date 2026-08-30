@@ -10,7 +10,7 @@ This guide explains how nginx directives construct those operations. For the
 underlying meanings of resource requests, latency reports, API-key quotas, and
 client policy, follow the versioned `rl-c-client` links in the relevant
 sections or start with its
-[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#operation-model).
+[Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#operation-model).
 
 ## Minimal configuration
 
@@ -114,7 +114,7 @@ change produces a new resource ID and starts new bucket state, so version and
 roll out such a change as an identity migration.
 
 The exact, cross-client identity contract is defined by the C client's
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#content-defined-ids).
 `rl-nginx` owns only the rendered name and effective nginx rate/window values
 passed to those helpers.
 
@@ -223,9 +223,9 @@ its unredacted output.
 
 The encoded fields, client-side checks, and server-enforced quota boundaries
 are documented in the C client's
-[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials)
+[Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#credentials)
 section. DNS target naming and refresh behavior are client-owned; see
-[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh).
+[DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#dns-refresh).
 
 The client also rejects a complete resource request before DNS or UDP when a
 rendered zone's rate window exceeds `rate_window_size_ms_max`. Static and
@@ -322,7 +322,7 @@ against one API key and be rejected against another.
 See the normative
 [Configuration DSL](../spec/dsl.md#ratelimitly_policy) for every constraint and
 the authoritative C-client
-[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy)
+[Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#resource-request-ha-policy)
 for response selection, replay, final-phase, completion-delivery, and
 deduplication semantics.
 
@@ -422,7 +422,6 @@ ratelimitly_tracker api_latency_tracker
   "service=v1|service=public-api"
   ttl=30s
   max_samples=128
-  buffer_size=32
   min_sample_threshold=8;
 
 ratelimitly_guard api_latency
@@ -495,16 +494,12 @@ A passing guard admits the request, a failing guard returns `429`, and a client
 or transport failure follows `ratelimitly_fail`. It still sends no latency
 report unless `ratelimitly_report` is also present.
 
-Tracker TTL and the three sample-count fields must fit an unsigned 32-bit wire
+Tracker TTL and the two sample-count fields must fit an unsigned 32-bit wire
 field. TTL must be positive, and a unitless duration means seconds.
-`max_samples` must be nonzero. When `buffer_size` is omitted, nginx uses the
-configured API key's `latency_buffer_size_max` quota. An explicit value must be
-nonzero; nginx does not compare it with the credential quota at `nginx -t`.
-
-Because effective `buffer_size` contributes to the latency-tracker ID, rotating
-to a credential with a different quota re-identifies a tracker that relies on
-the fallback. Set `buffer_size` explicitly when tracker identity must survive
-key rotation, and review [operations](operations.md) first.
+`max_samples` must be nonzero. The server bounds retained samples by the API
+key's latency-buffer quota and `max_samples`; nginx neither accepts nor sends a
+separate `buffer_size` value. An obsolete `buffer_size=` argument is rejected
+by `nginx -t` rather than ignored.
 
 Rendered service keys must contain `1..1024` bytes. Static oversized values
 fail `nginx -t`; empty or oversized dynamic values make that guard follow the
@@ -522,7 +517,7 @@ available. A positive value requires the estimated insertion rate to reach
 that threshold. The default is `8`.
 
 The C client defines tracker fields and operation independence in
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#latency-guards-and-independent-reports).
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#latency-guards-and-independent-reports).
 
 ## Labels and data exposure
 

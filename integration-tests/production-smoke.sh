@@ -265,10 +265,10 @@ http {
 
   ratelimitly_tracker p0_reported_tracker
     "service=p0|ns=${NAMESPACE}|svc=reported"
-    ttl=60s max_samples=1 buffer_size=1 min_sample_threshold=1;
+    ttl=60s max_samples=1 min_sample_threshold=1;
   ratelimitly_tracker p0_control_tracker
     "service=p0|ns=${NAMESPACE}|svc=control"
-    ttl=60s max_samples=1 buffer_size=1 min_sample_threshold=1;
+    ttl=60s max_samples=1 min_sample_threshold=1;
 
   ratelimitly_guard p0_reported_guard
     tracker=p0_reported_tracker

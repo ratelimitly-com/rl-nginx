@@ -42,8 +42,6 @@ typedef struct {
     ngx_http_complex_value_t service_cv;
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
-    ngx_flag_t buffer_size_set;
     uint32_t min_sample_threshold;
 } rn_tracker_t;
 
@@ -58,7 +56,6 @@ typedef struct {
     uint8_t id[16];
     uint32_t ttl_ms;
     uint32_t max_samples;
-    uint32_t buffer_size;
     uint32_t min_sample_threshold;
 } rn_tracker_values_t;
 
@@ -77,7 +74,6 @@ typedef struct {
     uint64_t key_id;
     r_auth_type_t auth_type;
     ngx_str_t auth_key;
-    uint32_t latency_buffer_size_max;
     uint32_t dedup_ttl_ms_max;
 
     r_request_policy_t request_policy;
@@ -310,14 +306,12 @@ static ngx_int_t rn_build_guard_entries(
 static ngx_int_t rn_build_latency_report(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
-    rn_main_conf_t *mcf,
     rn_tracker_t *tracker,
     r_service_latency_report_t *out_report
 );
 static ngx_int_t rn_build_tracker_values(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
-    rn_main_conf_t *mcf,
     rn_tracker_t *tracker,
     rn_tracker_values_t *out
 );
@@ -704,7 +698,7 @@ ngx_http_rn_handler(ngx_http_request_t *r) {
     if (lcf->report_enabled) {
         report_tracker = rn_find_tracker(mcf, &lcf->report_tracker_name);
         if (report_tracker != NULL
-            && rn_build_latency_report(r, worker, mcf, report_tracker,
+            && rn_build_latency_report(r, worker, report_tracker,
                 &ctx->lat_report) == NGX_OK)
         {
             ctx->lat_report_enabled = 1;
@@ -1309,7 +1303,6 @@ ngx_http_rn_set_auth_key(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     mcf->auth_key = value[1];
     mcf->auth_type = info.type;
     mcf->key_id = info.key_id;
-    mcf->latency_buffer_size_max = info.latency_buffer_size_max;
     mcf->dedup_ttl_ms_max = info.dedup_ttl_ms_max;
     return NGX_CONF_OK;
 }
@@ -1872,7 +1865,7 @@ rn_build_guard_entries(
     if (rn_parse_protocol_duration_ms(&threshold, &threshold_ms) != NGX_OK) {
         return NGX_ERROR;
     }
-    if (rn_build_tracker_values(r, worker, mcf, tracker,
+    if (rn_build_tracker_values(r, worker, tracker,
             &tracker_values) != NGX_OK)
     {
         return NGX_ERROR;
@@ -1881,7 +1874,6 @@ rn_build_guard_entries(
     out_guard->threshold_ms = threshold_ms;
     out_guard->ttl_ms = tracker_values.ttl_ms;
     out_guard->max_samples = tracker_values.max_samples;
-    out_guard->buffer_size = tracker_values.buffer_size;
     out_guard->min_sample_threshold = tracker_values.min_sample_threshold;
     ngx_memcpy(out_guard->latency_tracker_id,
         tracker_values.id,
@@ -1902,14 +1894,13 @@ static ngx_int_t
 rn_build_latency_report(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
-    rn_main_conf_t *mcf,
     rn_tracker_t *tracker,
     r_service_latency_report_t *out_report
 ) {
     rn_tracker_values_t values;
 
     if (out_report == NULL
-        || rn_build_tracker_values(r, worker, mcf, tracker, &values) != NGX_OK)
+        || rn_build_tracker_values(r, worker, tracker, &values) != NGX_OK)
     {
         return NGX_ERROR;
     }
@@ -1919,7 +1910,6 @@ rn_build_latency_report(
         sizeof(out_report->latency_tracker_id));
     out_report->ttl_ms = values.ttl_ms;
     out_report->max_samples = values.max_samples;
-    out_report->buffer_size = values.buffer_size;
     out_report->min_sample_threshold = values.min_sample_threshold;
     return NGX_OK;
 }
@@ -1928,14 +1918,12 @@ static ngx_int_t
 rn_build_tracker_values(
     ngx_http_request_t *r,
     rn_worker_ctx_t *worker,
-    rn_main_conf_t *mcf,
     rn_tracker_t *tracker,
     rn_tracker_values_t *out
 ) {
     ngx_str_t service = ngx_null_string;
 
-    if (r == NULL || worker == NULL || mcf == NULL || tracker == NULL
-        || out == NULL)
+    if (r == NULL || worker == NULL || tracker == NULL || out == NULL)
     {
         return NGX_ERROR;
     }
@@ -1948,15 +1936,10 @@ rn_build_tracker_values(
     ngx_memzero(out, sizeof(*out));
     out->ttl_ms = tracker->ttl_ms;
     out->max_samples = tracker->max_samples;
-    out->buffer_size = tracker->buffer_size_set
-        ? tracker->buffer_size : mcf->latency_buffer_size_max;
-    if (out->buffer_size == 0) {
-        return NGX_ERROR;
-    }
     out->min_sample_threshold = tracker->min_sample_threshold;
     if (r_client_derive_latency_tracker_id(service.data, service.len,
             out->ttl_ms, out->max_samples,
-            out->buffer_size, out->min_sample_threshold,
+            out->min_sample_threshold,
             out->id) != RCLIENT_OK)
     {
         return NGX_ERROR;
@@ -2127,8 +2110,6 @@ ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     ngx_str_t service = ngx_null_string;
     uint32_t ttl_ms = 30000;
     uint32_t max_samples = 128;
-    uint32_t buffer_size = 0;
-    ngx_flag_t buffer_size_set = 0;
     uint32_t min_sample_threshold = 8;
     ngx_flag_t service_set = 0;
     ngx_flag_t ttl_set = 0;
@@ -2183,18 +2164,7 @@ ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
                 return "invalid ratelimitly_tracker max_samples";
             }
         } else if (ngx_strncmp(value[i].data, "buffer_size=", 12) == 0) {
-            ngx_str_t n;
-            if (buffer_size_set) {
-                return "duplicate ratelimitly_tracker buffer_size=";
-            }
-            n.data = value[i].data + 12;
-            n.len = value[i].len - 12;
-            if (rn_numeric_parse_u32(n.data, n.len, &buffer_size) != 0
-                || buffer_size == 0)
-            {
-                return "invalid ratelimitly_tracker buffer_size";
-            }
-            buffer_size_set = 1;
+            return "ratelimitly_tracker buffer_size is no longer supported";
         } else if (ngx_strncmp(value[i].data, "min_sample_threshold=", 21) == 0) {
             ngx_str_t n;
             if (min_sample_threshold_set) {
@@ -2247,8 +2217,6 @@ ngx_http_rn_tracker(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     tracker->service_template = service;
     tracker->ttl_ms = ttl_ms;
     tracker->max_samples = max_samples;
-    tracker->buffer_size_set = buffer_size_set;
-    tracker->buffer_size = buffer_size;
     tracker->min_sample_threshold = min_sample_threshold;
 
     ngx_http_compile_complex_value_t ccv;

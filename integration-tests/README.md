@@ -303,7 +303,7 @@ authenticated server-side facts must hold:
    production storing the sample and returning it.
 
    The comparison holds only at equal evaluation counts. A tracker configured
-   this narrowly (`max_samples=1 buffer_size=1 min_sample_threshold=1`) warms
+   this narrowly (`max_samples=1 min_sample_threshold=1`) warms
    up from admissions alone, so the control guard does start denying an
    evaluation or two later; that says nothing about the report. Do not add a
    trailing control check.
