@@ -6,10 +6,10 @@ configuration validation are defined in [Configuration DSL](dsl.md).
 
 The client structures and canonical derivation algorithms are defined by the
 locked C-client's
-[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-requests),
-[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#latency-guards-and-independent-reports),
+[Resource Requests](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#resource-requests),
+[Latency Guards and Independent Reports](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#latency-guards-and-independent-reports),
 and
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids).
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#content-defined-ids).
 This document specifies which nginx values rl-nginx supplies to that API.
 
 ## Resource mapping
@@ -55,11 +55,10 @@ first-seen order:
 | `threshold_ms` | rendered threshold converted to milliseconds |
 | `ttl_ms` | configured tracker TTL in milliseconds |
 | `max_samples` | tracker value |
-| `buffer_size` | explicit tracker value, or the API-key `latency_buffer_size_max` when omitted |
 | `min_sample_threshold` | tracker value |
 
-The ID includes the rendered service, `ttl_ms`, `max_samples`, final effective
-`buffer_size`, and `min_sample_threshold`. `threshold_ms` is excluded because
+The ID includes the rendered service, `ttl_ms`, `max_samples`, and
+`min_sample_threshold`. `threshold_ms` is excluded because
 it evaluates tracker state but does not define that stored state. Changing an
 included value creates a new tracker and separates subsequent latency history
 from the old identity. The exact rendered service length is honored, including
@@ -116,7 +115,6 @@ from the effective `ratelimitly_report` tracker:
 | `observed_latency` | nginx request-start to log-phase duration, clamped to `1..4294967295` ms |
 | `ttl_ms` | report tracker configuration |
 | `max_samples` | report tracker configuration |
-| `buffer_size` | report tracker's explicit value or the credential quota when omitted |
 | `min_sample_threshold` | report tracker configuration |
 
 The C client creates the report request ID, tenant/authentication framing, and

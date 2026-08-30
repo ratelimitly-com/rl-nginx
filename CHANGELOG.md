@@ -5,6 +5,17 @@ remain preview software and must not be treated as ABI-stable versions.
 
 ## Unreleased
 
+### Breaking
+
+- **Latency trackers no longer accept `buffer_size`.** The module now uses the
+  locked `rl-c-client v2.0.0` API and wire format, where guards, reports, and
+  canonical tracker IDs contain `service`, `ttl`, `max_samples`, and
+  `min_sample_threshold` only. The server bounds retained samples by
+  `max_samples` and the API key's latency-buffer quota. Remove `buffer_size=`
+  from every `ratelimitly_tracker`; `nginx -t` rejects it rather than silently
+  ignoring an obsolete setting. This identity change starts a new latency
+  history; old histories become irrelevant after their tracker TTL.
+
 ### Added
 
 - **Live production protocol smoke.** `make production-smoke` builds nginx with
@@ -24,21 +35,6 @@ remain preview software and must not be treated as ABI-stable versions.
   namespace, and step-level credential scope.
 
 ### Fixed
-
-- **The module builds with clang again.** `ngx_http_rn_tracker()` declared
-  `buffer_size` uninitialized and assigned `tracker->buffer_size` only when
-  `buffer_size=` was given. Clang cannot correlate that write with the separate
-  `buffer_size_set` flag, so `auto/cc/clang`'s `-Wconditional-uninitialized`
-  fired and nginx's `-Werror` turned it into a hard build failure on every
-  clang host. The runtime fallback was never affected — `tracker` is
-  zeroed before the assignment and `rn_build_tracker_values()` resolves the
-  effective value from the API key's `latency_buffer_size_max` — so the local
-  now carries that same zero default and the assignment is unconditional.
-
-  A `clang-build` CI job compiles both supported nginx lines with `CC=clang`,
-  because the existing jobs are GCC-only and GCC does not implement this
-  warning. `tests/test-ci-gates.py` red-case tests the job so it cannot quietly
-  stop using clang.
 
 - **An IPv6 nameserver in `/etc/resolv.conf` no longer prevents nginx from
   starting.** Derived system DNS now passes IPv6 nameservers to nginx in the

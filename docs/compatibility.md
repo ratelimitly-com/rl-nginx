@@ -14,7 +14,7 @@ gates below pass for the release candidate.
 | Architectures | `x86_64` and `aarch64` |
 | nginx module modes | Static and dynamic |
 | nginx releases | Stable `1.30.2` and mainline `1.31.1` |
-| `rl-c-client` | [`v1.0.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v1.0.0) at `22fc045717ef01e37ab483e9a48e539845ae8124` |
+| `rl-c-client` | [`v2.0.0`](https://github.com/ratelimitly-com/rl-c-client/releases/tag/v2.0.0) at `58c767d0e6807fcefac29000a8ab94ae8f54fd9b` |
 
 Public preview means the module is suitable for evaluation and controlled
 deployments after operators test their exact nginx build and failure policy. It
@@ -40,6 +40,20 @@ also gained `format_version` and `rate_window_size_ms_max`, rebuild rl-nginx
 and the C client together from the exact locked sources rather than combining
 old headers or libraries with the new module.
 
+### v2.0.0 latency-tracker migration
+
+`rl-c-client v2.0.0` removes `buffer_size` from latency guards, latency
+reports, their wire blocks, and canonical latency-tracker IDs. The server now
+chooses the effective retained-sample capacity from `max_samples` and the API
+key's latency-buffer quota. Remove `buffer_size=` from every
+`ratelimitly_tracker`; rl-nginx rejects the obsolete argument rather than
+silently ignoring it.
+
+This changes latency-tracker identity. During a rolling deployment, old and
+new workers address separate tracker histories even when their remaining
+settings match. Coordinate the transition or accept a temporary history reset
+and overlap; the old history becomes irrelevant after its configured TTL.
+
 ### v0.5.0 state-ID migration
 
 The v0.5.0 dependency changes the identifier boundary deliberately. Resource
@@ -47,9 +61,10 @@ IDs now include the rendered bucket, window, and rate; latency-tracker IDs
 include the rendered service, TTL, maximum samples, final effective buffer
 size, and minimum sample threshold. These canonical IDs prevent two different
 server-state definitions from accidentally sharing one counter or tracker.
-The derivation contract itself is owned by the C client and documented in
-[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids);
-this section documents only the deployment impact of adopting it in rl-nginx.
+The then-current derivation contract was owned by the corresponding C client;
+this section records only the historical deployment impact of adopting it in
+rl-nginx. The superseding contract is documented in the v2.0.0
+[Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#content-defined-ids).
 
 Consequently, the first v0.5.0 request for an existing configuration does not
 address the name-only state created by older rl-nginx revisions. A rolling

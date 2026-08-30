@@ -5,9 +5,9 @@ guidance for selecting variables and constructing identities is normative here
 and explained with examples in
 [Configuring rl-nginx](../docs/configuration.md).
 The locked C-client remains authoritative for the underlying
-[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials)
+[credential quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#credentials)
 and
-[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids);
+[content-defined identifier inputs](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#content-defined-ids);
 this document defines how nginx directives provide and validate those values.
 
 ## Scope and activation
@@ -275,7 +275,6 @@ ratelimitly_tracker <name>
   "service=<template>"
   [ttl=<duration>]
   [max_samples=<uint32>]
-  [buffer_size=<uint32>]
   [min_sample_threshold=<uint32>];
 ```
 
@@ -300,9 +299,14 @@ is a configuration error. An empty or oversized dynamic result follows
 TTL uses the same duration grammar as `ratelimitly_policy unit`; a unitless
 value means seconds. Its millisecond value MUST fit `1..4294967295`, so zero is
 invalid. All sample fields MUST fit an unsigned 32-bit wire field.
-`max_samples` and an explicit `buffer_size` MUST be nonzero.
+`max_samples` MUST be nonzero.
 `min_sample_threshold=0` is valid and disables only the insertion-rate
 sufficiency gate; it does not synthesize a retained latency sample.
+
+`buffer_size` is not part of the public tracker configuration or wire
+protocol. The server bounds retained samples by the API key's latency-buffer
+quota and `max_samples`. A configuration that still supplies `buffer_size=` is
+rejected so an obsolete setting cannot appear to take effect.
 
 ### `ratelimitly_guard`
 
@@ -412,7 +416,6 @@ source addresses MUST NOT be used as label values.
 | `ratelimitly_debug` | `off` |
 | `ratelimitly_tracker ttl` | `30s` |
 | `ratelimitly_tracker max_samples` | `128` |
-| `ratelimitly_tracker buffer_size` | credential's `latency_buffer_size_max` |
 | `ratelimitly_tracker min_sample_threshold` | `8` |
 
 Production configurations SHOULD set request and failure policy explicitly

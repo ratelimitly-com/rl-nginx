@@ -112,7 +112,7 @@ OVERSIZED_LABEL="${MAX_LABEL}l"
 # older module fails before the broader compatibility fixture is migrated.
 run_case explicit_tracker_guard_and_report accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'\
-$'  ratelimitly_zone primary "bucket=primary" rate=100r/s;\n  ratelimitly_tracker latency "service=service:$host" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;\n  ratelimitly_guard fast tracker=latency threshold=100ms;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly zone=primary guard=fast;\n      ratelimitly_report latency;\n      return 204;\n    }\n  }'
+$'  ratelimitly_zone primary "bucket=primary" rate=100r/s;\n  ratelimitly_tracker latency "service=service:$host" ttl=30s max_samples=128 min_sample_threshold=0;\n  ratelimitly_guard fast tracker=latency threshold=100ms;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly zone=primary guard=fast;\n      ratelimitly_report latency;\n      return 204;\n    }\n  }'
 
 run_case report_without_guard_or_rate_request accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'\
@@ -128,15 +128,15 @@ run_case legacy_guard_owns_tracker_fields reject \
 
 run_case representative accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'\
-$'  log_format ratelimitly_test "$status $ratelimitly_verdict";\n  access_log off;\n  ratelimitly_policy standard unit=50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_tracker latency "service=service:$host" ttl=4294967295ms max_samples=4294967295 buffer_size=4294967295 min_sample_threshold=0;\n  ratelimitly_guard latency_guard tracker=latency threshold=4294967295ms;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency_guard;\n      ratelimitly_report latency;\n      return 204;\n    }\n  }'
+$'  log_format ratelimitly_test "$status $ratelimitly_verdict";\n  access_log off;\n  ratelimitly_policy standard unit=50ms;\n  ratelimitly_fail close;\n  ratelimitly_debug off;\n  ratelimitly_zone primary "bucket=primary:$uri" rate=4294967295r/4294967s;\n  ratelimitly_zone secondary "bucket=secondary:$uri" rate=1r/h;\n  ratelimitly_group combined zone=primary zone=secondary;\n  ratelimitly_tracker latency "service=service:$host" ttl=4294967295ms max_samples=4294967295 min_sample_threshold=0;\n  ratelimitly_guard latency_guard tracker=latency threshold=4294967295ms;\n  server {\n    listen unix:__SOCKET__;\n    location / {\n      ratelimitly_label "CONFIG:$uri";\n      ratelimitly group=combined guard=latency_guard;\n      ratelimitly_report latency;\n      return 204;\n    }\n  }'
 
 run_case guard_only_rule accept \
   "${VALID_RESOLVER}"$'\n'"${VALID_DNS_SRV}"$'\n'"${VALID_AUTH}"$'\n'"${VALID_TRACKER}"$'\n'"${VALID_GUARD}"$'\n  server {\n    listen unix:__SOCKET__;\n    location / { ratelimitly guard=latency_guard; return 204; }\n  }'
 
 run_case min_sample_zero accept \
-  $'  ratelimitly_tracker zero "service=service:zero" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=0;'
+  $'  ratelimitly_tracker zero "service=service:zero" ttl=30s max_samples=128 min_sample_threshold=0;'
 run_case min_sample_positive accept \
-  $'  ratelimitly_tracker positive "service=service:positive" ttl=30s max_samples=128 buffer_size=32 min_sample_threshold=1;'
+  $'  ratelimitly_tracker positive "service=service:positive" ttl=30s max_samples=128 min_sample_threshold=1;'
 run_case dynamic_values_deferred accept \
   $'  map $arg_rate $dynamic_rate { default invalid-at-runtime; }\n  map $arg_threshold $dynamic_threshold { default invalid-at-runtime; }\n  ratelimitly_zone dynamic "bucket=dynamic" rate=$dynamic_rate;\n  ratelimitly_tracker dynamic_tracker "service=dynamic";\n  ratelimitly_guard dynamic_guard tracker=dynamic_tracker threshold=$dynamic_threshold;'
 run_case unitless_durations_are_seconds accept \
@@ -301,9 +301,9 @@ run_case value_only_quoted_service reject \
 run_case zero_max_samples reject \
   $'  ratelimitly_tracker zero "service=zero" max_samples=0;' \
   'invalid ratelimitly_tracker max_samples'
-run_case zero_buffer_size reject \
-  $'  ratelimitly_tracker zero "service=zero" buffer_size=0;' \
-  'invalid ratelimitly_tracker buffer_size'
+run_case removed_buffer_size reject \
+  $'  ratelimitly_tracker obsolete "service=obsolete" buffer_size=32;' \
+  'ratelimitly_tracker buffer_size is no longer supported'
 run_case overflow_min_sample reject \
   $'  ratelimitly_tracker overflow "service=overflow" min_sample_threshold=4294967296;' \
   'invalid ratelimitly_tracker min_sample_threshold'

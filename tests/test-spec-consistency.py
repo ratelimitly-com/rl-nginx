@@ -155,7 +155,7 @@ def validate(raw_source: str) -> tuple[list[str], int]:
     tracker_parser = function_body(source, "ngx_http_rn_tracker")
     for name, fragment in DEFAULT_STATEMENTS.items():
         scope = tracker_parser if name in {
-            "ttl", "max_samples", "buffer_size", "min_sample_threshold"
+            "ttl", "max_samples", "min_sample_threshold"
         } else main_conf
         require(scope, fragment, f"executable module default {name}", failures)
 
@@ -168,17 +168,13 @@ def validate(raw_source: str) -> tuple[list[str], int]:
         "| `ratelimitly_debug` | `off` |",
         "| `ratelimitly_tracker ttl` | `30s` |",
         "| `ratelimitly_tracker max_samples` | `128` |",
-        "| `ratelimitly_tracker buffer_size` | credential's `latency_buffer_size_max` |",
         "| `ratelimitly_tracker min_sample_threshold` | `8` |",
     )
     for fragment in dsl_defaults:
         require(dsl, fragment, "DSL defaults table", failures)
-    require(tracker_parser, "ngx_flag_t buffer_size_set = 0;",
-            "credential-derived buffer-size omission state", failures)
-    require(source, "out->buffer_size = tracker->buffer_size_set",
-            "credential-derived buffer-size selection", failures)
-    require(source, "mcf->latency_buffer_size_max",
-            "credential-derived buffer-size quota", failures)
+    require(tracker_parser,
+            'return "ratelimitly_tracker buffer_size is no longer supported";',
+            "obsolete buffer-size rejection", failures)
 
     for fragment in LIMIT_STATEMENTS:
         require(source, fragment, "executable rendered-value limit", failures)

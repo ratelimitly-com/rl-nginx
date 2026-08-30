@@ -43,15 +43,15 @@ This repository is authoritative for behavior added by the nginx module:
 - the module's admission-aware HTTP latency measurement.
 
 The locked
-[`rl-c-client v1.0.0`](https://github.com/ratelimitly-com/rl-c-client/tree/v1.0.0)
+[`rl-c-client v2.0.0`](https://github.com/ratelimitly-com/rl-c-client/tree/v2.0.0)
 documentation is authoritative for behavior owned by the client:
 
-- [resource requests and independent latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/README.md#core-operations);
-- [credentials and API-key quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials);
-- [content-defined bucket and latency-tracker IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids);
-- [resource-request HA policy and deduplication TTL](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy);
-- [DNS refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh); and
-- [client error codes](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#error-codes).
+- [resource requests and independent latency reports](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/README.md#core-operations);
+- [credentials and API-key quotas](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#credentials);
+- [content-defined bucket and latency-tracker IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#content-defined-ids);
+- [resource-request HA policy and deduplication TTL](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#resource-request-ha-policy);
+- [DNS refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#dns-refresh); and
+- [client error codes](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#error-codes).
 
 Links deliberately target the supported tag rather than `main`. The exact tag
 and commit are locked in

@@ -27,15 +27,15 @@ only supported way to opt into a dirty development tree.
 
 ## Read the client contract at its source
 
-| Client-owned topic | Authoritative v1.0.0 documentation | nginx-specific consequence |
+| Client-owned topic | Authoritative v2.0.0 documentation | nginx-specific consequence |
 | --- | --- | --- |
-| Logical operations | [Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#operation-model) | Each protected main request creates one resource request; an explicitly configured post-response latency report is separate and may also be used without admission. |
-| Integration layer | [Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#choosing-an-integration-layer) | nginx uses the core borrowed API because it already owns UDP, DNS, timers, logging, and request pools. |
-| Credentials and quotas | [Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#credentials) | nginx accepts format-1 keys only, uses the latency-buffer quota when `buffer_size` is omitted, and relies on the client to reject resource windows above `rate_window_size_ms_max` before transmission. |
-| State identity | [Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#content-defined-ids) | nginx renders names and passes the defining settings to the canonical ID helpers. |
-| Delivery and selection | [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#resource-request-ha-policy) | `ratelimitly_policy` selects the complete policy passed to the C client. |
-| Discovery | [DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#dns-refresh) and [I/O abstraction](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/IO_ABSTRACTION.md#dns) | nginx supplies the asynchronous resolver and worker-local UDP adapter. |
-| Failure surface | [Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v1.0.0/docs/api.md#error-codes) | Client failures are mapped through `ratelimitly_fail`; valid denials are never fail-opened. |
+| Logical operations | [Operation Model](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#operation-model) | Each protected main request creates one resource request; an explicitly configured post-response latency report is separate and may also be used without admission. |
+| Integration layer | [Choosing an integration layer](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#choosing-an-integration-layer) | nginx uses the core borrowed API because it already owns UDP, DNS, timers, logging, and request pools. |
+| Credentials and quotas | [Credentials](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#credentials) | nginx accepts format-1 keys only and relies on the client to reject resource windows above `rate_window_size_ms_max` before transmission. The latency-buffer quota is enforced by the server and is not a tracker field. |
+| State identity | [Content-defined IDs](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#content-defined-ids) | nginx renders names and passes the defining settings to the canonical ID helpers. |
+| Delivery and selection | [Resource-Request HA Policy](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#resource-request-ha-policy) | `ratelimitly_policy` selects the complete policy passed to the C client. |
+| Discovery | [DNS Refresh](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#dns-refresh) and [I/O abstraction](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/IO_ABSTRACTION.md#dns) | nginx supplies the asynchronous resolver and worker-local UDP adapter. |
+| Failure surface | [Error Codes](https://github.com/ratelimitly-com/rl-c-client/blob/v2.0.0/docs/api.md#error-codes) | Client failures are mapped through `ratelimitly_fail`; valid denials are never fail-opened. |
 
 The HA policy sends each resource request to every currently usable member.
 When a request contains resources, it is mutating. rl-nginx neither selects one deterministic commit target
